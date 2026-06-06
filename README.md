@@ -4,11 +4,14 @@ BetX is a terminal-first betting signals engine for football markets.
 
 It reads exchange market data, stores snapshots locally, detects useful price and liquidity movement, and sends actionable Telegram alerts. It is safe by default: new projects start in dry-run mode and live betting stays disabled until explicitly configured.
 
+Current version: `0.2.0`
+
 ## What It Does
 
 - Scans configured Betfair football markets.
 - Prints `BET`, `WATCH`, and `NO BET` recommendations in the terminal.
 - Stores market snapshots in SQLite for change detection.
+- Scores each runner from `0-100` using recent odds, liquidity, persistence, and volatility.
 - Sends filtered Telegram alerts for actionable `BET` signals.
 - Supports Telegram button confirmation before a live bet is executed.
 
@@ -84,9 +87,29 @@ export TELEGRAM_CHAT_ID=...
 
 Dry-run alerts are filtered to reduce noise:
 
-- Odds-movement `BET` signals are always sent.
+- Odds-movement `BET` signals are sent when the confidence score reaches the signal threshold.
 - Liquidity-only `BET` signals are limited to one alert per market per cycle.
 - The first continuous `start` cycle suppresses Telegram alerts as a warmup.
+
+Alerts show the score, confidence label, and human-readable reasons. Fixture names are formatted for readability, for example `Australia vs Switzerland` instead of Betfair's raw `Australia v Switzerland`.
+
+Example:
+
+```text
+BETX SIGNAL
+DRY-RUN ONLY
+
+Market movement detected
+Score: 85/100 High confidence
+
+Australia vs Switzerland
+Bet: Draw @ 3.90
+
+Why this signal:
+- Odds moved from 3.95 -> 3.90
+- Movement persisted for 3 cycles
+- Volatility is low
+```
 
 In live mode, `BET` signals use Telegram confirmation:
 
@@ -115,5 +138,12 @@ Live bets still require Telegram button confirmation and are capped by `risk.max
 
 The first strategy is technical, not predictive.
 
-It filters out poor markets, missing prices, low liquidity, wide spreads, and odds outside the configured range. A `BET` recommendation appears only when market quality is acceptable and the recent odds or liquidity movement is favorable.
+It filters out poor markets, missing prices, low liquidity, wide spreads, and odds outside the configured range. After those quality gates pass, BetX compares the current runner with recent local SQLite snapshots and builds an explainable score from:
 
+- favorable back-odds movement;
+- relative liquidity movement;
+- movement persistence across up to three cycles;
+- recent volatility;
+- whether the move stands out versus the local runner baseline.
+
+A `BET` recommendation requires a score of at least `70/100`. Lower scores remain `WATCH`, and failed quality gates stay `NO BET`.
