@@ -6,7 +6,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -24,59 +23,56 @@ public class TelegramBetAlertFormatter {
 
     String format(TelegramBetAlertCandidate candidate) {
         RunnerAnalysis analysis = candidate.analysis();
-        return "<b>BETX DRY-RUN SIGNAL</b>\n\n"
-            + "Trigger: " + escape(candidate.trigger().displayLabel() + " " + triggerDelta(candidate)) + "\n"
+        return "<b>BETX SIGNAL</b>\n"
+            + "DRY-RUN ONLY\n\n"
+            + "Trigger: " + escape(TelegramMessageFormat.triggerLabel(candidate.trigger()) + " (" + triggerDelta(candidate) + ")") + "\n\n"
             + "<b>" + escape(textOrDefault(analysis.eventName(), "unknown event")) + "</b>\n"
-            + "Runner: " + escape(candidate.displayRunner()) + "\n"
-            + "Side: BACK\n\n"
-            + "Odds: " + odds(analysis, candidate.previousSnapshot()) + "\n"
-            + "Lay: " + numeric(analysis.bestLayPrice()) + "\n"
-            + "Spread: " + numeric(analysis.spread()) + "\n"
-            + "Liquidity: " + numeric(analysis.liquidity()) + "\n\n"
+            + TelegramMessageFormat.selectionLine(candidate.displayRunner(), analysis.bestBackPrice()) + "\n"
+            + TelegramMessageFormat.actionLine(analysis.exchange()) + "\n\n"
+            + previousOdds(analysis, candidate.previousSnapshot()) + "\n"
             + "Kickoff: " + kickoff(analysis) + "\n"
             + "Market: " + escape(textOrDefault(analysis.marketName(), "n/a")) + "\n"
-            + "Exchange: " + escape(textOrDefault(analysis.exchange(), "n/a")) + "\n"
-            + "Market ID: " + escape(textOrDefault(analysis.marketId(), "n/a")) + "\n"
-            + "Selection ID: " + analysis.selectionId() + "\n\n"
-            + "Why: " + escape(reason(analysis.reason(), Optional.of(candidate.trigger()))) + "\n"
-            + "Status: DRY-RUN ONLY. No real bet placed.";
+            + "\n"
+            + "Why this signal:\n"
+            + TelegramMessageFormat.reasonLines(analysis.reason(), Optional.of(candidate.trigger().reasonToken())) + "\n\n"
+            + "Safety:\n"
+            + "DRY-RUN ONLY. No real bet placed.";
     }
 
     private String legacyFormat(RunnerAnalysis analysis, Optional<MarketSnapshot> previousSnapshot) {
-        return "<b>BETX DRY-RUN SIGNAL</b>\n\n"
+        return "<b>BETX SIGNAL</b>\n"
+            + "DRY-RUN ONLY\n\n"
             + "<b>" + escape(textOrDefault(analysis.eventName(), "unknown event")) + "</b>\n"
-            + "Runner: " + escape(displayRunner(analysis)) + "\n"
-            + "Side: BACK\n\n"
-            + "Odds: " + odds(analysis, previousSnapshot) + "\n"
-            + "Lay: " + numeric(analysis.bestLayPrice()) + "\n"
-            + "Spread: " + numeric(analysis.spread()) + "\n"
-            + "Liquidity: " + numeric(analysis.liquidity()) + "\n\n"
+            + TelegramMessageFormat.selectionLine(displayRunner(analysis), analysis.bestBackPrice()) + "\n"
+            + TelegramMessageFormat.actionLine(analysis.exchange()) + "\n\n"
+            + previousOdds(analysis, previousSnapshot) + "\n"
             + "Kickoff: " + kickoff(analysis) + "\n"
             + "Market: " + escape(textOrDefault(analysis.marketName(), "n/a")) + "\n"
-            + "Exchange: " + escape(textOrDefault(analysis.exchange(), "n/a")) + "\n"
-            + "Market ID: " + escape(textOrDefault(analysis.marketId(), "n/a")) + "\n"
-            + "Selection ID: " + analysis.selectionId() + "\n\n"
-            + "Why: " + escape(reason(analysis.reason(), Optional.empty())) + "\n"
-            + "Status: DRY-RUN ONLY. No real bet placed.";
+            + "\n"
+            + "Why this signal:\n"
+            + TelegramMessageFormat.reasonLines(analysis.reason()) + "\n\n"
+            + "Safety:\n"
+            + "DRY-RUN ONLY. No real bet placed.";
     }
 
-    private String odds(RunnerAnalysis analysis, Optional<MarketSnapshot> previousSnapshot) {
+    private String previousOdds(RunnerAnalysis analysis, Optional<MarketSnapshot> previousSnapshot) {
         if (analysis.bestBackPrice() == null) {
-            return "n/a";
+            return "Previous odds: n/a";
         }
 
         Optional<BigDecimal> previousBack = previousSnapshot.map(MarketSnapshot::bestBackPrice);
         if (previousBack.isEmpty()) {
-            return "current back " + numeric(analysis.bestBackPrice());
+            return "Previous odds: n/a -> " + numeric(analysis.bestBackPrice());
         }
 
         BigDecimal percentageDelta = percentageDelta(previousBack.get(), analysis.bestBackPrice());
         if (percentageDelta == null) {
-            return "current back " + numeric(analysis.bestBackPrice());
+            return "Previous odds: n/a -> " + numeric(analysis.bestBackPrice());
         }
 
-        return numeric(previousBack.get())
-            + " -> current back "
+        return "Previous odds: "
+            + numeric(previousBack.get())
+            + " -> "
             + numeric(analysis.bestBackPrice())
             + " ("
             + signedPercent(percentageDelta)
@@ -87,22 +83,8 @@ public class TelegramBetAlertFormatter {
         return analysis.marketStartTime() == null ? "n/a" : KICKOFF_FORMATTER.format(analysis.marketStartTime());
     }
 
-    private String reason(String reason, Optional<TelegramBetAlertTrigger> trigger) {
-        String triggerToken = trigger.map(TelegramBetAlertTrigger::reasonToken).orElse(null);
-        String normalized = Arrays.stream(reason.split(","))
-            .map(String::strip)
-            .filter(value -> !value.isBlank())
-            .filter(value -> !"dry_run_only".equals(value))
-            .filter(value -> triggerToken == null || !triggerToken.equals(value))
-            .map(value -> value.replace('_', ' '))
-            .reduce((left, right) -> left + ", " + right)
-            .orElse("");
-        return normalized.isBlank() ? "n/a" : normalized;
-    }
-
     private String displayRunner(RunnerAnalysis analysis) {
-        String runner = analysis.displayRunner();
-        return "The Draw".equalsIgnoreCase(runner) ? "Draw" : runner;
+        return TelegramMessageFormat.displayRunner(analysis.displayRunner());
     }
 
     private String triggerDelta(TelegramBetAlertCandidate candidate) {
@@ -111,10 +93,7 @@ public class TelegramBetAlertFormatter {
     }
 
     private String numeric(BigDecimal value) {
-        if (value == null) {
-            return "n/a";
-        }
-        return String.format(Locale.US, "%,.2f", value);
+        return TelegramMessageFormat.groupedNumeric(value);
     }
 
     private String signedPercent(BigDecimal value) {
@@ -132,13 +111,10 @@ public class TelegramBetAlertFormatter {
     }
 
     private String textOrDefault(String value, String fallback) {
-        return value == null || value.isBlank() ? fallback : value.strip();
+        return TelegramMessageFormat.textOrDefault(value, fallback);
     }
 
     private String escape(String value) {
-        return value
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;");
+        return TelegramMessageFormat.escape(value);
     }
 }

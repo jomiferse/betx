@@ -139,13 +139,15 @@ class RunDryRunSignalsServiceTest {
             .satisfies(message -> {
                 assertThat(message.parseMode()).isEqualTo(TelegramParseMode.HTML);
                 assertThat(message.text())
-                    .contains("<b>BETX DRY-RUN SIGNAL</b>")
-                    .contains("Trigger: odds movement -3.85%")
+                    .contains("<b>BETX SIGNAL</b>")
+                    .contains("DRY-RUN ONLY")
+                    .contains("Trigger: Odds moved favourably (-3.85%)")
                     .contains("<b>Team A v Team B</b>")
-                    .contains("Runner: Team A")
-                    .contains("Odds: 2.60 -> current back 2.50 (-3.85%)")
-                    .contains("Why: liquidity ok, spread ok")
-                    .contains("Status: DRY-RUN ONLY. No real bet placed.");
+                    .contains("Bet: Team A to win @ 2.50")
+                    .contains("Previous odds: 2.60 -> 2.50 (-3.85%)")
+                    .contains("- Liquidity OK")
+                    .contains("- Spread OK")
+                    .contains("DRY-RUN ONLY. No real bet placed.");
             });
     }
 
@@ -235,7 +237,7 @@ class RunDryRunSignalsServiceTest {
 
         assertThat(result.signals()).hasSize(2);
         assertThat(telegram.formattedMessages()).singleElement()
-            .satisfies(message -> assertThat(message.text()).contains("Runner: Team A"));
+            .satisfies(message -> assertThat(message.text()).contains("Bet: Team A to win @ 2.50"));
     }
 
     @Test

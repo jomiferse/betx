@@ -8,9 +8,6 @@ public class BetxConfigValidator {
         if (!config.app().mode().equals("dry-run") && !config.app().mode().equals("live")) {
             throw new ConfigException("app.mode must be dry-run or live.");
         }
-        if (config.app().mode().equals("live") && !config.risk().liveBettingEnabled()) {
-            throw new ConfigException("Refusing live mode because risk.live_betting_enabled is false.");
-        }
         requirePositive(config.risk().maxStake(), "risk.max_stake");
         requirePositive(config.risk().maxDailyLoss(), "risk.max_daily_loss");
         if (config.risk().maxOpenPositions() <= 0) {
