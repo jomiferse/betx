@@ -10,7 +10,8 @@ import picocli.CommandLine.Command;
     subcommands = {
         TelegramConnectCommand.class,
         TelegramTestCommand.class,
-        TelegramStatusCommand.class
+        TelegramStatusCommand.class,
+        TelegramBetsCommand.class
     }
 )
 public class TelegramCommand implements Runnable {

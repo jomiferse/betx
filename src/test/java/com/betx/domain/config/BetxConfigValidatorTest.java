@@ -25,12 +25,10 @@ class BetxConfigValidatorTest {
     }
 
     @Test
-    void rejectsLiveModeWhenLiveBettingIsDisabled() {
+    void acceptsLiveModeWhenLiveBettingIsDisabledForPreview() {
         BetxConfig config = BetxConfig.defaults().withMode("live");
 
-        assertThatThrownBy(() -> validator.validate(config))
-            .isInstanceOf(ConfigException.class)
-            .hasMessage("Refusing live mode because risk.live_betting_enabled is false.");
+        assertThatCode(() -> validator.validate(config)).doesNotThrowAnyException();
     }
 
     @Test

@@ -17,6 +17,7 @@ public record TelegramBetIntent(
     BigDecimal maxStake,
     BigDecimal availableBalance,
     BigDecimal selectedStake,
+    String resultMessage,
     TelegramBetIntentStage stage,
     Instant createdAt,
     Instant updatedAt
@@ -29,6 +30,7 @@ public record TelegramBetIntent(
         marketName = marketName == null ? null : marketName.strip();
         runnerName = runnerName == null ? null : runnerName.strip();
         reason = reason == null ? null : reason.strip();
+        resultMessage = resultMessage == null ? null : resultMessage.strip();
         if (stage == null) {
             stage = TelegramBetIntentStage.AWAITING_CONFIRMATION;
         }
@@ -45,6 +47,20 @@ public record TelegramBetIntent(
     }
 
     public TelegramBetIntent withStage(TelegramBetIntentStage newStage, BigDecimal balance, BigDecimal stake) {
+        return withStage(newStage, balance, stake, resultMessage);
+    }
+
+    public TelegramBetIntent withStage(TelegramBetIntentStage newStage, BigDecimal balance, BigDecimal stake, String message) {
+        return withStageAt(newStage, balance, stake, message, Instant.now());
+    }
+
+    public TelegramBetIntent withStageAt(
+        TelegramBetIntentStage newStage,
+        BigDecimal balance,
+        BigDecimal stake,
+        String message,
+        Instant updatedAt
+    ) {
         return new TelegramBetIntent(
             id,
             exchange,
@@ -58,9 +74,10 @@ public record TelegramBetIntent(
             maxStake,
             balance,
             stake,
+            message,
             newStage,
             createdAt,
-            Instant.now()
+            updatedAt
         );
     }
 }

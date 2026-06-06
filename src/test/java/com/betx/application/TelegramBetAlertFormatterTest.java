@@ -34,22 +34,25 @@ class TelegramBetAlertFormatterTest {
         String message = formatter.format(analysis, Optional.of(previous));
 
         assertThat(message)
-            .contains("<b>BETX DRY-RUN SIGNAL</b>")
-            .contains("Trigger: odds movement -3.09%")
+            .contains("<b>BETX SIGNAL</b>")
+            .contains("DRY-RUN ONLY")
+            .contains("Trigger: Odds moved favourably (-3.09%)")
             .contains("<b>Cruzeiro MG v Fluminense</b>")
-            .contains("Runner: Cruzeiro MG")
-            .contains("Side: BACK")
-            .contains("Odds: 1.94 -> current back 1.88 (-3.09%)")
-            .contains("Lay: 2.04")
-            .contains("Spread: 0.10")
-            .contains("Liquidity: 14,486.60")
+            .contains("Bet: Cruzeiro MG to win @ 1.88")
+            .contains("Action: BACK on betfair")
+            .contains("Previous odds: 1.94 -> 1.88 (-3.09%)")
             .contains("Kickoff: 01 Jun 2026 20:00 CEST")
             .contains("Market: Match Odds")
-            .contains("Exchange: betfair")
-            .contains("Market ID: 1.258354692")
-            .contains("Selection ID: 10901767")
-            .contains("Why: liquidity ok, spread ok")
-            .contains("Status: DRY-RUN ONLY. No real bet placed.");
+            .contains("Why this signal:")
+            .contains("- Liquidity OK")
+            .contains("- Spread OK")
+            .contains("DRY-RUN ONLY. No real bet placed.")
+            .doesNotContain("Market ID")
+            .doesNotContain("Selection ID")
+            .doesNotContain("1.258354692")
+            .doesNotContain("10901767")
+            .doesNotContain("liquidity_ok")
+            .doesNotContain("favorable_odds_movement");
     }
 
     @Test
@@ -90,9 +93,12 @@ class TelegramBetAlertFormatterTest {
         String message = formatter.format(analysis, Optional.of(previous));
 
         assertThat(message)
-            .contains("Trigger: liquidity movement +30.00%")
-            .contains("Runner: Draw")
-            .contains("Why: liquidity ok, spread ok");
+            .contains("Trigger: Liquidity improved (+30.00%)")
+            .contains("Bet: Draw @ 3.20")
+            .contains("- Liquidity OK")
+            .contains("- Spread OK")
+            .doesNotContain("The Draw")
+            .doesNotContain("favorable_liquidity_movement");
     }
 
     @Test
@@ -120,7 +126,7 @@ class TelegramBetAlertFormatterTest {
 
         assertThat(message)
             .contains("AFC &lt;Home&gt; &amp; Away")
-            .contains("Runner: Runner &amp; Sons")
+            .contains("Bet: Runner &amp; Sons to win @ 2.50")
             .contains("Market: Match &lt;Odds&gt;");
     }
 
@@ -132,14 +138,10 @@ class TelegramBetAlertFormatterTest {
 
         assertThat(message)
             .contains("<b>unknown event</b>")
-            .contains("Runner: 42")
-            .contains("Odds: n/a")
-            .contains("Lay: n/a")
-            .contains("Spread: n/a")
-            .contains("Liquidity: n/a")
+            .contains("Bet: 42 to win @ n/a")
             .contains("Kickoff: n/a")
             .contains("Market: n/a")
-            .contains("Why: n/a")
+            .contains("Why this signal:\n- n/a")
             .doesNotContain("dry_run_only");
     }
 

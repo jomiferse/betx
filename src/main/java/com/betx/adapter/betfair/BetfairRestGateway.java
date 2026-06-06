@@ -31,9 +31,11 @@ import org.springframework.web.client.RestClientException;
 @Component
 public class BetfairRestGateway implements BetfairGateway {
     private static final String GLOBAL_BETTING_URL = "https://api.betfair.com/exchange/betting/json-rpc/v1";
+    private static final String GLOBAL_ACCOUNT_URL = "https://api.betfair.com/exchange/account/json-rpc/v1";
 
     private final RestClient loginClient;
     private final RestClient bettingClient;
+    private final RestClient accountClient;
     private final ObjectMapper mapper;
 
     @Autowired
@@ -44,6 +46,7 @@ public class BetfairRestGateway implements BetfairGateway {
     BetfairRestGateway(RestClient.Builder builder, ObjectMapper mapper) {
         this.loginClient = builder.build();
         this.bettingClient = builder.build();
+        this.accountClient = builder.build();
         this.mapper = mapper;
     }
 
@@ -193,7 +196,7 @@ public class BetfairRestGateway implements BetfairGateway {
 
     @Override
     public BigDecimal getAccountFunds(BetfairSession session) {
-        JsonNode result = invoke(session, "SportsAPING/v1.0/getAccountFunds", mapper.createObjectNode());
+        JsonNode result = invokeAccount(session, "AccountAPING/v1.0/getAccountFunds", mapper.createObjectNode());
         if (result == null || result.isMissingNode()) {
             return null;
         }
@@ -253,14 +256,22 @@ public class BetfairRestGateway implements BetfairGateway {
     }
 
     private JsonNode invoke(BetfairSession session, String method, JsonNode params) {
+        return invokeJsonRpc(bettingClient, GLOBAL_BETTING_URL, session, method, params);
+    }
+
+    private JsonNode invokeAccount(BetfairSession session, String method, JsonNode params) {
+        return invokeJsonRpc(accountClient, GLOBAL_ACCOUNT_URL, session, method, params);
+    }
+
+    private JsonNode invokeJsonRpc(RestClient client, String url, BetfairSession session, String method, JsonNode params) {
         try {
             ObjectNode request = mapper.createObjectNode();
             request.put("jsonrpc", "2.0");
             request.put("method", method);
             request.set("params", params);
             request.put("id", 1);
-            JsonNode payload = bettingClient.post()
-                .uri(URI.create(GLOBAL_BETTING_URL))
+            JsonNode payload = client.post()
+                .uri(URI.create(url))
                 .headers(headers -> {
                     headers.set("Accept", "application/json");
                     headers.set("X-Application", session.appKey());

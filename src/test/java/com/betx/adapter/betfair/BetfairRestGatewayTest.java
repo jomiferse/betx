@@ -284,7 +284,13 @@ class BetfairRestGatewayTest {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         BetfairRestGateway gateway = new BetfairRestGateway(builder, new ObjectMapper().findAndRegisterModules());
-        server.expect(requestTo("https://api.betfair.com/exchange/betting/json-rpc/v1"))
+        server.expect(requestTo("https://api.betfair.com/exchange/account/json-rpc/v1"))
+            .andExpect(content().json("""
+                {
+                  "method": "AccountAPING/v1.0/getAccountFunds",
+                  "params": {}
+                }
+                """))
             .andRespond(withSuccess("""
                 {
                   "jsonrpc": "2.0",

@@ -19,7 +19,9 @@ import com.betx.domain.telegram.TelegramUpdate;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,6 +36,12 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class TelegramBetConfirmationService {
+    private static final Duration SELECTION_COOLDOWN = Duration.ofMinutes(30);
+    private static final List<TelegramBetIntentStage> OPEN_POSITION_STAGES = List.of(
+        TelegramBetIntentStage.AWAITING_CONFIRMATION,
+        TelegramBetIntentStage.AWAITING_STAKE,
+        TelegramBetIntentStage.EXECUTED
+    );
     private static final List<BigDecimal> STAKE_PRESETS = List.of(
         BigDecimal.valueOf(1),
         BigDecimal.valueOf(2),
@@ -83,7 +91,7 @@ public class TelegramBetConfirmationService {
 
     public void sync(ConfigPath configPath, DryRunSignalsResult result) {
         BetxConfig config = configRepository.load(configPath);
-        if (!config.telegram().enabled() || !config.risk().liveBettingEnabled() || !"live".equals(config.app().mode())) {
+        if (!config.telegram().enabled() || !"live".equals(config.app().mode())) {
             return;
         }
 
@@ -108,6 +116,22 @@ public class TelegramBetConfirmationService {
                 continue;
             }
             if (intentRepository.findActiveByKey(config.storage().path(), signal.exchange(), signal.marketId(), signal.selectionId()).isPresent()) {
+                auditSkipped("active_intent_exists", signal.exchange(), signal.marketId(), signal.selectionId());
+                continue;
+            }
+            Instant now = Instant.now(clock);
+            if (intentRepository.findLatestByKeySince(
+                config.storage().path(),
+                signal.exchange(),
+                signal.marketId(),
+                signal.selectionId(),
+                now.minus(SELECTION_COOLDOWN)
+            ).isPresent()) {
+                auditSkipped("cooldown", signal.exchange(), signal.marketId(), signal.selectionId());
+                continue;
+            }
+            if (intentRepository.countByStages(config.storage().path(), OPEN_POSITION_STAGES) >= config.risk().maxOpenPositions()) {
+                auditSkipped("max_open_positions", signal.exchange(), signal.marketId(), signal.selectionId());
                 continue;
             }
 
@@ -124,12 +148,14 @@ public class TelegramBetConfirmationService {
                 config.risk().maxStake(),
                 null,
                 null,
+                null,
                 TelegramBetIntentStage.AWAITING_CONFIRMATION,
-                Instant.now(clock),
-                Instant.now(clock)
+                now,
+                now
             );
             intentRepository.save(config.storage().path(), intent);
-            telegramConnectionService.sendMessageIfConnected(
+            auditCreated(intent);
+            safeTelegramSend(
                 configPath,
                 formatInitialMessage(intent),
                 TelegramParseMode.HTML,
@@ -146,7 +172,11 @@ public class TelegramBetConfirmationService {
         for (TelegramUpdate update : updates) {
             maxUpdateId = Math.max(maxUpdateId, update.updateId());
             if (update.hasCallbackQuery()) {
-                handleCallback(configPath, config, update);
+                try {
+                    handleCallback(configPath, config, update);
+                } catch (RuntimeException exc) {
+                    auditTelegramFailure("callback_processing", exc);
+                }
             }
         }
 
@@ -158,13 +188,13 @@ public class TelegramBetConfirmationService {
     private void handleCallback(ConfigPath configPath, BetxConfig config, TelegramUpdate update) {
         CallbackAction action = CallbackAction.parse(update.callbackData());
         if (action == null) {
-            telegramConnectionService.answerCallbackIfConnected(configPath, update.callbackQueryId(), "Unsupported action.", false);
+            safeTelegramAnswer(configPath, update.callbackQueryId(), "Unsupported action.", false);
             return;
         }
 
         Optional<TelegramBetIntent> intentOptional = intentRepository.findById(config.storage().path(), action.intentId());
         if (intentOptional.isEmpty()) {
-            telegramConnectionService.answerCallbackIfConnected(configPath, update.callbackQueryId(), "Intent not found.", false);
+            safeTelegramAnswer(configPath, update.callbackQueryId(), "Intent not found.", false);
             return;
         }
 
@@ -178,52 +208,108 @@ public class TelegramBetConfirmationService {
 
     private void handleYes(ConfigPath configPath, BetxConfig config, TelegramUpdate update, TelegramBetIntent intent) {
         if (!intent.stage().isActive() || intent.stage() != TelegramBetIntentStage.AWAITING_CONFIRMATION) {
-            telegramConnectionService.answerCallbackIfConnected(configPath, update.callbackQueryId(), "Already processed.", false);
+            safeTelegramAnswer(configPath, update.callbackQueryId(), "Already processed.", false);
             return;
         }
 
         Optional<BigDecimal> availableBalance = accountGateway.availableBalance(config, intent.exchange());
         if (availableBalance.isEmpty() || availableBalance.get().compareTo(BigDecimal.ZERO) <= 0) {
-            telegramConnectionService.answerCallbackIfConnected(configPath, update.callbackQueryId(), "Balance unavailable.", true);
+            safeTelegramAnswer(configPath, update.callbackQueryId(), "Balance unavailable.", true);
             return;
         }
 
-        TelegramBetIntent updated = intent.withStage(TelegramBetIntentStage.AWAITING_STAKE, availableBalance.get(), null);
+        TelegramBetIntent updated = intent.withStageAt(
+            TelegramBetIntentStage.AWAITING_STAKE,
+            availableBalance.get(),
+            null,
+            "Stake selection requested.",
+            Instant.now(clock)
+        );
         intentRepository.update(config.storage().path(), updated);
+        System.out.println("TELEGRAM BET STAKE REQUESTED | id=" + updated.id()
+            + " | exchange=" + updated.exchange()
+            + " | marketId=" + updated.marketId()
+            + " | selectionId=" + updated.selectionId());
 
         BigDecimal maxAllowed = maxAllowedStake(config, updated);
-        telegramConnectionService.editMessageIfConnected(
+        safeTelegramEdit(
             configPath,
             update.messageId(),
             formatStakeSelectionMessage(updated, maxAllowed),
             TelegramParseMode.HTML,
             stakeKeyboard(updated.id(), maxAllowed)
         );
-        telegramConnectionService.answerCallbackIfConnected(configPath, update.callbackQueryId(), "Choose a stake.", false);
+        safeTelegramAnswer(configPath, update.callbackQueryId(), "Choose a stake.", false);
     }
 
     private void handleCancel(ConfigPath configPath, BetxConfig config, TelegramUpdate update, TelegramBetIntent intent) {
-        TelegramBetIntent updated = intent.withStage(TelegramBetIntentStage.CANCELLED, intent.availableBalance(), intent.selectedStake());
+        TelegramBetIntent updated = intent.withStageAt(
+            TelegramBetIntentStage.CANCELLED,
+            intent.availableBalance(),
+            intent.selectedStake(),
+            "Cancelled by Telegram user.",
+            Instant.now(clock)
+        );
         intentRepository.update(config.storage().path(), updated);
-        telegramConnectionService.editMessageIfConnected(
+        System.out.println("TELEGRAM BET INTENT CANCELLED | id=" + updated.id()
+            + " | exchange=" + updated.exchange()
+            + " | marketId=" + updated.marketId()
+            + " | selectionId=" + updated.selectionId());
+        safeTelegramEdit(
             configPath,
             update.messageId(),
             formatCancelledMessage(updated),
             TelegramParseMode.HTML,
             Map.of("inline_keyboard", List.of())
         );
-        telegramConnectionService.answerCallbackIfConnected(configPath, update.callbackQueryId(), "Cancelled.", false);
+        safeTelegramAnswer(configPath, update.callbackQueryId(), "Cancelled.", false);
     }
 
     private void handleStake(ConfigPath configPath, BetxConfig config, TelegramUpdate update, TelegramBetIntent intent, BigDecimal amount) {
         if (intent.stage() != TelegramBetIntentStage.AWAITING_STAKE) {
-            telegramConnectionService.answerCallbackIfConnected(configPath, update.callbackQueryId(), "Stake already resolved.", false);
+            safeTelegramAnswer(configPath, update.callbackQueryId(), "Stake already resolved.", false);
             return;
         }
 
         BigDecimal maxAllowed = maxAllowedStake(config, intent);
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0 || amount.compareTo(maxAllowed) > 0) {
-            telegramConnectionService.answerCallbackIfConnected(configPath, update.callbackQueryId(), "Amount not allowed.", true);
+            safeTelegramAnswer(configPath, update.callbackQueryId(), "Amount not allowed.", true);
+            return;
+        }
+
+        if (!config.risk().liveBettingEnabled()) {
+            String message = "Live betting is disabled.";
+            TelegramBetIntent updated = intent.withStageAt(
+                TelegramBetIntentStage.FAILED,
+                intent.availableBalance(),
+                amount,
+                message,
+                Instant.now(clock)
+            );
+            intentRepository.update(config.storage().path(), updated);
+            System.out.println("TELEGRAM BET EXECUTION BLOCKED | reason=live_betting_disabled"
+                + " | id=" + intent.id()
+                + " | exchange=" + intent.exchange()
+                + " | marketId=" + intent.marketId()
+                + " | selectionId=" + intent.selectionId());
+            safeTelegramEdit(
+                configPath,
+                update.messageId(),
+                formatRejectedMessage(updated, message),
+                TelegramParseMode.HTML,
+                Map.of("inline_keyboard", List.of())
+            );
+            safeTelegramAnswer(configPath, update.callbackQueryId(), message, true);
+            return;
+        }
+
+        if (intentRepository.countByStages(config.storage().path(), List.of(TelegramBetIntentStage.EXECUTED))
+            >= config.risk().maxOpenPositions()) {
+            blockExecution(configPath, config, update, intent, amount, "max_open_positions", "Open position limit reached.");
+            return;
+        }
+        if (dailyRiskLimitExceeded(config, amount)) {
+            blockExecution(configPath, config, update, intent, amount, "max_daily_loss", "Daily risk limit exceeded.");
             return;
         }
 
@@ -236,20 +322,115 @@ public class TelegramBetConfirmationService {
             amount
         );
         var result = executionGateway.execute(configPath, order);
-        TelegramBetIntent updated = intent.withStage(
+        TelegramBetIntent updated = intent.withStageAt(
             result.accepted() ? TelegramBetIntentStage.EXECUTED : TelegramBetIntentStage.FAILED,
             intent.availableBalance(),
-            amount
+            amount,
+            result.message(),
+            Instant.now(clock)
         );
         intentRepository.update(config.storage().path(), updated);
-        telegramConnectionService.editMessageIfConnected(
+        if (result.accepted()) {
+            System.out.println("TELEGRAM BET ORDER ACCEPTED | id=" + updated.id()
+                + " | stake=" + amount
+                + " | exchange=" + updated.exchange()
+                + " | marketId=" + updated.marketId()
+                + " | selectionId=" + updated.selectionId());
+        } else {
+            System.out.println("TELEGRAM BET ORDER REJECTED | id=" + updated.id()
+                + " | message=" + result.message()
+                + " | exchange=" + updated.exchange()
+                + " | marketId=" + updated.marketId()
+                + " | selectionId=" + updated.selectionId());
+        }
+        safeTelegramEdit(
             configPath,
             update.messageId(),
             result.accepted() ? formatExecutedMessage(updated, amount) : formatRejectedMessage(updated, result.message()),
             TelegramParseMode.HTML,
             Map.of("inline_keyboard", List.of())
         );
-        telegramConnectionService.answerCallbackIfConnected(configPath, update.callbackQueryId(), result.message(), !result.accepted());
+        safeTelegramAnswer(configPath, update.callbackQueryId(), result.message(), !result.accepted());
+    }
+
+    private void blockExecution(
+        ConfigPath configPath,
+        BetxConfig config,
+        TelegramUpdate update,
+        TelegramBetIntent intent,
+        BigDecimal amount,
+        String reason,
+        String message
+    ) {
+        TelegramBetIntent updated = intent.withStageAt(
+            TelegramBetIntentStage.FAILED,
+            intent.availableBalance(),
+            amount,
+            message,
+            Instant.now(clock)
+        );
+        intentRepository.update(config.storage().path(), updated);
+        System.out.println("TELEGRAM BET EXECUTION BLOCKED | reason=" + reason
+            + " | id=" + updated.id()
+            + " | exchange=" + updated.exchange()
+            + " | marketId=" + updated.marketId()
+            + " | selectionId=" + updated.selectionId());
+        safeTelegramEdit(
+            configPath,
+            update.messageId(),
+            formatRejectedMessage(updated, message),
+            TelegramParseMode.HTML,
+            Map.of("inline_keyboard", List.of())
+        );
+        safeTelegramAnswer(configPath, update.callbackQueryId(), message, true);
+    }
+
+    private void safeTelegramSend(
+        ConfigPath configPath,
+        String text,
+        TelegramParseMode parseMode,
+        Map<String, Object> replyMarkup
+    ) {
+        try {
+            telegramConnectionService.sendMessageIfConnected(configPath, text, parseMode, replyMarkup);
+        } catch (RuntimeException exc) {
+            auditTelegramFailure("send_message", exc);
+        }
+    }
+
+    private void safeTelegramEdit(
+        ConfigPath configPath,
+        Integer messageId,
+        String text,
+        TelegramParseMode parseMode,
+        Map<String, Object> replyMarkup
+    ) {
+        try {
+            telegramConnectionService.editMessageIfConnected(configPath, messageId, text, parseMode, replyMarkup);
+        } catch (RuntimeException exc) {
+            auditTelegramFailure("edit_message", exc);
+        }
+    }
+
+    private void safeTelegramAnswer(ConfigPath configPath, String callbackQueryId, String text, boolean showAlert) {
+        try {
+            telegramConnectionService.answerCallbackIfConnected(configPath, callbackQueryId, text, showAlert);
+        } catch (RuntimeException exc) {
+            auditTelegramFailure("answer_callback", exc);
+        }
+    }
+
+    private boolean dailyRiskLimitExceeded(BetxConfig config, BigDecimal amount) {
+        BigDecimal alreadyCommitted = intentRepository.sumSelectedStakeByStageSince(
+            config.storage().path(),
+            TelegramBetIntentStage.EXECUTED,
+            todayStart()
+        );
+        return alreadyCommitted.add(amount).compareTo(config.risk().maxDailyLoss()) > 0;
+    }
+
+    private Instant todayStart() {
+        return Instant.now(clock).atZone(ZoneOffset.UTC).toLocalDate().atStartOfDay().toInstant(ZoneOffset.UTC);
     }
 
     private BigDecimal maxAllowedStake(BetxConfig config, TelegramBetIntent intent) {
@@ -267,46 +448,48 @@ public class TelegramBetConfirmationService {
     private String formatInitialMessage(TelegramBetIntent intent) {
         return "<b>BET CONFIRMATION</b>\n\n"
             + "<b>" + escape(intent.eventName()) + "</b>\n"
-            + "Runner: " + escape(displayRunner(intent.displayRunner())) + "\n"
-            + "Market: " + escape(textOrDefault(intent.marketName(), "n/a")) + "\n"
-            + "Exchange: " + escape(textOrDefault(intent.exchange(), "n/a")) + "\n"
-            + "Odds: " + numeric(intent.odds()) + "\n"
+            + TelegramMessageFormat.selectionLine(intent.displayRunner(), intent.odds()) + "\n"
+            + TelegramMessageFormat.actionLine(intent.exchange()) + "\n\n"
             + "Stake cap: " + numeric(intent.maxStake()) + "\n"
-            + "Reason: " + escape(textOrDefault(intent.reason(), "n/a")) + "\n\n"
+            + "Market: " + escape(textOrDefault(intent.marketName(), "n/a")) + "\n\n"
+            + "Why this signal:\n"
+            + TelegramMessageFormat.reasonLines(intent.reason()) + "\n\n"
+            + "Safety:\n"
+            + "No bet is placed until you confirm and choose stake.\n\n"
             + "Confirm bet?";
     }
 
     private String formatStakeSelectionMessage(TelegramBetIntent intent, BigDecimal maxAllowed) {
-        return "<b>BET CONFIRMATION</b>\n\n"
+        return "<b>CHOOSE STAKE</b>\n\n"
             + "<b>" + escape(intent.eventName()) + "</b>\n"
-            + "Runner: " + escape(displayRunner(intent.displayRunner())) + "\n"
-            + "Market: " + escape(textOrDefault(intent.marketName(), "n/a")) + "\n"
-            + "Exchange: " + escape(textOrDefault(intent.exchange(), "n/a")) + "\n"
-            + "Odds: " + numeric(intent.odds()) + "\n"
-            + "Available balance: " + numeric(intent.availableBalance()) + "\n"
+            + TelegramMessageFormat.selectionLine(intent.displayRunner(), intent.odds()) + "\n"
+            + TelegramMessageFormat.actionLine(intent.exchange()) + "\n\n"
+            + "Balance available: " + numeric(intent.availableBalance()) + "\n"
             + "Max allowed: " + numeric(maxAllowed) + "\n\n"
-            + "Choose a stake.";
+            + "Choose stake:";
     }
 
     private String formatCancelledMessage(TelegramBetIntent intent) {
         return "<b>BET CANCELLED</b>\n\n"
             + "<b>" + escape(textOrDefault(intent.eventName(), "unknown event")) + "</b>\n"
-            + "Runner: " + escape(displayRunner(intent.displayRunner())) + "\n"
-            + "Status: cancelled.";
+            + TelegramMessageFormat.selectionLine(intent.displayRunner(), intent.odds()) + "\n"
+            + "Status: cancelled by user.";
     }
 
     private String formatExecutedMessage(TelegramBetIntent intent, BigDecimal amount) {
         return "<b>BET EXECUTED</b>\n\n"
             + "<b>" + escape(textOrDefault(intent.eventName(), "unknown event")) + "</b>\n"
-            + "Runner: " + escape(displayRunner(intent.displayRunner())) + "\n"
+            + TelegramMessageFormat.selectionLine(intent.displayRunner(), intent.odds()) + "\n"
             + "Stake: " + numeric(amount) + "\n"
             + "Status: accepted.";
     }
 
     private String formatRejectedMessage(TelegramBetIntent intent, String message) {
+        String stake = intent.selectedStake() == null ? "" : "Stake: " + numeric(intent.selectedStake()) + "\n";
         return "<b>BET REJECTED</b>\n\n"
             + "<b>" + escape(textOrDefault(intent.eventName(), "unknown event")) + "</b>\n"
-            + "Runner: " + escape(displayRunner(intent.displayRunner())) + "\n"
+            + TelegramMessageFormat.selectionLine(intent.displayRunner(), intent.odds()) + "\n"
+            + stake
             + "Status: " + escape(textOrDefault(message, "rejected"));
     }
 
@@ -362,26 +545,36 @@ public class TelegramBetConfirmationService {
         return exchange + "|" + marketId + "|" + selectionId;
     }
 
-    private String displayRunner(String runner) {
-        return "The Draw".equalsIgnoreCase(runner) ? "Draw" : runner;
-    }
-
     private String textOrDefault(String value, String fallback) {
-        return value == null || value.isBlank() ? fallback : value.strip();
+        return TelegramMessageFormat.textOrDefault(value, fallback);
     }
 
     private String numeric(BigDecimal value) {
-        if (value == null) {
-            return "n/a";
-        }
-        return value.setScale(2, RoundingMode.HALF_UP).toPlainString();
+        return TelegramMessageFormat.numeric(value);
     }
 
     private String escape(String value) {
-        return textOrDefault(value, "n/a")
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;");
+        return TelegramMessageFormat.escape(value);
+    }
+
+    private void auditCreated(TelegramBetIntent intent) {
+        System.out.println("TELEGRAM BET INTENT CREATED | id=" + intent.id()
+            + " | exchange=" + intent.exchange()
+            + " | marketId=" + intent.marketId()
+            + " | selectionId=" + intent.selectionId());
+    }
+
+    private void auditSkipped(String reason, String exchange, String marketId, long selectionId) {
+        System.out.println("TELEGRAM BET INTENT SKIPPED | reason=" + reason
+            + " | exchange=" + exchange
+            + " | marketId=" + marketId
+            + " | selectionId=" + selectionId);
+    }
+
+    private void auditTelegramFailure(String action, RuntimeException exc) {
+        String message = exc.getMessage();
+        System.out.println("TELEGRAM BET SYNC WARNING | action=" + action
+            + " | message=" + (message == null || message.isBlank() ? exc.getClass().getSimpleName() : message));
     }
 
     private record CallbackAction(ActionType type, String intentId, BigDecimal amount) {
