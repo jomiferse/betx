@@ -18,7 +18,8 @@ public record RunnerAnalysis(
     BigDecimal spread,
     BigDecimal liquidity,
     RecommendationType recommendation,
-    String reason
+    String reason,
+    SignalScore score
 ) {
     public RunnerAnalysis {
         if (snapshotKeyMissing(exchange, marketId, selectionId)) {
@@ -28,9 +29,49 @@ public record RunnerAnalysis(
             throw new IllegalArgumentException("recommendation is required.");
         }
         reason = reason == null || reason.isBlank() ? "unspecified" : reason;
+        score = score == null ? SignalScore.zero(reason) : score;
+    }
+
+    public RunnerAnalysis(
+        String exchange,
+        String marketId,
+        String marketName,
+        String eventName,
+        String competitionName,
+        Instant marketStartTime,
+        long selectionId,
+        String runnerName,
+        BigDecimal bestBackPrice,
+        BigDecimal bestLayPrice,
+        BigDecimal spread,
+        BigDecimal liquidity,
+        RecommendationType recommendation,
+        String reason
+    ) {
+        this(
+            exchange,
+            marketId,
+            marketName,
+            eventName,
+            competitionName,
+            marketStartTime,
+            selectionId,
+            runnerName,
+            bestBackPrice,
+            bestLayPrice,
+            spread,
+            liquidity,
+            recommendation,
+            reason,
+            SignalScore.zero(reason)
+        );
     }
 
     public static RunnerAnalysis from(MarketSnapshot snapshot, RecommendationType recommendation, String reason) {
+        return from(snapshot, recommendation, reason, SignalScore.zero(reason));
+    }
+
+    public static RunnerAnalysis from(MarketSnapshot snapshot, RecommendationType recommendation, String reason, SignalScore score) {
         return new RunnerAnalysis(
             snapshot.exchange(),
             snapshot.marketId(),
@@ -45,7 +86,8 @@ public record RunnerAnalysis(
             snapshot.spread(),
             snapshot.liquidity(),
             recommendation,
-            reason
+            reason,
+            score
         );
     }
 

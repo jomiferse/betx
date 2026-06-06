@@ -33,6 +33,8 @@ import org.springframework.stereotype.Service;
 /** Runs one read-only multi-exchange cycle and emits strategy signals. */
 @Service
 public class RunDryRunSignalsService {
+    private static final int RECENT_SNAPSHOT_LIMIT = 10;
+
     private final BetxConfigRepository configRepository;
     private final Map<String, ExchangeMarketDataGateway> marketDataGateways;
     private final TelegramConnectionService telegramService;
@@ -148,13 +150,20 @@ public class RunDryRunSignalsService {
                         snapshot.marketId(),
                         snapshot.selectionId()
                     );
+                    List<ObservedMarketSnapshot> recent = snapshotRepository.findRecent(
+                        config.storage().path(),
+                        snapshot.exchange(),
+                        snapshot.marketId(),
+                        snapshot.selectionId(),
+                        RECENT_SNAPSHOT_LIMIT
+                    );
                     if (previous.isPresent()) {
                         comparisonsCalculated++;
                         changeDetector.compare(previous.get().snapshot(), snapshot).ifPresent(changes::add);
                     }
                     RunnerAnalysis analysis = analyzer.analyze(
                         snapshot,
-                        previous.map(ObservedMarketSnapshot::snapshot),
+                        recent,
                         strategyConfig.get(),
                         config.risk()
                     );
@@ -249,6 +258,11 @@ public class RunDryRunSignalsService {
         @Override
         public Optional<ObservedMarketSnapshot> findLatest(String databasePath, String exchange, String marketId, long selectionId) {
             return Optional.empty();
+        }
+
+        @Override
+        public List<ObservedMarketSnapshot> findRecent(String databasePath, String exchange, String marketId, long selectionId, int limit) {
+            return List.of();
         }
 
         @Override

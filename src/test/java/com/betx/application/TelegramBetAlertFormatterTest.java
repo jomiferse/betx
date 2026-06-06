@@ -5,8 +5,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.RecommendationType;
 import com.betx.domain.signal.RunnerAnalysis;
+import com.betx.domain.signal.SignalScore;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
@@ -15,7 +17,17 @@ class TelegramBetAlertFormatterTest {
 
     @Test
     void formatsReadableDryRunBetAlertWithOddsMovement() {
-        RunnerAnalysis analysis = RunnerAnalysis.from(currentSnapshot(), RecommendationType.BET, "liquidity_ok, spread_ok, favorable_odds_movement, dry_run_only");
+        RunnerAnalysis analysis = RunnerAnalysis.from(
+            currentSnapshot(),
+            RecommendationType.BET,
+            "liquidity_ok, spread_ok, favorable_odds_movement, movement_persisted, low_volatility, dry_run_only",
+            new SignalScore(82, "High confidence", List.of(
+                "Odds moved from 1.94 -> 1.88",
+                "Liquidity increased +20.72%",
+                "Movement persisted for 3 cycles",
+                "Volatility is low"
+            ))
+        );
         MarketSnapshot previous = new MarketSnapshot(
             "betfair",
             "1.258354692",
@@ -36,16 +48,20 @@ class TelegramBetAlertFormatterTest {
         assertThat(message)
             .contains("<b>BETX SIGNAL</b>")
             .contains("DRY-RUN ONLY")
+            .contains("Market movement detected")
+            .contains("Score: 82/100 🟢 High confidence")
             .contains("Trigger: Odds moved favourably (-3.09%)")
-            .contains("<b>Cruzeiro MG v Fluminense</b>")
+            .contains("<b>Cruzeiro MG vs Fluminense</b>")
             .contains("Bet: Cruzeiro MG to win @ 1.88")
             .contains("Action: BACK on betfair")
             .contains("Previous odds: 1.94 -> 1.88 (-3.09%)")
             .contains("Kickoff: 01 Jun 2026 20:00 CEST")
             .contains("Market: Match Odds")
             .contains("Why this signal:")
-            .contains("- Liquidity OK")
-            .contains("- Spread OK")
+            .contains("- Odds moved from 1.94 -&gt; 1.88")
+            .contains("- Liquidity increased +20.72%")
+            .contains("- Movement persisted for 3 cycles")
+            .contains("- Volatility is low")
             .contains("DRY-RUN ONLY. No real bet placed.")
             .doesNotContain("Market ID")
             .doesNotContain("Selection ID")
@@ -99,6 +115,34 @@ class TelegramBetAlertFormatterTest {
             .contains("- Spread OK")
             .doesNotContain("The Draw")
             .doesNotContain("favorable_liquidity_movement");
+    }
+
+    @Test
+    void formatsFixtureSeparatorAsVsInEventTitle() {
+        RunnerAnalysis analysis = RunnerAnalysis.from(
+            new MarketSnapshot(
+                "betfair",
+                "1.1",
+                "Match Odds",
+                "Australia v Switzerland",
+                "International",
+                Instant.parse("2026-06-06T19:00:00Z"),
+                42L,
+                "The Draw",
+                BigDecimal.valueOf(3.90),
+                BigDecimal.valueOf(4.00),
+                BigDecimal.valueOf(0.025),
+                BigDecimal.valueOf(2_000)
+            ),
+            RecommendationType.BET,
+            "liquidity_ok, spread_ok, favorable_odds_movement, dry_run_only"
+        );
+
+        String message = formatter.format(analysis, Optional.empty());
+
+        assertThat(message)
+            .contains("<b>Australia vs Switzerland</b>")
+            .doesNotContain("Australia v Switzerland");
     }
 
     @Test

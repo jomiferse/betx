@@ -54,7 +54,7 @@ class StartCommandTest {
 
         assertThat(output).contains("Exchange betfair failed: unavailable");
         assertThat(output).contains("EVENT ANALYSIS | Team A v Team B | La Liga | marketId=m-1");
-        assertThat(output).contains("WATCH | runner=Team A | back=2.5 | lay=2.6 | liquidity=1200 | reason=valid_market_waiting_for_movement");
+        assertThat(output).contains("WATCH | runner=Team A | back=2.5 | lay=2.6 | liquidity=1200 | score=35/100 | reason=valid_market_waiting_for_movement");
     }
 
     @Test

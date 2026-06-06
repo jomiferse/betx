@@ -45,6 +45,19 @@ class JdbcMarketSnapshotRepositoryTest {
     }
 
     @Test
+    void returnsRecentSnapshotsForRunnerNewestFirst() {
+        JdbcMarketSnapshotRepository repository = new JdbcMarketSnapshotRepository(tempDir.resolve("betx.db").toString());
+        repository.save(observed("betfair", "1.234", 42L, "2026-05-31T10:00:00Z", BigDecimal.valueOf(2.50)));
+        repository.save(observed("betfair", "1.234", 42L, "2026-05-31T10:01:00Z", BigDecimal.valueOf(2.44)));
+        repository.save(observed("betfair", "1.234", 42L, "2026-05-31T10:02:00Z", BigDecimal.valueOf(2.40)));
+        repository.save(observed("betfair", "1.234", 43L, "2026-05-31T10:03:00Z", BigDecimal.valueOf(3.10)));
+
+        assertThat(repository.findRecent("betfair", "1.234", 42L, 2))
+            .extracting(snapshot -> snapshot.snapshot().bestBackPrice())
+            .containsExactly(BigDecimal.valueOf(2.40), BigDecimal.valueOf(2.44));
+    }
+
+    @Test
     void addsRunnerNameColumnToExistingDatabase() throws Exception {
         Path database = tempDir.resolve("legacy.db");
         try (var connection = DriverManager.getConnection("jdbc:sqlite:" + database);

@@ -40,6 +40,7 @@ public class EventAnalysisFormatter {
             + " | back=" + value(analysis.bestBackPrice())
             + " | lay=" + value(analysis.bestLayPrice())
             + " | liquidity=" + value(analysis.liquidity())
+            + " | score=" + analysis.score().value() + "/100"
             + " | reason=" + analysis.reason();
     }
 

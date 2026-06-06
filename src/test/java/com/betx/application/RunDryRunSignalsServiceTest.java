@@ -102,7 +102,7 @@ class RunDryRunSignalsServiceTest {
     @Test
     void sendsTelegramOnlyForDryRunBetSignals() {
         RecordingSnapshotRepository repository = new RecordingSnapshotRepository();
-        repository.previous = new ObservedMarketSnapshot(
+        repository.putPrevious(new ObservedMarketSnapshot(
             Instant.parse("2026-05-31T10:00:00Z"),
             new MarketSnapshot(
                 "betfair",
@@ -118,7 +118,7 @@ class RunDryRunSignalsServiceTest {
                 BigDecimal.valueOf(0.04),
                 BigDecimal.valueOf(1_000)
             )
-        );
+        ));
         RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
         BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
         RunDryRunSignalsService service = new RunDryRunSignalsService(
@@ -134,6 +134,8 @@ class RunDryRunSignalsServiceTest {
         DryRunSignalsResult result = service.run(CONFIG_PATH);
 
         assertThat(result.signals()).hasSize(1);
+        assertThat(result.runnerAnalyses()).singleElement()
+            .satisfies(analysis -> assertThat(analysis.score().value()).isGreaterThanOrEqualTo(70));
         assertThat(telegram.messages()).isEmpty();
         assertThat(telegram.formattedMessages()).singleElement()
             .satisfies(message -> {
@@ -142,13 +144,44 @@ class RunDryRunSignalsServiceTest {
                     .contains("<b>BETX SIGNAL</b>")
                     .contains("DRY-RUN ONLY")
                     .contains("Trigger: Odds moved favourably (-3.85%)")
-                    .contains("<b>Team A v Team B</b>")
+                    .contains("<b>Team A vs Team B</b>")
                     .contains("Bet: Team A to win @ 2.50")
                     .contains("Previous odds: 2.60 -> 2.50 (-3.85%)")
-                    .contains("- Liquidity OK")
-                    .contains("- Spread OK")
+                    .contains("Score:")
+                    .contains("- Odds moved from 2.60 -&gt; 2.50")
+                    .contains("- Liquidity increased +20.00%")
+                    .contains("- Volatility is low")
                     .contains("DRY-RUN ONLY. No real bet placed.");
             });
+    }
+
+    @Test
+    void usesRecentSnapshotHistoryAndRequiresScoreThresholdForBetSignals() {
+        RecordingSnapshotRepository repository = new RecordingSnapshotRepository();
+        repository.putRecent(
+            observed("betfair", "1.1", 42L, "2026-05-31T10:02:00Z", BigDecimal.valueOf(2.48), BigDecimal.valueOf(1_220)),
+            observed("betfair", "1.1", 42L, "2026-05-31T10:01:00Z", BigDecimal.valueOf(2.50), BigDecimal.valueOf(1_200))
+        );
+        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        RunDryRunSignalsService service = new RunDryRunSignalsService(
+            new StaticConfigRepository(config),
+            List.of(gateway("betfair", List.of(snapshot("betfair", "1.1")), null)),
+            new NoopTelegramConnectionService(),
+            new RecordingBetExecutionGateway(),
+            repository,
+            new MarketSnapshotChangeDetector(),
+            Clock.fixed(Instant.parse("2026-05-31T10:03:00Z"), ZoneOffset.UTC)
+        );
+
+        DryRunSignalsResult result = service.run(CONFIG_PATH);
+
+        assertThat(repository.recentRequests()).containsExactly("betfair|1.1|42|10");
+        assertThat(result.runnerAnalyses()).singleElement()
+            .satisfies(analysis -> {
+                assertThat(analysis.score().value()).isLessThan(70);
+                assertThat(analysis.recommendation()).isEqualTo(com.betx.domain.signal.RecommendationType.WATCH);
+            });
+        assertThat(result.signals()).isEmpty();
     }
 
     @Test
@@ -411,6 +444,33 @@ class RunDryRunSignalsServiceTest {
         );
     }
 
+    private ObservedMarketSnapshot observed(
+        String exchange,
+        String marketId,
+        long selectionId,
+        String observedAt,
+        BigDecimal back,
+        BigDecimal liquidity
+    ) {
+        return new ObservedMarketSnapshot(
+            Instant.parse(observedAt),
+            new MarketSnapshot(
+                exchange,
+                marketId,
+                "Match Odds",
+                "Team A v Team B",
+                "La Liga",
+                Instant.parse("2026-06-01T18:00:00Z"),
+                selectionId,
+                "Team A",
+                back,
+                BigDecimal.valueOf(2.60),
+                BigDecimal.valueOf(0.04),
+                liquidity
+            )
+        );
+    }
+
     private MarketSnapshot testSnapshot() {
         return new MarketSnapshot(
             "betfair",
@@ -509,6 +569,8 @@ class RunDryRunSignalsServiceTest {
     private static final class RecordingSnapshotRepository implements MarketSnapshotRepository {
         private ObservedMarketSnapshot previous;
         private final java.util.Map<String, ObservedMarketSnapshot> previousSnapshots = new java.util.HashMap<>();
+        private final java.util.Map<String, List<ObservedMarketSnapshot>> recentSnapshots = new java.util.HashMap<>();
+        private final List<String> recentRequests = new ArrayList<>();
         private final List<ObservedMarketSnapshot> saved = new ArrayList<>();
 
         @Override
@@ -521,6 +583,16 @@ class RunDryRunSignalsServiceTest {
                 .filter(snapshot -> snapshot.snapshot().exchange().equals(exchange))
                 .filter(snapshot -> snapshot.snapshot().marketId().equals(marketId))
                 .filter(snapshot -> snapshot.snapshot().selectionId() == selectionId);
+        }
+
+        @Override
+        public List<ObservedMarketSnapshot> findRecent(String databasePath, String exchange, String marketId, long selectionId, int limit) {
+            recentRequests.add(key(exchange, marketId, selectionId) + "|" + limit);
+            List<ObservedMarketSnapshot> stored = recentSnapshots.get(key(exchange, marketId, selectionId));
+            if (stored != null) {
+                return stored.stream().limit(limit).toList();
+            }
+            return findLatest(databasePath, exchange, marketId, selectionId).stream().toList();
         }
 
         @Override
@@ -537,6 +609,20 @@ class RunDryRunSignalsServiceTest {
                 key(snapshot.snapshot().exchange(), snapshot.snapshot().marketId(), snapshot.snapshot().selectionId()),
                 snapshot
             );
+        }
+
+        private void putRecent(ObservedMarketSnapshot... snapshots) {
+            for (ObservedMarketSnapshot snapshot : snapshots) {
+                recentSnapshots.computeIfAbsent(
+                    key(snapshot.snapshot().exchange(), snapshot.snapshot().marketId(), snapshot.snapshot().selectionId()),
+                    ignored -> new ArrayList<>()
+                ).add(snapshot);
+                putPrevious(snapshot);
+            }
+        }
+
+        private List<String> recentRequests() {
+            return recentRequests;
         }
 
         private String key(String exchange, String marketId, long selectionId) {

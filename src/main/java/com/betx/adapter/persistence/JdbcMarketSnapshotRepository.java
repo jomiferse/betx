@@ -13,6 +13,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
 
@@ -33,6 +34,10 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
 
     public Optional<ObservedMarketSnapshot> findLatest(String exchange, String marketId, long selectionId) {
         return findLatest(databasePath, exchange, marketId, selectionId);
+    }
+
+    public List<ObservedMarketSnapshot> findRecent(String exchange, String marketId, long selectionId, int limit) {
+        return findRecent(databasePath, exchange, marketId, selectionId, limit);
     }
 
     public void save(ObservedMarketSnapshot snapshot) {
@@ -64,6 +69,39 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
             }
         } catch (SQLException exc) {
             throw new IllegalStateException("Could not read market snapshot.", exc);
+        }
+    }
+
+    @Override
+    public List<ObservedMarketSnapshot> findRecent(String databasePath, String exchange, String marketId, long selectionId, int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
+        try (Connection connection = connection(databasePath)) {
+            ensureSchema(connection);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT observed_at, exchange, market_id, market_name, event_name, competition_name, market_start_time,
+                       runner_name,
+                       selection_id, best_back_price, best_lay_price, spread, liquidity
+                FROM market_snapshots
+                WHERE exchange = ? AND market_id = ? AND selection_id = ?
+                ORDER BY observed_at DESC, id DESC
+                LIMIT ?
+                """)) {
+                statement.setString(1, exchange);
+                statement.setString(2, marketId);
+                statement.setLong(3, selectionId);
+                statement.setInt(4, limit);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    List<ObservedMarketSnapshot> snapshots = new java.util.ArrayList<>();
+                    while (resultSet.next()) {
+                        snapshots.add(map(resultSet));
+                    }
+                    return snapshots;
+                }
+            }
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not read recent market snapshots.", exc);
         }
     }
 
