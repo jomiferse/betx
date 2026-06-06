@@ -4,6 +4,9 @@ import com.betx.domain.config.RiskConfig;
 import com.betx.domain.config.StrategyConfig;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -14,6 +17,8 @@ public class EventMarketAnalyzer {
     private static final BigDecimal MAX_BACK_ODDS = BigDecimal.valueOf(6.0);
     private static final BigDecimal FAVORABLE_BACK_DROP_PERCENT = BigDecimal.valueOf(-1.0);
     private static final BigDecimal FAVORABLE_LIQUIDITY_RISE_PERCENT = BigDecimal.valueOf(2.0);
+    private static final BigDecimal LOW_VOLATILITY_PERCENT = BigDecimal.valueOf(15.0);
+    private static final int BET_SCORE_THRESHOLD = 70;
 
     public RunnerAnalysis analyze(
         MarketSnapshot snapshot,
@@ -21,35 +26,52 @@ public class EventMarketAnalyzer {
         StrategyConfig strategyConfig,
         RiskConfig riskConfig
     ) {
+        return analyze(
+            snapshot,
+            previousSnapshot.map(previous -> List.of(new ObservedMarketSnapshot(Instant.EPOCH, previous))).orElseGet(List::of),
+            strategyConfig,
+            riskConfig
+        );
+    }
+
+    public RunnerAnalysis analyze(
+        MarketSnapshot snapshot,
+        List<ObservedMarketSnapshot> recentSnapshots,
+        StrategyConfig strategyConfig,
+        RiskConfig riskConfig
+    ) {
         if (isTestMarket(snapshot)) {
-            return RunnerAnalysis.from(snapshot, RecommendationType.NO_BET, "test_market");
+            return rejected(snapshot, "test_market");
         }
         if (snapshot.bestBackPrice() == null || snapshot.bestLayPrice() == null) {
-            return RunnerAnalysis.from(snapshot, RecommendationType.NO_BET, "missing_back_or_lay_price");
+            return rejected(snapshot, "missing_back_or_lay_price");
         }
         if (snapshot.liquidity().compareTo(strategyConfig.minLiquidity()) < 0) {
-            return RunnerAnalysis.from(snapshot, RecommendationType.NO_BET, "liquidity_below_minimum");
+            return rejected(snapshot, "liquidity_below_minimum");
         }
         if (snapshot.spread() == null || snapshot.spread().compareTo(MAX_RELATIVE_SPREAD) > 0) {
-            return RunnerAnalysis.from(snapshot, RecommendationType.NO_BET, "spread_above_threshold");
+            return rejected(snapshot, "spread_above_threshold");
         }
         if (snapshot.bestBackPrice().compareTo(MIN_BACK_ODDS) < 0 || snapshot.bestBackPrice().compareTo(MAX_BACK_ODDS) > 0) {
-            return RunnerAnalysis.from(snapshot, RecommendationType.NO_BET, "odds_out_of_range");
-        }
-        if (previousSnapshot.isEmpty()) {
-            return RunnerAnalysis.from(snapshot, RecommendationType.WATCH, "valid_market_waiting_for_movement");
+            return rejected(snapshot, "odds_out_of_range");
         }
 
-        MarketSnapshot previous = previousSnapshot.get();
-        BigDecimal backMovement = percentageDelta(previous.bestBackPrice(), snapshot.bestBackPrice());
-        if (backMovement != null && backMovement.compareTo(FAVORABLE_BACK_DROP_PERCENT) <= 0) {
-            return RunnerAnalysis.from(snapshot, RecommendationType.BET, "liquidity_ok, spread_ok, favorable_odds_movement, dry_run_only");
+        List<MarketSnapshot> history = recentSnapshots == null
+            ? List.of()
+            : recentSnapshots.stream().map(ObservedMarketSnapshot::snapshot).toList();
+        if (history.isEmpty()) {
+            return RunnerAnalysis.from(
+                snapshot,
+                RecommendationType.WATCH,
+                "valid_market_waiting_for_movement",
+                SignalScore.fromValue(35, List.of("Base market quality is acceptable"))
+            );
         }
-        BigDecimal liquidityMovement = percentageDelta(previous.liquidity(), snapshot.liquidity());
-        if (liquidityMovement != null && liquidityMovement.compareTo(FAVORABLE_LIQUIDITY_RISE_PERCENT) >= 0) {
-            return RunnerAnalysis.from(snapshot, RecommendationType.BET, "liquidity_ok, spread_ok, favorable_liquidity_movement, dry_run_only");
-        }
-        return RunnerAnalysis.from(snapshot, RecommendationType.WATCH, "valid_market_waiting_for_movement");
+
+        MarketMovementFeatures features = features(snapshot, history);
+        SignalScore score = score(snapshot, history, features);
+        RecommendationType recommendation = score.value() >= BET_SCORE_THRESHOLD ? RecommendationType.BET : RecommendationType.WATCH;
+        return RunnerAnalysis.from(snapshot, recommendation, reason(recommendation, features, score), score);
     }
 
     public boolean isTestMarket(MarketSnapshot snapshot) {
@@ -58,6 +80,158 @@ public class EventMarketAnalyzer {
 
     private boolean containsTest(String value) {
         return value != null && value.toLowerCase(Locale.ROOT).contains("test");
+    }
+
+    private RunnerAnalysis rejected(MarketSnapshot snapshot, String reason) {
+        return RunnerAnalysis.from(snapshot, RecommendationType.NO_BET, reason, SignalScore.zero(reason));
+    }
+
+    private MarketMovementFeatures features(MarketSnapshot current, List<MarketSnapshot> history) {
+        MarketSnapshot previous = history.getFirst();
+        BigDecimal oddsDelta = percentageDelta(previous.bestBackPrice(), current.bestBackPrice());
+        BigDecimal liquidityDelta = percentageDelta(previous.liquidity(), current.liquidity());
+        return new MarketMovementFeatures(
+            oddsDelta,
+            liquidityDelta,
+            persistenceCycles(current, history),
+            volatilityPercent(current, history),
+            history.size()
+        );
+    }
+
+    private SignalScore score(MarketSnapshot current, List<MarketSnapshot> history, MarketMovementFeatures features) {
+        List<String> reasons = new ArrayList<>();
+        int value = 35;
+        reasons.add("Base market quality is acceptable");
+
+        MarketSnapshot previous = history.getFirst();
+        if (features.oddsDeltaPercent() != null && features.oddsDeltaPercent().compareTo(FAVORABLE_BACK_DROP_PERCENT) <= 0) {
+            value += 25;
+            reasons.add("Odds moved from " + numeric(previous.bestBackPrice()) + " -> " + numeric(current.bestBackPrice()));
+        } else if (features.oddsDeltaPercent() != null && features.oddsDeltaPercent().signum() < 0) {
+            value += 10;
+            reasons.add("Odds moved slightly from " + numeric(previous.bestBackPrice()) + " -> " + numeric(current.bestBackPrice()));
+        }
+
+        if (features.liquidityDeltaPercent() != null && features.liquidityDeltaPercent().compareTo(FAVORABLE_LIQUIDITY_RISE_PERCENT) >= 0) {
+            value += 20;
+            reasons.add("Liquidity increased " + signedPercent(features.liquidityDeltaPercent()));
+        } else if (features.liquidityDeltaPercent() != null && features.liquidityDeltaPercent().signum() > 0) {
+            value += 5;
+            reasons.add("Liquidity increased slightly " + signedPercent(features.liquidityDeltaPercent()));
+        }
+
+        if (features.favorablePersistenceCycles() >= 3) {
+            value += 10;
+            reasons.add("Movement persisted for 3 cycles");
+        } else if (features.favorablePersistenceCycles() == 2) {
+            value += 5;
+            reasons.add("Movement persisted for 2 cycles");
+        } else if (features.favorablePersistenceCycles() == 1) {
+            value += 5;
+        }
+
+        boolean lowVolatility = features.volatilityPercent() == null || features.volatilityPercent().compareTo(LOW_VOLATILITY_PERCENT) <= 0;
+        if (lowVolatility) {
+            value += 10;
+            reasons.add("Volatility is low");
+        } else {
+            value -= 25;
+            reasons.add("Volatility is high");
+        }
+
+        if (lowVolatility && standsOutFromBaseline(current, history)) {
+            value += 10;
+            reasons.add("Movement stands out versus recent baseline");
+        }
+
+        return SignalScore.fromValue(value, reasons);
+    }
+
+    private String reason(RecommendationType recommendation, MarketMovementFeatures features, SignalScore score) {
+        List<String> tokens = new ArrayList<>(List.of("liquidity_ok", "spread_ok", "odds_range_ok"));
+        if (features.oddsDeltaPercent() != null && features.oddsDeltaPercent().compareTo(FAVORABLE_BACK_DROP_PERCENT) <= 0) {
+            tokens.add("favorable_odds_movement");
+        }
+        if (features.liquidityDeltaPercent() != null && features.liquidityDeltaPercent().compareTo(FAVORABLE_LIQUIDITY_RISE_PERCENT) >= 0) {
+            tokens.add("favorable_liquidity_movement");
+        }
+        if (features.favorablePersistenceCycles() >= 2) {
+            tokens.add("movement_persisted");
+        }
+        if (score.reasons().contains("Volatility is low")) {
+            tokens.add("low_volatility");
+        }
+        if (recommendation == RecommendationType.BET) {
+            tokens.add("dry_run_only");
+        } else {
+            tokens.add("score_below_threshold");
+        }
+        return String.join(", ", tokens);
+    }
+
+    private int persistenceCycles(MarketSnapshot current, List<MarketSnapshot> history) {
+        List<MarketSnapshot> sequence = new ArrayList<>();
+        sequence.add(current);
+        sequence.addAll(history.stream().limit(3).toList());
+        int cycles = 0;
+        for (int index = 0; index < sequence.size() - 1; index++) {
+            MarketSnapshot newer = sequence.get(index);
+            MarketSnapshot older = sequence.get(index + 1);
+            BigDecimal oddsDelta = percentageDelta(older.bestBackPrice(), newer.bestBackPrice());
+            BigDecimal liquidityDelta = percentageDelta(older.liquidity(), newer.liquidity());
+            boolean favorableOdds = oddsDelta != null && oddsDelta.signum() < 0;
+            boolean favorableLiquidity = liquidityDelta != null && liquidityDelta.signum() > 0;
+            if (!favorableOdds && !favorableLiquidity) {
+                break;
+            }
+            cycles++;
+        }
+        return cycles;
+    }
+
+    private BigDecimal volatilityPercent(MarketSnapshot current, List<MarketSnapshot> history) {
+        List<BigDecimal> prices = new ArrayList<>();
+        prices.add(current.bestBackPrice());
+        history.stream().limit(4).map(MarketSnapshot::bestBackPrice).forEach(prices::add);
+        prices = prices.stream().filter(price -> price != null && price.compareTo(BigDecimal.ZERO) > 0).toList();
+        if (prices.size() < 3) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal min = prices.stream().min(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
+        BigDecimal max = prices.stream().max(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
+        BigDecimal average = prices.stream().reduce(BigDecimal.ZERO, BigDecimal::add)
+            .divide(BigDecimal.valueOf(prices.size()), 10, RoundingMode.HALF_UP);
+        if (average.compareTo(BigDecimal.ZERO) == 0) {
+            return null;
+        }
+        return max.subtract(min)
+            .divide(average, 10, RoundingMode.HALF_UP)
+            .multiply(BigDecimal.valueOf(100))
+            .setScale(8, RoundingMode.HALF_UP);
+    }
+
+    private boolean standsOutFromBaseline(MarketSnapshot current, List<MarketSnapshot> history) {
+        List<BigDecimal> prices = history.stream()
+            .map(MarketSnapshot::bestBackPrice)
+            .filter(price -> price != null && price.compareTo(BigDecimal.ZERO) > 0)
+            .toList();
+        if (prices.size() < 2 || current.bestBackPrice() == null) {
+            return false;
+        }
+        BigDecimal average = prices.stream().reduce(BigDecimal.ZERO, BigDecimal::add)
+            .divide(BigDecimal.valueOf(prices.size()), 10, RoundingMode.HALF_UP);
+        BigDecimal delta = percentageDelta(average, current.bestBackPrice());
+        return delta != null && delta.compareTo(FAVORABLE_BACK_DROP_PERCENT) <= 0;
+    }
+
+    private String signedPercent(BigDecimal value) {
+        BigDecimal rounded = value.setScale(2, RoundingMode.HALF_UP);
+        return (rounded.signum() > 0 ? "+" : "") + rounded.toPlainString() + "%";
+    }
+
+    private String numeric(BigDecimal value) {
+        return value == null ? "n/a" : value.setScale(2, RoundingMode.HALF_UP).toPlainString();
     }
 
     private BigDecimal percentageDelta(BigDecimal previous, BigDecimal current) {

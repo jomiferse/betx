@@ -47,7 +47,8 @@ class EventMarketAnalyzerTest {
         RunnerAnalysis analysis = analyzer.analyze(current, Optional.of(previous), strategyConfig, riskConfig);
 
         assertThat(analysis.recommendation()).isEqualTo(RecommendationType.BET);
-        assertThat(analysis.reason()).isEqualTo("liquidity_ok, spread_ok, favorable_odds_movement, dry_run_only");
+        assertThat(analysis.reason()).contains("liquidity_ok", "spread_ok", "odds_range_ok", "favorable_odds_movement", "dry_run_only");
+        assertThat(analysis.score().value()).isGreaterThanOrEqualTo(70);
     }
 
     @Test
@@ -58,7 +59,8 @@ class EventMarketAnalyzerTest {
         RunnerAnalysis analysis = analyzer.analyze(current, Optional.of(previous), strategyConfig, riskConfig);
 
         assertThat(analysis.recommendation()).isEqualTo(RecommendationType.BET);
-        assertThat(analysis.reason()).isEqualTo("liquidity_ok, spread_ok, favorable_liquidity_movement, dry_run_only");
+        assertThat(analysis.reason()).contains("liquidity_ok", "spread_ok", "odds_range_ok", "favorable_liquidity_movement", "dry_run_only");
+        assertThat(analysis.score().value()).isGreaterThanOrEqualTo(70);
     }
 
     private MarketSnapshot snapshot(String eventName, String runnerName, BigDecimal back, BigDecimal lay, BigDecimal liquidity) {
