@@ -172,6 +172,14 @@ class TelegramCommandTest {
         }
 
         @Override
+        public List<TelegramBetIntent> listByStages(String databasePath, List<TelegramBetIntentStage> stages, int limit) {
+            return intents.stream()
+                .filter(intent -> stages.contains(intent.stage()))
+                .limit(limit)
+                .toList();
+        }
+
+        @Override
         public long countByStages(String databasePath, List<TelegramBetIntentStage> stages) {
             return 0L;
         }

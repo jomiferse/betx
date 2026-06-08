@@ -32,6 +32,9 @@ class JdbcTelegramBetIntentRepositoryTest {
         assertThat(repository.listRecent(databasePath, 10))
             .extracting(TelegramBetIntent::id)
             .containsExactly("second", "first");
+        assertThat(repository.listByStages(databasePath, List.of(TelegramBetIntentStage.AWAITING_CONFIRMATION), 10))
+            .extracting(TelegramBetIntent::id)
+            .containsExactly("second");
         assertThat(repository.countByStages(databasePath, List.of(
             TelegramBetIntentStage.AWAITING_CONFIRMATION,
             TelegramBetIntentStage.EXECUTED

@@ -2,11 +2,11 @@ package com.betx.application;
 
 import com.betx.domain.signal.BetSignal;
 
-/** Formats dry-run signals for human-visible channels. */
+/** Formats betting signals for human-visible channels. */
 public class DryRunSignalFormatter {
     /** Formats one signal as the terminal line expected by the CLI. */
     public String format(BetSignal signal) {
-        return "SIGNAL DRY-RUN | "
+        return "SIGNAL | "
             + "exchange="
             + signal.exchange()
             + " | "

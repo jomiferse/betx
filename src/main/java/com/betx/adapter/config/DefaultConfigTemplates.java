@@ -7,7 +7,6 @@ public final class DefaultConfigTemplates {
     public static String defaultConfig() {
         return """
             app:
-              mode: dry-run
               log_level: info
 
             telegram:
@@ -29,6 +28,12 @@ public final class DefaultConfigTemplates {
                   username:
                   password:
                   app_key:
+                  auto_betting:
+                    enabled: false
+                    request_confirmation: true
+                    max_stake: 5
+                    max_daily_loss: 25
+                    max_open_positions: 3
 
             storage:
               type: sqlite
@@ -44,12 +49,6 @@ public final class DefaultConfigTemplates {
               market_type_codes:
                 - MATCH_ODDS
 
-            risk:
-              max_stake: 5
-              max_daily_loss: 25
-              max_open_positions: 3
-              live_betting_enabled: false
-
             strategies:
               - name: value-football
                 enabled: true
@@ -60,6 +59,14 @@ public final class DefaultConfigTemplates {
               enabled: false
               model_path: ./models/value_model.pkl
               min_confidence: 0.70
+
+            intelligence:
+              enabled: false
+              provider: openrouter
+              model: x-ai/grok-4.3
+              api_key:
+              timeout_seconds: 20
+              min_confidence: 70
             """;
     }
 }

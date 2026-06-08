@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 class MarketMovementScorerTest {
     private final EventMarketAnalyzer analyzer = new EventMarketAnalyzer();
     private final StrategyConfig strategyConfig = new StrategyConfig("value-football", true, new BigDecimal("0.06"), new BigDecimal("500"));
-    private final RiskConfig riskConfig = new RiskConfig(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3, false);
+    private final RiskConfig riskConfig = new RiskConfig(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3);
 
     @Test
     void scoresHighForOddsDropLiquidityRisePersistenceAndLowVolatility() {

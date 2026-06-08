@@ -26,11 +26,18 @@ public class StartBetxService {
     public StartupStatus start(ConfigPath configPath) {
         BetxConfig config = configRepository.load(configPath);
         validator.validate(config);
+        boolean autoBettingEnabled = config.enabledExchanges().stream()
+            .filter(exchange -> "betfair".equals(exchange.name()))
+            .anyMatch(exchange -> exchange.betfair().autoBetting().enabled());
+        boolean requestConfirmation = config.enabledExchanges().stream()
+            .filter(exchange -> "betfair".equals(exchange.name()))
+            .anyMatch(exchange -> exchange.betfair().autoBetting().enabled()
+                && exchange.betfair().autoBetting().requestConfirmation());
         return new StartupStatus(
-            config.app().mode(),
             config.telegram().enabled(),
             config.ml().enabled(),
-            config.risk().liveBettingEnabled(),
+            autoBettingEnabled,
+            requestConfirmation,
             config.storage().path(),
             config.marketData().pollIntervalSeconds()
         );

@@ -45,15 +45,41 @@ class YamlBetxConfigRepositoryTest {
                   password: password
                   app_key: app-key
                   country: spain
+                  auto_betting:
+                    enabled: true
+                    request_confirmation: true
+                    max_stake: 7
+                    max_daily_loss: 21
+                    max_open_positions: 2
               - name: smarkets
                 enabled: false
+            intelligence:
+              enabled: true
+              provider: openrouter
+              model: x-ai/grok-4.3
+              api_key: sk-test
+              api_key_env: OPENROUTER_API_KEY
+              timeout_seconds: 15
+              min_confidence: 75
             """, BetxConfig.class);
 
         assertThat(config.exchanges()).hasSize(2);
         assertThat(config.enabledExchanges()).singleElement().satisfies(exchange -> {
             assertThat(exchange.name()).isEqualTo("betfair");
             assertThat(exchange.betfair().appKey()).isEqualTo("app-key");
+            assertThat(exchange.betfair().autoBetting().enabled()).isTrue();
+            assertThat(exchange.betfair().autoBetting().requestConfirmation()).isTrue();
+            assertThat(exchange.betfair().autoBetting().maxStake()).isEqualByComparingTo("7");
+            assertThat(exchange.betfair().autoBetting().maxDailyLoss()).isEqualByComparingTo("21");
+            assertThat(exchange.betfair().autoBetting().maxOpenPositions()).isEqualTo(2);
         });
+        assertThat(config.intelligence().enabled()).isTrue();
+        assertThat(config.intelligence().provider()).isEqualTo("openrouter");
+        assertThat(config.intelligence().model()).isEqualTo("x-ai/grok-4.3");
+        assertThat(config.intelligence().apiKey()).isEqualTo("sk-test");
+        assertThat(config.intelligence().apiKeyEnv()).isEqualTo("OPENROUTER_API_KEY");
+        assertThat(config.intelligence().timeoutSeconds()).isEqualTo(15);
+        assertThat(config.intelligence().minConfidence()).isEqualTo(75);
     }
 
     @Test
@@ -141,8 +167,6 @@ class YamlBetxConfigRepositoryTest {
             telegram:
               enabled: true
               bot_username: existing_bot
-            app:
-              mode: dry-run
             """);
 
         repository.saveTelegramFields(new ConfigPath(file), java.util.Map.of("chat_id", "12345"));

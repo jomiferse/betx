@@ -13,6 +13,7 @@ public record DryRunSignalsResult(
     int comparisonsCalculated,
     List<MarketSnapshotChange> changes,
     List<RunnerAnalysis> runnerAnalyses,
+    List<MatchIntelligenceAssessment> intelligenceAssessments,
     int marketsRead,
     int ignoredMarkets,
     int eventsRead,
@@ -23,9 +24,39 @@ public record DryRunSignalsResult(
         failures = failures == null ? List.of() : List.copyOf(failures);
         changes = changes == null ? List.of() : List.copyOf(changes);
         runnerAnalyses = runnerAnalyses == null ? List.of() : List.copyOf(runnerAnalyses);
+        intelligenceAssessments = intelligenceAssessments == null ? List.of() : List.copyOf(intelligenceAssessments);
+    }
+
+    public DryRunSignalsResult(
+        List<BetSignal> signals,
+        List<String> failures,
+        boolean noEnabledExchanges,
+        int snapshotsSaved,
+        int comparisonsCalculated,
+        List<MarketSnapshotChange> changes,
+        List<RunnerAnalysis> runnerAnalyses,
+        int marketsRead,
+        int ignoredMarkets,
+        int eventsRead,
+        int ignoredEvents
+    ) {
+        this(
+            signals,
+            failures,
+            noEnabledExchanges,
+            snapshotsSaved,
+            comparisonsCalculated,
+            changes,
+            runnerAnalyses,
+            List.of(),
+            marketsRead,
+            ignoredMarkets,
+            eventsRead,
+            ignoredEvents
+        );
     }
 
     public DryRunSignalsResult(List<BetSignal> signals, List<String> failures, boolean noEnabledExchanges) {
-        this(signals, failures, noEnabledExchanges, 0, 0, List.of(), List.of(), 0, 0, 0, 0);
+        this(signals, failures, noEnabledExchanges, 0, 0, List.of(), List.of(), List.of(), 0, 0, 0, 0);
     }
 }

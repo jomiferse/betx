@@ -142,6 +142,36 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
     }
 
     @Override
+    public List<TelegramBetIntent> listByStages(String databasePath, List<TelegramBetIntentStage> stages, int limit) {
+        if (stages == null || stages.isEmpty()) {
+            return List.of();
+        }
+        String placeholders = stages.stream().map(stage -> "?").collect(Collectors.joining(", "));
+        try (Connection connection = connection(databasePath)) {
+            ensureSchema(connection);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT *
+                FROM telegram_bet_intents
+                WHERE stage IN (%s)
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """.formatted(placeholders))) {
+                bindStages(statement, stages);
+                statement.setInt(stages.size() + 1, Math.max(1, limit));
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    List<TelegramBetIntent> intents = new java.util.ArrayList<>();
+                    while (resultSet.next()) {
+                        intents.add(map(resultSet));
+                    }
+                    return intents;
+                }
+            }
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not list live bet intents by stage.", exc);
+        }
+    }
+
+    @Override
     public long countByStages(String databasePath, List<TelegramBetIntentStage> stages) {
         if (stages == null || stages.isEmpty()) {
             return 0L;

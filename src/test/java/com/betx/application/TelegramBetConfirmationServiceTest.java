@@ -7,20 +7,26 @@ import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.ExchangeAccountGateway;
 import com.betx.application.port.out.TelegramBetIntentRepository;
 import com.betx.application.port.out.TelegramBotGateway;
+import com.betx.domain.betfair.BetfairAutoBettingConfig;
+import com.betx.domain.betfair.BetfairConfig;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
-import com.betx.domain.config.RiskConfig;
+import com.betx.domain.config.ExchangeConfig;
+import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.BetSignal;
 import com.betx.domain.signal.BetSide;
 import com.betx.domain.signal.RecommendationType;
 import com.betx.domain.signal.RunnerAnalysis;
+import com.betx.domain.signal.SignalScore;
 import com.betx.domain.telegram.TelegramBetIntent;
 import com.betx.domain.telegram.TelegramBetIntentStage;
 import com.betx.domain.telegram.TelegramConnectionContext;
 import com.betx.domain.telegram.TelegramUpdate;
 import java.math.BigDecimal;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -45,31 +51,29 @@ class TelegramBetConfirmationServiceTest {
             new RecordingExecutionGateway()
         );
 
-        service.sync(CONFIG_PATH, resultOf(
-            signal(
-                "betfair",
-                "1.1",
-                42L,
-                BigDecimal.valueOf(3.9),
-                BigDecimal.valueOf(5),
-                "liquidity_ok, spread_ok, favorable_odds_movement"
-            ),
-            analysis("The Draw")
-        ));
+        service.sync(CONFIG_PATH, resultWithLiveConfirmationSignal());
 
         assertThat(telegram.sentMessages()).hasSize(1);
         assertThat(telegram.sentMessages().getFirst().text())
-            .contains("<b>BET CONFIRMATION</b>")
-            .contains("<b>Team A v Team B</b>")
-            .contains("Bet: Draw @ 3.90")
+            .contains("<b>BETX SIGNAL</b>")
+            .contains("BET CONFIRMATION")
+            .contains("Market movement detected")
+            .contains("Score: 85/100 🟢 High confidence")
+            .contains("Trigger: Odds moved favourably (-1.30%)")
+            .contains("<b>CD Castellon vs Almeria</b>")
+            .contains("Bet: Draw @ 3.80")
             .contains("Action: BACK on betfair")
-            .contains("Stake cap: 5.00")
+            .contains("Previous odds: 3.85 -> 3.80 (-1.30%)")
+            .contains("Kickoff: 06 Jun 2026 21:00 CEST")
             .contains("Market: Match Odds")
             .contains("Why this signal:")
-            .contains("- Liquidity OK")
-            .contains("- Spread OK")
-            .contains("- Odds moved favourably")
+            .contains("- Base market quality is acceptable")
+            .contains("- Odds moved from 3.85 -&gt; 3.80")
+            .contains("- Volatility is low")
+            .contains("- Movement stands out versus recent baseline")
+            .contains("Safety:")
             .contains("No bet is placed until you confirm and choose stake.")
+            .contains("Betfair auto-betting is enabled. Confirmation required.")
             .contains("Confirm bet?")
             .doesNotContain("marketId")
             .doesNotContain("selectionId")
@@ -201,8 +205,27 @@ class TelegramBetConfirmationServiceTest {
 
         service.sync(CONFIG_PATH, resultOf(signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5)), analysis("Team A")));
 
-        assertThat(intents.saved()).hasSize(1);
-        assertThat(intents.saved().getFirst().stage()).isEqualTo(TelegramBetIntentStage.AWAITING_CONFIRMATION);
+        assertThat(intents.saved()).isEmpty();
+    }
+
+    @Test
+    void doesNotCreateActiveIntentWhenTelegramIsDisconnected() {
+        RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
+        telegram.connected = false;
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        TelegramBetConfirmationService service = service(
+            telegram,
+            gateway,
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            new RecordingExecutionGateway()
+        );
+
+        service.sync(CONFIG_PATH, resultOf(signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5)), analysis("Team A")));
+
+        assertThat(intents.saved()).isEmpty();
+        assertThat(telegram.sentMessages()).isEmpty();
     }
 
     @Test
@@ -247,27 +270,42 @@ class TelegramBetConfirmationServiceTest {
     }
 
     @Test
-    void livePreviewBlocksStakeSelectionWithoutExecutingTheBet() {
+    void disabledAutoBettingBlocksStakeSelectionWithoutExecutingTheBet() {
         RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
         RecordingTelegramGateway gateway = new RecordingTelegramGateway();
         RecordingIntentRepository intents = new RecordingIntentRepository();
         RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
         TelegramBetConfirmationService service = service(
-            BetxConfig.defaults().withMode("live"),
+            configWithAutoBetting(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3, false, true),
             telegram,
             gateway,
             intents,
             new StaticAccountGateway(BigDecimal.valueOf(12.5)),
-            executionGateway
+            executionGateway,
+            Clock.fixed(Instant.parse("2026-06-01T18:10:00Z"), ZoneOffset.UTC)
         );
-
-        service.sync(CONFIG_PATH, resultOf(signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5)), analysis("Team A")));
-        String intentId = intents.saved().getFirst().id();
-        gateway.addUpdate(newCallbackUpdate(1L, intentId, "yes", 77));
-        service.sync(CONFIG_PATH, resultOf());
+        String intentId = "pending-stake";
+        intents.save("data.db", new TelegramBetIntent(
+            intentId,
+            "betfair",
+            "1.1",
+            42L,
+            "Team A v Team B",
+            "Match Odds",
+            "Team A",
+            "liquidity_ok",
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            BigDecimal.valueOf(12.5),
+            null,
+            "Stake selection requested.",
+            TelegramBetIntentStage.AWAITING_STAKE,
+            Instant.parse("2026-06-01T18:00:00Z"),
+            Instant.parse("2026-06-01T18:00:00Z")
+        ));
 
         telegram.clear();
-        gateway.addUpdate(newCallbackUpdate(2L, intentId, "stake", 77, BigDecimal.valueOf(5)));
+        gateway.addUpdate(newCallbackUpdate(1L, intentId, "stake", 77, BigDecimal.valueOf(5)));
 
         service.sync(CONFIG_PATH, resultOf());
 
@@ -276,9 +314,43 @@ class TelegramBetConfirmationServiceTest {
         assertThat(telegram.editedMessages().getLast().text())
             .contains("BET REJECTED")
             .contains("Bet: Team A to win @ 2.50")
-            .contains("Status: Live betting is disabled.")
+            .contains("Status: Auto-betting is disabled.")
             .doesNotContain("Market ID")
             .doesNotContain("Selection ID");
+    }
+
+    @Test
+    void autoBettingWithoutConfirmationExecutesSignalImmediately() {
+        RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(3), BigDecimal.valueOf(25), 3, true, false),
+            telegram,
+            gateway,
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            executionGateway
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5)),
+            analysis("Team A")
+        ));
+
+        assertThat(executionGateway.orders()).singleElement().satisfies(order -> {
+            assertThat(order.exchange()).isEqualTo("betfair");
+            assertThat(order.marketId()).isEqualTo("1.1");
+            assertThat(order.selectionId()).isEqualTo(42L);
+            assertThat(order.stake()).isEqualByComparingTo("3");
+        });
+        assertThat(intents.saved()).singleElement().satisfies(intent -> {
+            assertThat(intent.stage()).isEqualTo(TelegramBetIntentStage.EXECUTED);
+            assertThat(intent.selectedStake()).isEqualByComparingTo("3");
+            assertThat(intent.resultMessage()).isEqualTo("accepted");
+        });
+        assertThat(telegram.sentMessages()).isEmpty();
     }
 
     @Test
@@ -330,6 +402,139 @@ class TelegramBetConfirmationServiceTest {
 
         assertThat(intents.saved()).hasSize(1);
         assertThat(telegram.sentMessages()).isEmpty();
+    }
+
+    @Test
+    void expiresStalePendingIntentsBeforeApplyingOpenPositionLimit() {
+        RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        intents.save("data.db", new TelegramBetIntent(
+            "stale-1",
+            "betfair",
+            "1.0",
+            41L,
+            "Old Event",
+            "Match Odds",
+            "Old Runner",
+            "liquidity_ok",
+            BigDecimal.valueOf(2.1),
+            BigDecimal.valueOf(5),
+            null,
+            null,
+            null,
+            TelegramBetIntentStage.AWAITING_CONFIRMATION,
+            Instant.parse("2026-06-01T09:00:00Z"),
+            Instant.parse("2026-06-01T09:00:00Z")
+        ));
+        TelegramBetConfirmationService service = service(
+            configWithRisk(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 1, true),
+            telegram,
+            gateway,
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            new RecordingExecutionGateway(),
+            Clock.fixed(Instant.parse("2026-06-01T10:00:01Z"), ZoneOffset.UTC)
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signal("betfair", "1.2", 43L, BigDecimal.valueOf(2.7), BigDecimal.valueOf(5)),
+            analysis("Team C", "1.2", 43L)
+        ));
+
+        assertThat(intents.updated()).singleElement()
+            .satisfies(intent -> {
+                assertThat(intent.id()).isEqualTo("stale-1");
+                assertThat(intent.stage()).isEqualTo(TelegramBetIntentStage.CANCELLED);
+                assertThat(intent.resultMessage()).isEqualTo("Expired before confirmation.");
+            });
+        assertThat(telegram.sentMessages()).hasSize(1);
+        assertThat(intents.saved()).hasSize(2);
+    }
+
+    @Test
+    void expiresStalePendingIntentsWhenTelegramContextIsUnavailable() {
+        RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
+        telegram.connected = false;
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        intents.save("data.db", new TelegramBetIntent(
+            "stale-1",
+            "betfair",
+            "1.0",
+            41L,
+            "Old Event",
+            "Match Odds",
+            "Old Runner",
+            "liquidity_ok",
+            BigDecimal.valueOf(2.1),
+            BigDecimal.valueOf(5),
+            null,
+            null,
+            null,
+            TelegramBetIntentStage.AWAITING_CONFIRMATION,
+            Instant.parse("2026-06-01T09:00:00Z"),
+            Instant.parse("2026-06-01T09:00:00Z")
+        ));
+        TelegramBetConfirmationService service = service(
+            configWithRisk(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 1, true),
+            telegram,
+            gateway,
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            new RecordingExecutionGateway(),
+            Clock.fixed(Instant.parse("2026-06-01T10:00:01Z"), ZoneOffset.UTC)
+        );
+
+        service.sync(CONFIG_PATH, resultOf());
+
+        assertThat(intents.updated()).singleElement()
+            .satisfies(intent -> {
+                assertThat(intent.id()).isEqualTo("stale-1");
+                assertThat(intent.stage()).isEqualTo(TelegramBetIntentStage.CANCELLED);
+                assertThat(intent.resultMessage()).isEqualTo("Expired before confirmation.");
+            });
+    }
+
+    @Test
+    void offersConfirmationWhenOnlyExecutedIntentReachedPositionLimit() {
+        RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        intents.save("data.db", new TelegramBetIntent(
+            "executed-1",
+            "betfair",
+            "1.0",
+            41L,
+            "Old Event",
+            "Match Odds",
+            "Old Runner",
+            "liquidity_ok",
+            BigDecimal.valueOf(2.1),
+            BigDecimal.valueOf(5),
+            null,
+            BigDecimal.valueOf(5),
+            "accepted",
+            TelegramBetIntentStage.EXECUTED,
+            Instant.parse("2026-06-01T10:00:00Z"),
+            Instant.parse("2026-06-01T10:01:00Z")
+        ));
+        TelegramBetConfirmationService service = service(
+            configWithRisk(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 1, true),
+            telegram,
+            gateway,
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            new RecordingExecutionGateway()
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signal("betfair", "1.2", 43L, BigDecimal.valueOf(2.7), BigDecimal.valueOf(5)),
+            analysis("Team C", "1.2", 43L)
+        ));
+
+        assertThat(telegram.sentMessages()).hasSize(1);
+        assertThat(intents.saved()).hasSize(2);
     }
 
     @Test
@@ -386,7 +591,7 @@ class TelegramBetConfirmationServiceTest {
         BetExecutionGateway executionGateway
     ) {
         return service(
-            BetxConfig.defaults().withMode("live").withLiveBettingEnabled(true),
+            configWithAutoBetting(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3, true, true),
             telegram,
             gateway,
             intents,
@@ -403,13 +608,26 @@ class TelegramBetConfirmationServiceTest {
         ExchangeAccountGateway accountGateway,
         BetExecutionGateway executionGateway
     ) {
+        return service(config, telegram, gateway, intents, accountGateway, executionGateway, Clock.systemUTC());
+    }
+
+    private TelegramBetConfirmationService service(
+        BetxConfig config,
+        RecordingTelegramConnectionService telegram,
+        RecordingTelegramGateway gateway,
+        RecordingIntentRepository intents,
+        ExchangeAccountGateway accountGateway,
+        BetExecutionGateway executionGateway,
+        Clock clock
+    ) {
         return new TelegramBetConfirmationService(
             new StaticConfigRepository(config),
             telegram,
             gateway,
             intents,
             accountGateway,
-            executionGateway
+            executionGateway,
+            clock
         );
     }
 
@@ -421,6 +639,68 @@ class TelegramBetConfirmationServiceTest {
             0,
             0,
             List.of(),
+            List.of(analysis),
+            0,
+            0,
+            0,
+            0
+        );
+    }
+
+    private DryRunSignalsResult resultWithLiveConfirmationSignal() {
+        MarketSnapshot previous = new MarketSnapshot(
+            "betfair",
+            "1.1",
+            "Match Odds",
+            "CD Castellon v Almeria",
+            "Spanish Segunda Division",
+            Instant.parse("2026-06-06T19:00:00Z"),
+            42L,
+            "The Draw",
+            BigDecimal.valueOf(3.85),
+            BigDecimal.valueOf(4.00),
+            BigDecimal.valueOf(0.04),
+            BigDecimal.valueOf(12_000)
+        );
+        MarketSnapshot current = new MarketSnapshot(
+            "betfair",
+            "1.1",
+            "Match Odds",
+            "CD Castellon v Almeria",
+            "Spanish Segunda Division",
+            Instant.parse("2026-06-06T19:00:00Z"),
+            42L,
+            "The Draw",
+            BigDecimal.valueOf(3.80),
+            BigDecimal.valueOf(3.95),
+            BigDecimal.valueOf(0.04),
+            BigDecimal.valueOf(12_500)
+        );
+        RunnerAnalysis analysis = RunnerAnalysis.from(
+            current,
+            RecommendationType.BET,
+            "liquidity_ok, spread_ok, favorable_odds_movement",
+            new SignalScore(85, "High confidence", List.of(
+                "Base market quality is acceptable",
+                "Odds moved from 3.85 -> 3.80",
+                "Volatility is low",
+                "Movement stands out versus recent baseline"
+            ))
+        );
+        return new DryRunSignalsResult(
+            List.of(new BetSignal("betfair", "1.1", 42L, BetSide.BACK, BigDecimal.valueOf(3.80), BigDecimal.valueOf(5), analysis.reason(), "live")),
+            List.of(),
+            false,
+            0,
+            0,
+            List.of(new MarketSnapshotChange(
+                previous,
+                current,
+                new NumericChange(previous.bestBackPrice(), current.bestBackPrice(), BigDecimal.valueOf(-0.05), BigDecimal.valueOf(-1.30)),
+                new NumericChange(previous.bestLayPrice(), current.bestLayPrice(), BigDecimal.valueOf(-0.05), BigDecimal.valueOf(-1.25)),
+                new NumericChange(previous.spread(), current.spread(), BigDecimal.ZERO, BigDecimal.ZERO),
+                new NumericChange(previous.liquidity(), current.liquidity(), BigDecimal.valueOf(500), BigDecimal.valueOf(4.17))
+            )),
             List.of(analysis),
             0,
             0,
@@ -465,15 +745,35 @@ class TelegramBetConfirmationServiceTest {
     }
 
     private BetxConfig configWithRisk(BigDecimal maxStake, BigDecimal maxDailyLoss, int maxOpenPositions, boolean liveBettingEnabled) {
-        BetxConfig defaults = BetxConfig.defaults().withMode("live");
+        return configWithAutoBetting(maxStake, maxDailyLoss, maxOpenPositions, liveBettingEnabled, true);
+    }
+
+    private BetxConfig configWithAutoBetting(
+        BigDecimal maxStake,
+        BigDecimal maxDailyLoss,
+        int maxOpenPositions,
+        boolean enabled,
+        boolean requestConfirmation
+    ) {
+        BetxConfig defaults = BetxConfig.defaults();
         return new BetxConfig(
             defaults.app(),
             defaults.telegram(),
             defaults.betfair(),
-            defaults.exchanges(),
+            List.of(new ExchangeConfig(
+                "betfair",
+                true,
+                new BetfairConfig(
+                    "user",
+                    "password",
+                    "app-key",
+                    null,
+                    new BetfairAutoBettingConfig(enabled, requestConfirmation, maxStake, maxDailyLoss, maxOpenPositions)
+                )
+            )),
             defaults.marketData(),
             defaults.storage(),
-            new RiskConfig(maxStake, maxDailyLoss, maxOpenPositions, liveBettingEnabled),
+            defaults.risk(),
             defaults.strategies(),
             defaults.ml()
         );
@@ -519,6 +819,7 @@ class TelegramBetConfirmationServiceTest {
         private final List<SentMessage> sentMessages = new ArrayList<>();
         private final List<EditedMessage> editedMessages = new ArrayList<>();
         private final List<String> callbackAnswers = new ArrayList<>();
+        private boolean connected = true;
         private boolean failSends;
         private boolean failEdits;
         private boolean failCallbackAnswers;
@@ -529,7 +830,7 @@ class TelegramBetConfirmationServiceTest {
 
         @Override
         public Optional<TelegramConnectionContext> connectionContext(ConfigPath configPath) {
-            return Optional.of(new TelegramConnectionContext("token", "12345"));
+            return connected ? Optional.of(new TelegramConnectionContext("token", "12345")) : Optional.empty();
         }
 
         @Override
@@ -653,6 +954,14 @@ class TelegramBetConfirmationServiceTest {
         @Override
         public List<TelegramBetIntent> listRecent(String databasePath, int limit) {
             return saved.stream()
+                .limit(limit)
+                .toList();
+        }
+
+        @Override
+        public List<TelegramBetIntent> listByStages(String databasePath, List<TelegramBetIntentStage> stages, int limit) {
+            return saved.stream()
+                .filter(intent -> stages.contains(intent.stage()))
                 .limit(limit)
                 .toList();
         }

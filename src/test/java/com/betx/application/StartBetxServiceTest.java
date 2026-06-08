@@ -20,21 +20,30 @@ class StartBetxServiceTest {
 
         var status = service.start(CONFIG_PATH);
 
-        assertThat(status.mode()).isEqualTo("dry-run");
         assertThat(status.telegramEnabled()).isTrue();
         assertThat(status.mlEnabled()).isFalse();
-        assertThat(status.liveBettingEnabled()).isFalse();
         assertThat(status.storagePath()).isEqualTo("./data/betx.db");
         assertThat(status.pollIntervalSeconds()).isEqualTo(60);
     }
 
     @Test
     void propagatesValidationErrors() {
-        StartBetxService service = new StartBetxService(new StaticConfigRepository(BetxConfig.defaults().withMode("paper")));
+        BetxConfig defaults = BetxConfig.defaults();
+        StartBetxService service = new StartBetxService(new StaticConfigRepository(new BetxConfig(
+            defaults.app(),
+            defaults.telegram(),
+            defaults.betfair(),
+            defaults.exchanges(),
+            new com.betx.domain.config.MarketDataConfig(0, 0, java.util.List.of("1"), java.util.List.of("MATCH_ODDS"), true, 50),
+            defaults.storage(),
+            defaults.risk(),
+            defaults.strategies(),
+            defaults.ml()
+        )));
 
         assertThatThrownBy(() -> service.start(CONFIG_PATH))
             .isInstanceOf(ConfigException.class)
-            .hasMessage("app.mode must be dry-run or live.");
+            .hasMessage("market_data.poll_interval_seconds must be greater than zero.");
     }
 
     private record StaticConfigRepository(BetxConfig config) implements BetxConfigRepository {

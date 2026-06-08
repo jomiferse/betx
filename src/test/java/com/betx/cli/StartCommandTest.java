@@ -3,6 +3,10 @@ package com.betx.cli;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.betx.application.DryRunSignalsResult;
+import com.betx.application.MatchIntelligenceAssessment;
+import com.betx.application.MatchIntelligenceDecision;
+import com.betx.application.MarketSnapshotChange;
+import com.betx.application.NumericChange;
 import com.betx.application.RunDryRunSignalsService;
 import com.betx.application.StartBetxService;
 import com.betx.application.TelegramBetConfirmationService;
@@ -10,6 +14,8 @@ import com.betx.application.TelegramConnectionService;
 import com.betx.application.port.out.BetExecutionGateway;
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.ExchangeMarketDataGateway;
+import com.betx.domain.betfair.BetfairAutoBettingConfig;
+import com.betx.domain.betfair.BetfairConfig;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.ExchangeConfig;
@@ -18,6 +24,9 @@ import com.betx.domain.order.BetExecutionResult;
 import com.betx.domain.order.BetOrder;
 import com.betx.domain.signal.BetSide;
 import com.betx.domain.signal.BetSignal;
+import com.betx.domain.signal.MarketSnapshot;
+import com.betx.domain.signal.RecommendationType;
+import com.betx.domain.signal.RunnerAnalysis;
 import com.betx.startup.StartupStatusRenderer;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -58,25 +67,150 @@ class StartCommandTest {
     }
 
     @Test
-    void liveModeWithLiveBettingDisabledRunsAsPreviewAndSyncsConfirmations() {
-        BetxConfig config = BetxConfig.defaults()
-            .withMode("live")
-            .withExchanges(List.of(new ExchangeConfig("matchbook", true, null)));
+    void autoBettingWithConfirmationSyncsConfirmations() {
+        BetxConfig config = configWithAutoBetting(2, true, true);
         RecordingTelegramBetConfirmationService confirmations = new RecordingTelegramBetConfirmationService();
-        StartCommand command = command(config, List.of(new SignalGateway("matchbook")), confirmations);
+        SequencedDryRunSignalsService dryRunSignalsService = new SequencedDryRunSignalsService(
+            config,
+            new DryRunSignalsResult(
+                List.of(new BetSignal("matchbook", "m-1", 42L, BetSide.BACK, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "test", "live")),
+                List.of(),
+                false,
+                0,
+                0,
+                List.of(),
+                List.of(analysis()),
+                0,
+                0,
+                0,
+                0
+            )
+        );
+        StartCommand command = command(config, dryRunSignalsService, confirmations);
 
         String output = captureOutput(command::run);
 
-        assertThat(output).contains("BetX is running in LIVE PREVIEW mode.");
-        assertThat(output).contains("No real bets will be placed.");
-        assertThat(confirmations.syncedResults()).hasSize(1);
+        assertThat(output).contains("BetX is running with auto-betting confirmations.");
+        assertThat(output)
+            .contains("SIGNAL")
+            .contains("BET CONFIRMATION")
+            .doesNotContain("TELEGRAM ALERTS SUPPRESSED");
+        assertThat(output)
+            .doesNotContain("BET SIGNAL")
+            .doesNotContain("BET AUTO");
+        assertThat(dryRunSignalsService.logSuppressedTelegramAlerts()).containsExactly(false);
+        assertThat(confirmations.syncedResults()).isNotEmpty();
+        assertThat(confirmations.syncedResults().getFirst().signals()).hasSize(1);
     }
 
     @Test
-    void liveModeProcessesTelegramCallbacksDuringPollWait() {
-        BetxConfig config = configWithPollInterval(10)
-            .withMode("live")
-            .withExchanges(List.of(new ExchangeConfig("matchbook", true, null)));
+    void onceRunWithLargeAnalysisSetPrintsOnlyBetAnalyses() {
+        BetxConfig config = configWithAutoBetting(2, true, true);
+        List<RunnerAnalysis> analyses = new java.util.ArrayList<>(java.util.stream.IntStream.range(0, 31)
+            .mapToObj(index -> analysis("No Bet " + index, RecommendationType.NO_BET, "liquidity_below_minimum"))
+            .toList());
+        analyses.add(analysis("Bet Candidate", RecommendationType.BET, "liquidity_ok, dry_run_only"));
+        SequencedDryRunSignalsService dryRunSignalsService = new SequencedDryRunSignalsService(
+            config,
+            new DryRunSignalsResult(
+                List.of(new BetSignal("matchbook", "m-1", 42L, BetSide.BACK, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "test", "live")),
+                List.of(),
+                false,
+                0,
+                0,
+                List.of(),
+                analyses,
+                0,
+                0,
+                0,
+                0
+            )
+        );
+        StartCommand command = command(config, dryRunSignalsService, new NoopTelegramBetConfirmationService());
+
+        String output = captureOutput(command::run);
+
+        assertThat(output)
+            .contains("BET CONFIRMATION | runner=Bet Candidate")
+            .doesNotContain("NO BET | runner=No Bet 0")
+            .doesNotContain("WATCH |");
+    }
+
+    @Test
+    void printsIntelligenceRecommendationForSignalAnalyses() {
+        BetxConfig config = configWithAutoBetting(2, true, true);
+        SequencedDryRunSignalsService dryRunSignalsService = new SequencedDryRunSignalsService(
+            config,
+            new DryRunSignalsResult(
+                List.of(new BetSignal("matchbook", "m-1", 42L, BetSide.BACK, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "test", "live")),
+                List.of(),
+                false,
+                0,
+                0,
+                List.of(),
+                List.of(analysis("Team A", RecommendationType.BET, "liquidity_ok")),
+                List.of(new MatchIntelligenceAssessment(
+                    "matchbook",
+                    "m-1",
+                    42L,
+                    MatchIntelligenceDecision.WATCH,
+                    55,
+                    "Context is unclear.",
+                    List.of("Promotion tie is balanced"),
+                    List.of("Lineups are incomplete"),
+                    List.of()
+                )),
+                0,
+                0,
+                0,
+                0
+            )
+        );
+        StartCommand command = command(config, dryRunSignalsService, new NoopTelegramBetConfirmationService());
+
+        String output = captureOutput(command::run);
+
+        assertThat(output)
+            .contains("BET CONFIRMATION | runner=Team A")
+            .contains("INTELLIGENCE | runner=Team A | decision=WATCH | confidence=55/100 | summary=Context is unclear.");
+    }
+
+    @Test
+    void largeCyclePrintsOnlySnapshotChangesForSignals() {
+        BetxConfig config = configWithAutoBetting(2, true, true);
+        List<RunnerAnalysis> analyses = new java.util.ArrayList<>(java.util.stream.IntStream.range(0, 31)
+            .mapToObj(index -> analysis("No Bet " + index, RecommendationType.NO_BET, "liquidity_below_minimum"))
+            .toList());
+        analyses.add(analysis("Bet Candidate", RecommendationType.BET, "liquidity_ok, dry_run_only"));
+        SequencedDryRunSignalsService dryRunSignalsService = new SequencedDryRunSignalsService(
+            config,
+            new DryRunSignalsResult(
+                List.of(new BetSignal("matchbook", "m-1", 42L, BetSide.BACK, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "test", "live")),
+                List.of(),
+                false,
+                0,
+                0,
+                List.of(change("m-1", 42L), change("m-2", 43L)),
+                analyses,
+                0,
+                0,
+                0,
+                0
+            )
+        );
+        StartCommand command = command(config, dryRunSignalsService, new NoopTelegramBetConfirmationService());
+
+        String output = captureOutput(command::run);
+
+        assertThat(output)
+            .contains("SNAPSHOT CHANGE | exchange=matchbook | marketId=m-1 | selectionId=42")
+            .contains("Snapshot changes summarized | relevant=2 | shown=1 | hidden=1")
+            .doesNotContain("SNAPSHOT CHANGE | exchange=matchbook | marketId=m-2 | selectionId=43");
+    }
+
+    @Test
+    void autoBettingWithConfirmationProcessesTelegramCallbacksDuringPollWait() {
+        BetxConfig config = configWithAutoBetting(10, true, true);
         RecordingTelegramBetConfirmationService confirmations = new RecordingTelegramBetConfirmationService();
         SequencedDryRunSignalsService dryRunSignalsService = new SequencedDryRunSignalsService(
             config,
@@ -96,10 +230,8 @@ class StartCommandTest {
     }
 
     @Test
-    void liveModeOnceKeepsProcessingTelegramCallbacksAfterSignals() {
-        BetxConfig config = configWithPollInterval(10)
-            .withMode("live")
-            .withExchanges(List.of(new ExchangeConfig("matchbook", true, null)));
+    void autoBettingWithConfirmationOnceKeepsProcessingTelegramCallbacksAfterSignals() {
+        BetxConfig config = configWithAutoBetting(10, true, true);
         RecordingTelegramBetConfirmationService confirmations = new RecordingTelegramBetConfirmationService();
         SequencedDryRunSignalsService dryRunSignalsService = new SequencedDryRunSignalsService(
             config,
@@ -182,6 +314,26 @@ class StartCommandTest {
         );
     }
 
+    private BetxConfig configWithAutoBetting(int seconds, boolean enabled, boolean requestConfirmation) {
+        return configWithPollInterval(seconds).withExchanges(List.of(new ExchangeConfig(
+            "betfair",
+            true,
+            new BetfairConfig(
+                "user",
+                "password",
+                "app-key",
+                null,
+                new BetfairAutoBettingConfig(
+                    enabled,
+                    requestConfirmation,
+                    BigDecimal.valueOf(5),
+                    BigDecimal.valueOf(25),
+                    3
+                )
+            )
+        )));
+    }
+
     private String captureOutput(Runnable runnable) {
         PrintStream original = System.out;
         ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -192,6 +344,59 @@ class StartCommandTest {
             System.setOut(original);
         }
         return output.toString(StandardCharsets.UTF_8);
+    }
+
+    private RunnerAnalysis analysis() {
+        return analysis("Team A", RecommendationType.BET, "test");
+    }
+
+    private RunnerAnalysis analysis(String runner, RecommendationType recommendation, String reason) {
+        return new RunnerAnalysis(
+            "matchbook",
+            "m-1",
+            "Match Odds",
+            "Team A v Team B",
+            "La Liga",
+            java.time.Instant.parse("2026-06-01T18:00:00Z"),
+            42L,
+            runner,
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(2.6),
+            BigDecimal.valueOf(0.04),
+            BigDecimal.valueOf(1_200),
+            recommendation,
+            reason
+        );
+    }
+
+    private MarketSnapshotChange change(String marketId, long selectionId) {
+        MarketSnapshot previous = snapshot(marketId, selectionId, BigDecimal.valueOf(2.50));
+        MarketSnapshot current = snapshot(marketId, selectionId, BigDecimal.valueOf(2.40));
+        return new MarketSnapshotChange(
+            previous,
+            current,
+            new NumericChange(BigDecimal.valueOf(2.50), BigDecimal.valueOf(2.40), BigDecimal.valueOf(-0.10), BigDecimal.valueOf(-4.00)),
+            new NumericChange(BigDecimal.valueOf(2.60), BigDecimal.valueOf(2.60), BigDecimal.ZERO, BigDecimal.ZERO),
+            new NumericChange(BigDecimal.valueOf(0.04), BigDecimal.valueOf(0.04), BigDecimal.ZERO, BigDecimal.ZERO),
+            new NumericChange(BigDecimal.valueOf(1_200), BigDecimal.valueOf(1_200), BigDecimal.ZERO, BigDecimal.ZERO)
+        );
+    }
+
+    private MarketSnapshot snapshot(String marketId, long selectionId, BigDecimal backPrice) {
+        return new MarketSnapshot(
+            "matchbook",
+            marketId,
+            "Match Odds",
+            "Team A v Team B",
+            "La Liga",
+            java.time.Instant.parse("2026-06-01T18:00:00Z"),
+            selectionId,
+            "Team A",
+            backPrice,
+            BigDecimal.valueOf(2.60),
+            BigDecimal.valueOf(0.04),
+            BigDecimal.valueOf(1_200)
+        );
     }
 
     private record StaticConfigRepository(BetxConfig config) implements BetxConfigRepository {
@@ -264,11 +469,18 @@ class StartCommandTest {
             this.results = List.of(results);
         }
 
+        private final List<Boolean> logSuppressedTelegramAlerts = new java.util.ArrayList<>();
+
         @Override
-        public DryRunSignalsResult run(ConfigPath configPath, boolean sendTelegramAlerts) {
+        public DryRunSignalsResult run(ConfigPath configPath, boolean sendTelegramAlerts, boolean logSuppressedTelegramAlerts) {
+            this.logSuppressedTelegramAlerts.add(logSuppressedTelegramAlerts);
             DryRunSignalsResult result = results.get(Math.min(index, results.size() - 1));
             index++;
             return result;
+        }
+
+        private List<Boolean> logSuppressedTelegramAlerts() {
+            return logSuppressedTelegramAlerts;
         }
     }
 

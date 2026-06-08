@@ -15,7 +15,7 @@ class ValueFootballSignalStrategyTest {
     void acceptsLiquidMarketWithTightSpreadAndValidOdds() {
         MarketSnapshot snapshot = snapshot(BigDecimal.valueOf(1_200), BigDecimal.valueOf(2.50), BigDecimal.valueOf(2.60));
         StrategyConfig strategyConfig = new StrategyConfig("value-football", true, BigDecimal.valueOf(0.06), BigDecimal.valueOf(500));
-        RiskConfig riskConfig = new RiskConfig(BigDecimal.valueOf(7), BigDecimal.valueOf(25), 3, false);
+        RiskConfig riskConfig = new RiskConfig(BigDecimal.valueOf(7), BigDecimal.valueOf(25), 3);
 
         SignalDecision decision = strategy.evaluate(snapshot, strategyConfig, riskConfig);
 
@@ -30,7 +30,7 @@ class ValueFootballSignalStrategyTest {
     void rejectsLowLiquidityMarkets() {
         MarketSnapshot snapshot = snapshot(BigDecimal.valueOf(200), BigDecimal.valueOf(2.50), BigDecimal.valueOf(2.60));
         StrategyConfig strategyConfig = new StrategyConfig("value-football", true, BigDecimal.valueOf(0.06), BigDecimal.valueOf(500));
-        RiskConfig riskConfig = new RiskConfig(BigDecimal.valueOf(7), BigDecimal.valueOf(25), 3, false);
+        RiskConfig riskConfig = new RiskConfig(BigDecimal.valueOf(7), BigDecimal.valueOf(25), 3);
 
         SignalDecision decision = strategy.evaluate(snapshot, strategyConfig, riskConfig);
 
@@ -43,7 +43,7 @@ class ValueFootballSignalStrategyTest {
     void rejectsWideSpreadMarkets() {
         MarketSnapshot snapshot = snapshot(BigDecimal.valueOf(1_200), BigDecimal.valueOf(2.50), BigDecimal.valueOf(2.80));
         StrategyConfig strategyConfig = new StrategyConfig("value-football", true, BigDecimal.valueOf(0.06), BigDecimal.valueOf(500));
-        RiskConfig riskConfig = new RiskConfig(BigDecimal.valueOf(7), BigDecimal.valueOf(25), 3, false);
+        RiskConfig riskConfig = new RiskConfig(BigDecimal.valueOf(7), BigDecimal.valueOf(25), 3);
 
         SignalDecision decision = strategy.evaluate(snapshot, strategyConfig, riskConfig);
 
