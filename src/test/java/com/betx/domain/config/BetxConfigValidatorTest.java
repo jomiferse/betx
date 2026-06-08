@@ -4,36 +4,41 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.betx.common.ConfigException;
+import com.betx.domain.betfair.BetfairAutoBettingConfig;
+import com.betx.domain.betfair.BetfairConfig;
 import java.math.BigDecimal;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class BetxConfigValidatorTest {
     private final BetxConfigValidator validator = new BetxConfigValidator();
 
     @Test
-    void acceptsDefaultDryRunConfiguration() {
+    void acceptsDefaultConfiguration() {
         assertThatCode(() -> validator.validate(BetxConfig.defaults())).doesNotThrowAnyException();
     }
 
     @Test
-    void rejectsUnsupportedAppMode() {
-        BetxConfig config = BetxConfig.defaults().withMode("paper");
-
-        assertThatThrownBy(() -> validator.validate(config))
-            .isInstanceOf(ConfigException.class)
-            .hasMessage("app.mode must be dry-run or live.");
-    }
-
-    @Test
-    void acceptsLiveModeWhenLiveBettingIsDisabledForPreview() {
-        BetxConfig config = BetxConfig.defaults().withMode("live");
+    void acceptsConfigurationWithoutAppMode() {
+        BetxConfig defaults = BetxConfig.defaults();
+        BetxConfig config = new BetxConfig(
+            null,
+            defaults.telegram(),
+            defaults.betfair(),
+            defaults.exchanges(),
+            defaults.marketData(),
+            defaults.storage(),
+            defaults.risk(),
+            defaults.strategies(),
+            defaults.ml()
+        );
 
         assertThatCode(() -> validator.validate(config)).doesNotThrowAnyException();
     }
 
     @Test
     void rejectsNonPositiveRiskLimits() {
-        BetxConfig config = configWithRisk(new RiskConfig(BigDecimal.ZERO, BigDecimal.valueOf(25), 3, false));
+        BetxConfig config = configWithRisk(new RiskConfig(BigDecimal.ZERO, BigDecimal.valueOf(25), 3));
 
         assertThatThrownBy(() -> validator.validate(config))
             .isInstanceOf(ConfigException.class)
@@ -42,11 +47,41 @@ class BetxConfigValidatorTest {
 
     @Test
     void rejectsNonPositiveOpenPositions() {
-        BetxConfig config = configWithRisk(new RiskConfig(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 0, false));
+        BetxConfig config = configWithRisk(new RiskConfig(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 0));
 
         assertThatThrownBy(() -> validator.validate(config))
             .isInstanceOf(ConfigException.class)
             .hasMessage("risk.max_open_positions must be greater than zero.");
+    }
+
+    @Test
+    void rejectsEnabledBetfairAutoBettingWithNonPositiveStake() {
+        BetxConfig config = configWithBetfairAutoBetting(new BetfairAutoBettingConfig(
+            true,
+            true,
+            BigDecimal.ZERO,
+            BigDecimal.valueOf(25),
+            3
+        ));
+
+        assertThatThrownBy(() -> validator.validate(config))
+            .isInstanceOf(ConfigException.class)
+            .hasMessage("exchanges.betfair.auto_betting.max_stake must be greater than zero.");
+    }
+
+    @Test
+    void rejectsEnabledBetfairAutoBettingWithNonPositiveOpenPositions() {
+        BetxConfig config = configWithBetfairAutoBetting(new BetfairAutoBettingConfig(
+            true,
+            true,
+            BigDecimal.valueOf(5),
+            BigDecimal.valueOf(25),
+            0
+        ));
+
+        assertThatThrownBy(() -> validator.validate(config))
+            .isInstanceOf(ConfigException.class)
+            .hasMessage("exchanges.betfair.auto_betting.max_open_positions must be greater than zero.");
     }
 
     @Test
@@ -147,6 +182,24 @@ class BetxConfigValidatorTest {
             .hasMessage("market_data.betfair_event_batch_size must be greater than zero.");
     }
 
+    @Test
+    void rejectsInlineOpenRouterApiKeyInApiKeyEnv() {
+        BetxConfig config = BetxConfig.defaults()
+            .withIntelligence(new IntelligenceConfig(true, "openrouter", "x-ai/grok-4.3", "sk-or-v1-secret", null, 20, 70));
+
+        assertThatThrownBy(() -> validator.validate(config))
+            .isInstanceOf(ConfigException.class)
+            .hasMessage("intelligence.api_key_env must be an environment variable name, not an API key.");
+    }
+
+    @Test
+    void acceptsInlineOpenRouterApiKeyInApiKey() {
+        BetxConfig config = BetxConfig.defaults()
+            .withIntelligence(new IntelligenceConfig(true, "openrouter", "x-ai/grok-4.3", "OPENROUTER_API_KEY", "sk-or-v1-secret", 20, 70));
+
+        assertThatCode(() -> validator.validate(config)).doesNotThrowAnyException();
+    }
+
     private BetxConfig configWithRisk(RiskConfig risk) {
         BetxConfig defaults = BetxConfig.defaults();
         return new BetxConfig(
@@ -157,6 +210,21 @@ class BetxConfigValidatorTest {
             defaults.marketData(),
             defaults.storage(),
             risk,
+            defaults.strategies(),
+            defaults.ml()
+        );
+    }
+
+    private BetxConfig configWithBetfairAutoBetting(BetfairAutoBettingConfig autoBetting) {
+        BetxConfig defaults = BetxConfig.defaults();
+        return new BetxConfig(
+            defaults.app(),
+            defaults.telegram(),
+            defaults.betfair(),
+            List.of(new ExchangeConfig("betfair", true, new BetfairConfig("user", "password", "app-key", null, autoBetting))),
+            defaults.marketData(),
+            defaults.storage(),
+            defaults.risk(),
             defaults.strategies(),
             defaults.ml()
         );

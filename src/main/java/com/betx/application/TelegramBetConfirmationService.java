@@ -6,9 +6,11 @@ import com.betx.application.port.out.ExchangeAccountGateway;
 import com.betx.application.port.out.TelegramBotGateway;
 import com.betx.application.port.out.TelegramBetIntentRepository;
 import com.betx.application.port.out.TelegramParseMode;
+import com.betx.domain.betfair.BetfairAutoBettingConfig;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.order.BetOrder;
+import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.BetSignal;
 import com.betx.domain.signal.RecommendationType;
 import com.betx.domain.signal.RunnerAnalysis;
@@ -37,10 +39,10 @@ import org.springframework.stereotype.Service;
 @Service
 public class TelegramBetConfirmationService {
     private static final Duration SELECTION_COOLDOWN = Duration.ofMinutes(30);
-    private static final List<TelegramBetIntentStage> OPEN_POSITION_STAGES = List.of(
+    private static final int ACTIVE_INTENT_EXPIRATION_SCAN_LIMIT = 500;
+    private static final List<TelegramBetIntentStage> PENDING_CONFIRMATION_STAGES = List.of(
         TelegramBetIntentStage.AWAITING_CONFIRMATION,
-        TelegramBetIntentStage.AWAITING_STAKE,
-        TelegramBetIntentStage.EXECUTED
+        TelegramBetIntentStage.AWAITING_STAKE
     );
     private static final List<BigDecimal> STAKE_PRESETS = List.of(
         BigDecimal.valueOf(1),
@@ -57,6 +59,7 @@ public class TelegramBetConfirmationService {
     private final TelegramBetIntentRepository intentRepository;
     private final ExchangeAccountGateway accountGateway;
     private final BetExecutionGateway executionGateway;
+    private final TelegramBetAlertFormatter telegramBetAlertFormatter;
     private final Clock clock;
 
     @Autowired
@@ -86,28 +89,74 @@ public class TelegramBetConfirmationService {
         this.intentRepository = intentRepository;
         this.accountGateway = accountGateway;
         this.executionGateway = executionGateway;
+        this.telegramBetAlertFormatter = new TelegramBetAlertFormatter();
         this.clock = clock;
     }
 
     public void sync(ConfigPath configPath, DryRunSignalsResult result) {
         BetxConfig config = configRepository.load(configPath);
-        if (!config.telegram().enabled() || !"live".equals(config.app().mode())) {
+        boolean confirmationRequired = confirmationRequired(config);
+        expireStalePendingIntents(config);
+        Optional<TelegramConnectionContext> context = Optional.empty();
+        if (config.telegram().enabled()) {
+            context = telegramConnectionService.connectionContext(configPath);
+            if (context.isPresent()) {
+                processCallbacks(configPath, config, context.get());
+            } else if (confirmationRequired && result != null && !result.signals().isEmpty()) {
+                System.out.println("TELEGRAM BET SYNC WARNING | action=connection_context | message=Telegram is not connected.");
+            }
+        }
+
+        if (confirmationRequired) {
+            context.ifPresent(ignored -> offerBetConfirmations(configPath, config, result));
             return;
         }
 
-        Optional<TelegramConnectionContext> context = telegramConnectionService.connectionContext(configPath);
-        if (context.isEmpty()) {
-            return;
-        }
+        executeAutomaticBets(configPath, config, result);
+    }
 
-        processCallbacks(configPath, config, context.get());
-        offerBetConfirmations(configPath, config, result);
+    private void expireStalePendingIntents(BetxConfig config) {
+        Instant expiresBefore = Instant.now(clock).minus(SELECTION_COOLDOWN);
+        intentRepository.listByStages(
+                config.storage().path(),
+                PENDING_CONFIRMATION_STAGES,
+                ACTIVE_INTENT_EXPIRATION_SCAN_LIMIT
+            ).stream()
+            .filter(intent -> intent.updatedAt().isBefore(expiresBefore))
+            .forEach(intent -> {
+                TelegramBetIntent expired = intent.withStageAt(
+                    TelegramBetIntentStage.CANCELLED,
+                    intent.availableBalance(),
+                    intent.selectedStake(),
+                    "Expired before confirmation.",
+                    Instant.now(clock)
+                );
+                intentRepository.update(config.storage().path(), expired);
+                System.out.println("TELEGRAM BET INTENT EXPIRED | id=" + expired.id()
+                    + " | exchange=" + expired.exchange()
+                    + " | marketId=" + expired.marketId()
+                    + " | selectionId=" + expired.selectionId());
+            });
     }
 
     private void offerBetConfirmations(ConfigPath configPath, BetxConfig config, DryRunSignalsResult result) {
         Map<String, RunnerAnalysis> analysesByKey = result.runnerAnalyses().stream()
             .filter(analysis -> analysis.recommendation() == RecommendationType.BET)
             .collect(Collectors.toMap(this::key, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        Map<String, MarketSnapshot> previousSnapshotsByKey = result.changes().stream()
+            .collect(Collectors.toMap(
+                change -> key(change.current().exchange(), change.current().marketId(), change.current().selectionId()),
+                MarketSnapshotChange::previous,
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+        Map<String, MatchIntelligenceAssessment> intelligenceByKey = result.intelligenceAssessments().stream()
+            .collect(Collectors.toMap(
+                assessment -> key(assessment.exchange(), assessment.marketId(), assessment.selectionId()),
+                Function.identity(),
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
 
         for (BetSignal signal : result.signals()) {
             String key = key(signal.exchange(), signal.marketId(), signal.selectionId());
@@ -130,7 +179,8 @@ public class TelegramBetConfirmationService {
                 auditSkipped("cooldown", signal.exchange(), signal.marketId(), signal.selectionId());
                 continue;
             }
-            if (intentRepository.countByStages(config.storage().path(), OPEN_POSITION_STAGES) >= config.risk().maxOpenPositions()) {
+            BetfairAutoBettingConfig autoBetting = autoBettingConfig(config, signal.exchange());
+            if (intentRepository.countByStages(config.storage().path(), PENDING_CONFIRMATION_STAGES) >= autoBetting.maxOpenPositions()) {
                 auditSkipped("max_open_positions", signal.exchange(), signal.marketId(), signal.selectionId());
                 continue;
             }
@@ -145,7 +195,7 @@ public class TelegramBetConfirmationService {
                 analysis.displayRunner(),
                 signal.reason(),
                 signal.odds(),
-                config.risk().maxStake(),
+                autoBetting.maxStake(),
                 null,
                 null,
                 null,
@@ -153,14 +203,108 @@ public class TelegramBetConfirmationService {
                 now,
                 now
             );
-            intentRepository.save(config.storage().path(), intent);
-            auditCreated(intent);
-            safeTelegramSend(
+            boolean sent = safeTelegramSend(
                 configPath,
-                formatInitialMessage(intent),
+                telegramBetAlertFormatter.formatLiveConfirmation(
+                    analysis,
+                    Optional.ofNullable(previousSnapshotsByKey.get(key)),
+                    Optional.ofNullable(intelligenceByKey.get(key))
+                ),
                 TelegramParseMode.HTML,
                 confirmationKeyboard(intent.id())
             );
+            if (!sent) {
+                auditSkipped("telegram_send_failed", signal.exchange(), signal.marketId(), signal.selectionId());
+                continue;
+            }
+            intentRepository.save(config.storage().path(), intent);
+            auditCreated(intent);
+        }
+    }
+
+    private void executeAutomaticBets(ConfigPath configPath, BetxConfig config, DryRunSignalsResult result) {
+        if (result == null || result.signals().isEmpty()) {
+            return;
+        }
+        Map<String, RunnerAnalysis> analysesByKey = result.runnerAnalyses().stream()
+            .filter(analysis -> analysis.recommendation() == RecommendationType.BET)
+            .collect(Collectors.toMap(this::key, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+
+        for (BetSignal signal : result.signals()) {
+            BetfairAutoBettingConfig autoBetting = autoBettingConfig(config, signal.exchange());
+            if (!autoBetting.enabled() || autoBetting.requestConfirmation()) {
+                continue;
+            }
+            String key = key(signal.exchange(), signal.marketId(), signal.selectionId());
+            RunnerAnalysis analysis = analysesByKey.get(key);
+            if (analysis == null) {
+                continue;
+            }
+            Instant now = Instant.now(clock);
+            if (intentRepository.findActiveByKey(config.storage().path(), signal.exchange(), signal.marketId(), signal.selectionId()).isPresent()) {
+                auditSkipped("active_intent_exists", signal.exchange(), signal.marketId(), signal.selectionId());
+                continue;
+            }
+            if (intentRepository.findLatestByKeySince(
+                config.storage().path(),
+                signal.exchange(),
+                signal.marketId(),
+                signal.selectionId(),
+                now.minus(SELECTION_COOLDOWN)
+            ).isPresent()) {
+                auditSkipped("cooldown", signal.exchange(), signal.marketId(), signal.selectionId());
+                continue;
+            }
+            if (intentRepository.countByStages(config.storage().path(), List.of(TelegramBetIntentStage.EXECUTED))
+                >= autoBetting.maxOpenPositions()) {
+                auditSkipped("max_open_positions", signal.exchange(), signal.marketId(), signal.selectionId());
+                continue;
+            }
+            BigDecimal stake = maxAllowedStake(config, accountGateway.availableBalance(config, signal.exchange()).orElse(null), autoBetting.maxStake());
+            if (dailyRiskLimitExceeded(config, signal.exchange(), stake)) {
+                auditSkipped("max_daily_loss", signal.exchange(), signal.marketId(), signal.selectionId());
+                continue;
+            }
+            var execution = executionGateway.execute(configPath, new BetOrder(
+                signal.exchange(),
+                signal.marketId(),
+                signal.selectionId(),
+                signal.side(),
+                signal.odds(),
+                stake
+            ));
+            TelegramBetIntent intent = new TelegramBetIntent(
+                UUID.randomUUID().toString(),
+                signal.exchange(),
+                signal.marketId(),
+                signal.selectionId(),
+                analysis.eventName(),
+                analysis.marketName(),
+                analysis.displayRunner(),
+                signal.reason(),
+                signal.odds(),
+                autoBetting.maxStake(),
+                null,
+                stake,
+                execution.message(),
+                execution.accepted() ? TelegramBetIntentStage.EXECUTED : TelegramBetIntentStage.FAILED,
+                now,
+                now
+            );
+            intentRepository.save(config.storage().path(), intent);
+            if (execution.accepted()) {
+                System.out.println("AUTO BET ORDER ACCEPTED | id=" + intent.id()
+                    + " | stake=" + stake
+                    + " | exchange=" + intent.exchange()
+                    + " | marketId=" + intent.marketId()
+                    + " | selectionId=" + intent.selectionId());
+            } else {
+                System.out.println("AUTO BET ORDER REJECTED | id=" + intent.id()
+                    + " | message=" + execution.message()
+                    + " | exchange=" + intent.exchange()
+                    + " | marketId=" + intent.marketId()
+                    + " | selectionId=" + intent.selectionId());
+            }
         }
     }
 
@@ -277,8 +421,9 @@ public class TelegramBetConfirmationService {
             return;
         }
 
-        if (!config.risk().liveBettingEnabled()) {
-            String message = "Live betting is disabled.";
+        BetfairAutoBettingConfig autoBetting = autoBettingConfig(config, intent.exchange());
+        if (!autoBetting.enabled()) {
+            String message = "Auto-betting is disabled.";
             TelegramBetIntent updated = intent.withStageAt(
                 TelegramBetIntentStage.FAILED,
                 intent.availableBalance(),
@@ -287,7 +432,7 @@ public class TelegramBetConfirmationService {
                 Instant.now(clock)
             );
             intentRepository.update(config.storage().path(), updated);
-            System.out.println("TELEGRAM BET EXECUTION BLOCKED | reason=live_betting_disabled"
+            System.out.println("TELEGRAM BET EXECUTION BLOCKED | reason=auto_betting_disabled"
                 + " | id=" + intent.id()
                 + " | exchange=" + intent.exchange()
                 + " | marketId=" + intent.marketId()
@@ -304,11 +449,11 @@ public class TelegramBetConfirmationService {
         }
 
         if (intentRepository.countByStages(config.storage().path(), List.of(TelegramBetIntentStage.EXECUTED))
-            >= config.risk().maxOpenPositions()) {
+            >= autoBetting.maxOpenPositions()) {
             blockExecution(configPath, config, update, intent, amount, "max_open_positions", "Open position limit reached.");
             return;
         }
-        if (dailyRiskLimitExceeded(config, amount)) {
+        if (dailyRiskLimitExceeded(config, intent.exchange(), amount)) {
             blockExecution(configPath, config, update, intent, amount, "max_daily_loss", "Daily risk limit exceeded.");
             return;
         }
@@ -385,16 +530,21 @@ public class TelegramBetConfirmationService {
         safeTelegramAnswer(configPath, update.callbackQueryId(), message, true);
     }
 
-    private void safeTelegramSend(
+    private boolean safeTelegramSend(
         ConfigPath configPath,
         String text,
         TelegramParseMode parseMode,
         Map<String, Object> replyMarkup
     ) {
         try {
-            telegramConnectionService.sendMessageIfConnected(configPath, text, parseMode, replyMarkup);
+            boolean sent = telegramConnectionService.sendMessageIfConnected(configPath, text, parseMode, replyMarkup);
+            if (!sent) {
+                auditTelegramFailure("send_message", new IllegalStateException("Telegram is not connected."));
+            }
+            return sent;
         } catch (RuntimeException exc) {
             auditTelegramFailure("send_message", exc);
+            return false;
         }
     }
 
@@ -420,13 +570,13 @@ public class TelegramBetConfirmationService {
         }
     }
 
-    private boolean dailyRiskLimitExceeded(BetxConfig config, BigDecimal amount) {
+    private boolean dailyRiskLimitExceeded(BetxConfig config, String exchange, BigDecimal amount) {
         BigDecimal alreadyCommitted = intentRepository.sumSelectedStakeByStageSince(
             config.storage().path(),
             TelegramBetIntentStage.EXECUTED,
             todayStart()
         );
-        return alreadyCommitted.add(amount).compareTo(config.risk().maxDailyLoss()) > 0;
+        return alreadyCommitted.add(amount).compareTo(autoBettingConfig(config, exchange).maxDailyLoss()) > 0;
     }
 
     private Instant todayStart() {
@@ -443,6 +593,24 @@ public class TelegramBetConfirmationService {
             return maxStake;
         }
         return maxStake.min(availableBalance).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private BetfairAutoBettingConfig autoBettingConfig(BetxConfig config, String exchange) {
+        if (!"betfair".equals(exchange)) {
+            return new BetfairAutoBettingConfig(null, null, null, null, null);
+        }
+        return config.exchanges().stream()
+            .filter(candidate -> "betfair".equals(candidate.name()))
+            .findFirst()
+            .map(candidate -> candidate.betfair().autoBetting())
+            .orElseGet(() -> config.betfair().autoBetting());
+    }
+
+    private boolean confirmationRequired(BetxConfig config) {
+        return config.enabledExchanges().stream()
+            .filter(exchange -> "betfair".equals(exchange.name()))
+            .anyMatch(exchange -> exchange.betfair().autoBetting().enabled()
+                && exchange.betfair().autoBetting().requestConfirmation());
     }
 
     private String formatInitialMessage(TelegramBetIntent intent) {

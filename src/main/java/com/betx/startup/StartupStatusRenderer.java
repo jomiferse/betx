@@ -9,10 +9,10 @@ public class StartupStatusRenderer {
         return String.join(
             "\n",
             "BetX startup status",
-            "mode: " + status.mode(),
             "telegram: " + enabled(status.telegramEnabled()),
             "ml: " + enabled(status.mlEnabled()),
-            "live betting: " + enabled(status.liveBettingEnabled()),
+            "auto-betting: " + enabled(status.autoBettingEnabled()),
+            "confirmation: " + (status.requestConfirmation() ? "required" : "not required"),
             "storage path: " + status.storagePath(),
             "poll interval: " + status.pollIntervalSeconds() + "s"
         );

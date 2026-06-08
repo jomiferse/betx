@@ -23,6 +23,8 @@ public interface TelegramBetIntentRepository {
 
     List<TelegramBetIntent> listRecent(String databasePath, int limit);
 
+    List<TelegramBetIntent> listByStages(String databasePath, List<TelegramBetIntentStage> stages, int limit);
+
     long countByStages(String databasePath, List<TelegramBetIntentStage> stages);
 
     BigDecimal sumSelectedStakeByStageSince(String databasePath, TelegramBetIntentStage stage, Instant since);

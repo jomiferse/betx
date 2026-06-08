@@ -22,6 +22,23 @@ class DryRunSignalFormatterTest {
         );
 
         assertThat(new DryRunSignalFormatter().format(signal))
-            .isEqualTo("SIGNAL DRY-RUN | exchange=betfair | BACK | marketId=1.234 | selectionId=42 | odds=2.5 | stake=5");
+            .isEqualTo("SIGNAL | exchange=betfair | BACK | marketId=1.234 | selectionId=42 | odds=2.5 | stake=5");
+    }
+
+    @Test
+    void usesLiveLabelForLiveSignals() {
+        BetSignal signal = new BetSignal(
+            "betfair",
+            "1.234",
+            42L,
+            BetSide.BACK,
+            BigDecimal.valueOf(2.50),
+            BigDecimal.valueOf(5),
+            "reason",
+            "live"
+        );
+
+        assertThat(new DryRunSignalFormatter().format(signal))
+            .isEqualTo("SIGNAL | exchange=betfair | BACK | marketId=1.234 | selectionId=42 | odds=2.5 | stake=5");
     }
 }

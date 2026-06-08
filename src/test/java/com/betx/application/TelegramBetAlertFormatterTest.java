@@ -47,7 +47,7 @@ class TelegramBetAlertFormatterTest {
 
         assertThat(message)
             .contains("<b>BETX SIGNAL</b>")
-            .contains("DRY-RUN ONLY")
+            .contains("SIGNAL ONLY")
             .contains("Market movement detected")
             .contains("Score: 82/100 🟢 High confidence")
             .contains("Trigger: Odds moved favourably (-3.09%)")
@@ -62,7 +62,7 @@ class TelegramBetAlertFormatterTest {
             .contains("- Liquidity increased +20.72%")
             .contains("- Movement persisted for 3 cycles")
             .contains("- Volatility is low")
-            .contains("DRY-RUN ONLY. No real bet placed.")
+            .contains("SIGNAL ONLY. No real bet placed.")
             .doesNotContain("Market ID")
             .doesNotContain("Selection ID")
             .doesNotContain("1.258354692")
@@ -115,6 +115,83 @@ class TelegramBetAlertFormatterTest {
             .contains("- Spread OK")
             .doesNotContain("The Draw")
             .doesNotContain("favorable_liquidity_movement");
+    }
+
+    @Test
+    void formatsOpenRouterWatchAsBetReviewRequired() {
+        RunnerAnalysis analysis = RunnerAnalysis.from(
+            new MarketSnapshot(
+                "betfair",
+                "1.258979050",
+                "Match Odds",
+                "Almeria v CD Castellon",
+                "Spanish Segunda Division",
+                Instant.parse("2026-06-08T19:00:00Z"),
+                58805L,
+                "The Draw",
+                BigDecimal.valueOf(3.75),
+                BigDecimal.valueOf(3.90),
+                BigDecimal.valueOf(0.04),
+                BigDecimal.valueOf(1_201)
+            ),
+            RecommendationType.BET,
+            "liquidity_ok, spread_ok, favorable_liquidity_movement, low_volatility, dry_run_only",
+            new SignalScore(70, "High confidence", List.of(
+                "Base market quality is acceptable",
+                "Liquidity increased +2.44%",
+                "Volatility is low"
+            ))
+        );
+        MarketSnapshot previous = new MarketSnapshot(
+            "betfair",
+            "1.258979050",
+            "Match Odds",
+            "Almeria v CD Castellon",
+            "Spanish Segunda Division",
+            Instant.parse("2026-06-08T19:00:00Z"),
+            58805L,
+            "The Draw",
+            BigDecimal.valueOf(3.70),
+            BigDecimal.valueOf(3.90),
+            BigDecimal.valueOf(0.054),
+            BigDecimal.valueOf(1_173)
+        );
+
+        String message = formatter.formatLiveConfirmation(
+            analysis,
+            Optional.of(previous),
+            Optional.of(new MatchIntelligenceAssessment(
+                "betfair",
+                "1.258979050",
+                58805L,
+                MatchIntelligenceDecision.WATCH,
+                60,
+                "Almeria have home advantage, but Castellon created danger in the first leg.",
+                List.of("First leg ended 1-1", "Castellon generated more attacking volume"),
+                List.of("Lineups are not confirmed"),
+                List.of(MatchIntelligenceSource.fromUrl("https://example.com/preview"))
+            ))
+        );
+
+        assertThat(message)
+            .contains("BET REVIEW REQUIRED")
+            .contains("Market Signal: 70/100")
+            .contains("Context Score: 60/100")
+            .contains("Final Recommendation: WATCH — no automatic bet")
+            .contains("<b>Almeria vs CD Castellon</b>")
+            .contains("Selection: Draw")
+            .contains("Current odds: 3.75")
+            .contains("Previous odds: 3.70 -> 3.75 (+1.35%)")
+            .contains("Break-even probability: 26.67%")
+            .contains("Edge: uncertain / narrow")
+            .contains("Context:")
+            .contains("- First leg ended 1-1")
+            .contains("- Castellon generated more attacking volume")
+            .contains("- Lineups are not confirmed")
+            .contains("Recommended action: WATCH until stronger price or confirmation signal.")
+            .contains("Suggested rule:")
+            .contains("Only consider BACK Draw if odds >= 3.85 or model probability >= 29%.")
+            .doesNotContain("Confirm bet?");
     }
 
     @Test

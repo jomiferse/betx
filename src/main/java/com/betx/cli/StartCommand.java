@@ -3,21 +3,26 @@ package com.betx.cli;
 import com.betx.application.DryRunSignalFormatter;
 import com.betx.application.DryRunSignalsResult;
 import com.betx.application.EventAnalysisFormatter;
+import com.betx.application.MatchIntelligenceAssessment;
+import com.betx.application.MarketSnapshotChange;
 import com.betx.application.MarketSnapshotChangeFormatter;
 import com.betx.application.RunDryRunSignalsService;
 import com.betx.application.StartBetxService;
 import com.betx.application.TelegramBetConfirmationService;
 import com.betx.domain.config.ConfigPath;
+import com.betx.domain.signal.BetSignal;
 import com.betx.startup.StartupStatusRenderer;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
 @Component
-@Command(name = "start", description = "Start BetX in dry-run mode.")
+@Command(name = "start", description = "Start BetX market scanning.")
 public class StartCommand implements Runnable {
     private final StartBetxService startBetxService;
     private final RunDryRunSignalsService dryRunSignalsService;
@@ -77,28 +82,27 @@ public class StartCommand implements Runnable {
         ConfigPath config = new ConfigPath(configPath);
         var status = startBetxService.start(config);
         System.out.println(renderer.render(status));
-        boolean liveMode = "live".equals(status.mode());
-        if (liveMode && status.liveBettingEnabled()) {
-            System.out.println("BetX is running in live mode.");
+        boolean requestConfirmation = status.autoBettingEnabled() && status.requestConfirmation();
+        if (requestConfirmation) {
+            System.out.println("BetX is running with auto-betting confirmations.");
             System.out.println("Telegram bet confirmations are enabled.");
-        } else if (liveMode) {
-            System.out.println("BetX is running in LIVE PREVIEW mode.");
-            System.out.println("No real bets will be placed.");
+        } else if (status.autoBettingEnabled()) {
+            System.out.println("BetX auto-betting is enabled without Telegram confirmation.");
         } else {
-            System.out.println("BetX is running in dry-run mode.");
+            System.out.println("BetX auto-betting is disabled.");
             System.out.println("No real bets will be placed.");
         }
 
         boolean firstCycle = true;
         do {
-            boolean sendTelegramAlerts = !liveMode && (once || !firstCycle);
-            DryRunSignalsResult result = dryRunSignalsService.run(config, sendTelegramAlerts);
-            if (liveMode) {
+            boolean sendTelegramAlerts = !requestConfirmation && (once || !firstCycle);
+            DryRunSignalsResult result = dryRunSignalsService.run(config, sendTelegramAlerts, !requestConfirmation);
+            if (requestConfirmation) {
                 telegramBetConfirmationService.sync(config, result);
             }
-            printResult(result);
+            printResult(result, status.autoBettingEnabled(), status.requestConfirmation());
             if (once) {
-                if (liveMode && !result.signals().isEmpty()) {
+                if (requestConfirmation && !result.signals().isEmpty()) {
                     System.out.println("Waiting briefly for Telegram confirmation buttons...");
                     waitForNextCycle(config, status.pollIntervalSeconds(), true);
                 }
@@ -108,13 +112,13 @@ public class StartCommand implements Runnable {
                 return;
             }
             firstCycle = false;
-            if (!waitForNextCycle(config, status.pollIntervalSeconds(), liveMode)) {
+            if (!waitForNextCycle(config, status.pollIntervalSeconds(), requestConfirmation)) {
                 return;
             }
         } while (true);
     }
 
-    private void printResult(DryRunSignalsResult result) {
+    private void printResult(DryRunSignalsResult result, boolean autoBettingEnabled, boolean requestConfirmation) {
         if (result.noEnabledExchanges()) {
             System.out.println("No enabled exchanges configured.");
             return;
@@ -130,15 +134,18 @@ public class StartCommand implements Runnable {
             + " | signals=" + result.signals().size()
             + " | failures=" + result.failures().size());
         result.failures().forEach(System.out::println);
-        result.changes().stream()
-            .filter(changeFormatter::isRelevant)
-            .forEach(change -> System.out.println(changeFormatter.format(change)));
-        if (result.runnerAnalyses().size() <= 30 || once) {
-            analysisFormatter.format(result.runnerAnalyses()).forEach(System.out::println);
+        printSnapshotChanges(result);
+        if (result.runnerAnalyses().size() <= 30) {
+            analysisFormatter.format(result.runnerAnalyses(), autoBettingEnabled, requestConfirmation).forEach(System.out::println);
+            printIntelligence(result);
         } else {
-            analysisFormatter.format(result.runnerAnalyses().stream()
+            List<com.betx.domain.signal.RunnerAnalysis> signalAnalyses = result.runnerAnalyses().stream()
                 .filter(analysis -> analysis.recommendation() == com.betx.domain.signal.RecommendationType.BET)
-                .toList()).forEach(System.out::println);
+                .toList();
+            analysisFormatter.format(signalAnalyses, autoBettingEnabled, requestConfirmation).forEach(System.out::println);
+            printIntelligence(result, signalAnalyses.stream()
+                .map(this::analysisKey)
+                .collect(java.util.stream.Collectors.toSet()));
         }
         if (result.runnerAnalyses().isEmpty()) {
             System.out.println("No event analyses found.");
@@ -146,6 +153,68 @@ public class StartCommand implements Runnable {
         }
 
         result.signals().forEach(signal -> System.out.println(signalFormatter.format(signal)));
+    }
+
+    private void printIntelligence(DryRunSignalsResult result) {
+        Set<String> signalKeys = result.signals().stream()
+            .map(this::signalKey)
+            .collect(java.util.stream.Collectors.toSet());
+        printIntelligence(result, signalKeys);
+    }
+
+    private void printIntelligence(DryRunSignalsResult result, Set<String> visibleKeys) {
+        Map<String, String> runnersByKey = result.runnerAnalyses().stream()
+            .collect(java.util.stream.Collectors.toMap(
+                this::analysisKey,
+                com.betx.domain.signal.RunnerAnalysis::displayRunner,
+                (left, right) -> left
+            ));
+        result.intelligenceAssessments().stream()
+            .filter(assessment -> visibleKeys.contains(intelligenceKey(assessment)))
+            .forEach(assessment -> System.out.println(
+                "INTELLIGENCE | runner=" + runnersByKey.getOrDefault(intelligenceKey(assessment), "unknown")
+                    + " | decision=" + assessment.decision()
+                    + " | confidence=" + assessment.confidence() + "/100"
+                    + " | summary=" + assessment.summary()
+            ));
+    }
+
+    private void printSnapshotChanges(DryRunSignalsResult result) {
+        List<MarketSnapshotChange> relevantChanges = result.changes().stream()
+            .filter(changeFormatter::isRelevant)
+            .toList();
+        List<MarketSnapshotChange> changesToPrint = relevantChanges;
+        if (result.runnerAnalyses().size() > 30) {
+            Set<String> signalKeys = result.signals().stream()
+                .map(this::signalKey)
+                .collect(java.util.stream.Collectors.toSet());
+            changesToPrint = relevantChanges.stream()
+                .filter(change -> signalKeys.contains(changeKey(change)))
+                .toList();
+        }
+        changesToPrint.forEach(change -> System.out.println(changeFormatter.format(change)));
+        int hidden = relevantChanges.size() - changesToPrint.size();
+        if (hidden > 0) {
+            System.out.println("Snapshot changes summarized | relevant=" + relevantChanges.size()
+                + " | shown=" + changesToPrint.size()
+                + " | hidden=" + hidden);
+        }
+    }
+
+    private String signalKey(BetSignal signal) {
+        return signal.exchange() + "|" + signal.marketId() + "|" + signal.selectionId();
+    }
+
+    private String analysisKey(com.betx.domain.signal.RunnerAnalysis analysis) {
+        return analysis.exchange() + "|" + analysis.marketId() + "|" + analysis.selectionId();
+    }
+
+    private String intelligenceKey(MatchIntelligenceAssessment assessment) {
+        return assessment.exchange() + "|" + assessment.marketId() + "|" + assessment.selectionId();
+    }
+
+    private String changeKey(MarketSnapshotChange change) {
+        return change.current().exchange() + "|" + change.current().marketId() + "|" + change.current().selectionId();
     }
 
     private boolean waitForNextCycle(ConfigPath config, int seconds, boolean liveMode) {

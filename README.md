@@ -2,7 +2,7 @@
 
 BetX is a terminal-first betting signals engine for football markets.
 
-It reads exchange market data, stores snapshots locally, detects useful price and liquidity movement, and sends actionable Telegram alerts. It is safe by default: new projects start in dry-run mode and live betting stays disabled until explicitly configured.
+It reads exchange market data, stores snapshots locally, detects useful price and liquidity movement, and sends actionable Telegram alerts. It is safe by default: auto-betting is disabled unless explicitly configured per exchange.
 
 Current version: `0.2.0`
 
@@ -13,7 +13,7 @@ Current version: `0.2.0`
 - Stores market snapshots in SQLite for change detection.
 - Scores each runner from `0-100` using recent odds, liquidity, persistence, and volatility.
 - Sends filtered Telegram alerts for actionable `BET` signals.
-- Supports Telegram button confirmation before a live bet is executed.
+- Supports Betfair auto-betting with optional Telegram confirmation.
 
 ## Requirements
 
@@ -65,12 +65,16 @@ The main config file is `betx.yml`.
 Important defaults:
 
 ```yaml
-app:
-  mode: dry-run
-
-risk:
-  max_stake: 5
-  live_betting_enabled: false
+exchanges:
+  - name: betfair
+    enabled: false
+    betfair:
+      auto_betting:
+        enabled: false
+        request_confirmation: true
+        max_stake: 5
+        max_daily_loss: 25
+        max_open_positions: 3
 
 storage:
   path: ./data/betx.db
@@ -83,9 +87,9 @@ export TELEGRAM_BOT_TOKEN=...
 export TELEGRAM_CHAT_ID=...
 ```
 
-## Telegram Alerts
+## Telegram Alerts And Confirmations
 
-Dry-run alerts are filtered to reduce noise:
+Signal alerts are filtered to reduce noise:
 
 - Odds-movement `BET` signals are sent when the confidence score reaches the signal threshold.
 - Liquidity-only `BET` signals are limited to one alert per market per cycle.
@@ -97,7 +101,7 @@ Example:
 
 ```text
 BETX SIGNAL
-DRY-RUN ONLY
+SIGNAL ONLY
 
 Market movement detected
 Score: 85/100 High confidence
@@ -111,28 +115,58 @@ Why this signal:
 - Volatility is low
 ```
 
-In live mode, `BET` signals use Telegram confirmation:
+When Betfair `auto_betting.enabled` and `request_confirmation` are both true, `BET` signals use Telegram confirmation:
 
 1. BetX sends a card with `Yes` and `No`.
 2. `Yes` shows available balance and allowed stake buttons.
 3. Selecting a stake sends the live order to the exchange.
 4. `No` or `Cancel` closes the pending intent.
 
-## Safety
+When `auto_betting.enabled` is true and `request_confirmation` is false, BetX sends orders automatically, capped by the Betfair auto-betting limits.
 
-BetX does not enable live betting by default.
+## OpenRouter Match Intelligence
 
-To place real bets, both conditions must be true:
+BetX can use OpenRouter with a Grok model and web search to review current news and real-time match context after a technical `BET` signal is found:
 
 ```yaml
-app:
-  mode: live
-
-risk:
-  live_betting_enabled: true
+intelligence:
+  enabled: true
+  provider: openrouter
+  model: x-ai/grok-4.3
+  api_key: sk-or-v1-...
+  api_key_env: OPENROUTER_API_KEY
+  timeout_seconds: 20
+  min_confidence: 70
 ```
 
-Live bets still require Telegram button confirmation and are capped by `risk.max_stake`.
+`api_key` is read directly from `betx.yml`. If `api_key` is blank, BetX falls back to the environment variable named by `api_key_env`. Treat any config file containing `api_key` as a secret and do not commit it.
+
+Behavior:
+
+- If `request_confirmation: false`, OpenRouter approval is mandatory whenever `intelligence.enabled: true`; anything other than `APPROVE` blocks the automatic bet.
+- If `request_confirmation: true`, OpenRouter is advisory. The Telegram confirmation card includes the recommendation when OpenRouter returns one, but BetX still sends the confirmation even if OpenRouter rejects, watches, or is unavailable.
+- OpenRouter failures never stop the scan cycle. They are treated as unavailable intelligence and logged.
+
+## Safety
+
+BetX does not enable auto-betting by default.
+
+To place real bets on Betfair, enable auto-betting for that exchange:
+
+```yaml
+exchanges:
+  - name: betfair
+    enabled: true
+    betfair:
+      auto_betting:
+        enabled: true
+        request_confirmation: true
+        max_stake: 5
+        max_daily_loss: 25
+        max_open_positions: 3
+```
+
+Use `request_confirmation: true` to require Telegram approval before any order is sent. Use `request_confirmation: false` only when you want fully automatic orders.
 
 ## Current Strategy
 
