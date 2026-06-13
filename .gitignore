@@ -14,6 +14,7 @@ betx.yml
 # Local runtime data and model artifacts
 data/
 models/
+/backtest/
 
 # IDEs and OS files
 .idea/
