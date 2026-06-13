@@ -48,6 +48,12 @@ java -jar target/betx.jar start --config betx.yml --once
 # Run continuously
 java -jar target/betx.jar start --config betx.yml
 
+# Replay historical normalized CSV data
+java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv
+
+# Convert Football-Data CSV to BetX history format
+java -jar target/betx.jar backtest convert-football-data --input backtest/SP1.csv --output backtest/history.csv
+
 # Telegram setup and checks
 java -jar target/betx.jar telegram connect --config betx.yml
 java -jar target/betx.jar telegram status --config betx.yml
@@ -78,6 +84,8 @@ exchanges:
 
 storage:
   path: ./data/betx.db
+  cleanup_market_snapshots_enabled: true
+  market_snapshot_retention_hours: 48
 ```
 
 Telegram credentials can be stored in `betx.yml` or supplied with environment variables:
@@ -124,6 +132,8 @@ When Betfair `auto_betting.enabled` and `request_confirmation` are both true, `B
 
 When `auto_betting.enabled` is true and `request_confirmation` is false, BetX sends orders automatically, capped by the Betfair auto-betting limits.
 
+Before any live order is sent, BetX checks Betfair for real exposure. `max_open_positions` counts open Betfair positions, including manual bets placed outside BetX. `max_daily_loss` is the realized/liquidated loss for the current UTC day from Betfair settlements. If Betfair exposure cannot be read, BetX blocks the live order for safety.
+
 ## OpenRouter Match Intelligence
 
 BetX can use OpenRouter with a Grok model and web search to review current news and real-time match context after a technical `BET` signal is found:
@@ -137,15 +147,20 @@ intelligence:
   api_key_env: OPENROUTER_API_KEY
   timeout_seconds: 20
   min_confidence: 70
+  auto_betting_policy: strict_approve
 ```
 
 `api_key` is read directly from `betx.yml`. If `api_key` is blank, BetX falls back to the environment variable named by `api_key_env`. Treat any config file containing `api_key` as a secret and do not commit it.
 
 Behavior:
 
-- If `request_confirmation: false`, OpenRouter approval is mandatory whenever `intelligence.enabled: true`; anything other than `APPROVE` blocks the automatic bet.
+- If `request_confirmation: false`, OpenRouter acts as the unattended auto-betting gate whenever `intelligence.enabled: true`.
+- The default `auto_betting_policy: strict_approve` preserves the safest behavior: only `APPROVE` can proceed to an automatic bet; `WATCH`, `REJECT`, missing assessments, and `UNAVAILABLE` block the bet.
+- `auto_betting_policy: block_only_on_reject` is a more permissive unattended policy: `APPROVE` and `WATCH` can proceed, while `REJECT`, missing assessments, and `UNAVAILABLE` still block the bet. Use this only when you intentionally accept that uncertain external context may still allow an automatic order.
 - If `request_confirmation: true`, OpenRouter is advisory. The Telegram confirmation card includes the recommendation when OpenRouter returns one, but BetX still sends the confirmation even if OpenRouter rejects, watches, or is unavailable.
 - OpenRouter failures never stop the scan cycle. They are treated as unavailable intelligence and logged.
+
+Unattended intelligence behavior is controlled by the combination of provider/model quality, `min_confidence`, `auto_betting_policy`, and `request_confirmation`. A stronger model can improve the assessment quality, but the configured policy decides whether `WATCH` is allowed to become an automatic order.
 
 ## Safety
 
@@ -168,6 +183,20 @@ exchanges:
 
 Use `request_confirmation: true` to require Telegram approval before any order is sent. Use `request_confirmation: false` only when you want fully automatic orders.
 
+BetX rechecks Betfair exposure immediately before executing either a confirmed Telegram stake or an automatic order. Local Telegram intents are kept for confirmations, cooldown, and traceability, but they are not the source of truth for real exposure.
+
+## Snapshot Retention
+
+BetX stores raw `market_snapshots` only as short-lived signal input. By default, each signal cycle deletes snapshots for markets whose `market_start_time` is older than 48 hours. When a BetX order is reconciled as `SETTLED`, snapshots for that exchange market are also removed if snapshot cleanup is enabled.
+
+```yaml
+storage:
+  cleanup_market_snapshots_enabled: true
+  market_snapshot_retention_hours: 48
+```
+
+Longer-term model or result analysis should use compact signal/decision/result summaries rather than keeping every raw market tick indefinitely.
+
 ## Current Strategy
 
 The first strategy is technical, not predictive.
@@ -181,6 +210,33 @@ It filters out poor markets, missing prices, low liquidity, wide spreads, and od
 - whether the move stands out versus the local runner baseline.
 
 A `BET` recommendation requires a score of at least `70/100`. Lower scores remain `WATCH`, and failed quality gates stay `NO BET`.
+
+## Historical Backtesting
+
+BetX can replay a normalized historical CSV through the current `value-football` analyzer without calling live exchanges, Telegram, OpenRouter, or order execution:
+
+```bash
+java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv
+```
+
+The CSV must include these columns:
+
+```text
+observed_at,exchange,market_id,market_name,event_name,competition_name,market_start_time,selection_id,runner_name,best_back_price,best_lay_price,spread,liquidity,result
+```
+
+`result` must be `WIN` or `LOSE`. BetX places one simulated BACK trade on the first qualifying `BET` signal per runner, using `risk.max_stake`, and prints rows analyzed, simulated trades, hit rate, ROI, profit/loss, max drawdown, and top/bottom trades.
+
+Football-Data CSV files can be converted into this normalized format:
+
+```bash
+mkdir -p backtest
+curl -L -o backtest/SP1.csv https://www.football-data.co.uk/mmz4281/2526/SP1.csv
+java -jar target/betx.jar backtest convert-football-data --input backtest/SP1.csv --output backtest/history.csv
+java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv
+```
+
+The converter uses Bet365 opening and closing match odds columns (`B365H/D/A` and `B365CH/CD/CA`) to create two synthetic observations per home/draw/away runner. Football-Data does not include exchange liquidity or lay prices, so BetX writes fixed liquidity and an estimated lay price suitable for strategy replay, not exact exchange microstructure analysis.
 
 ## License
 
