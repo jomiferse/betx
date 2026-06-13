@@ -27,7 +27,7 @@ public record BetxConfig(
         risk = risk == null ? new RiskConfig(null, null, null) : risk;
         strategies = strategies == null ? List.of() : List.copyOf(strategies);
         ml = ml == null ? new MlConfig(null, null, null) : ml;
-        intelligence = intelligence == null ? new IntelligenceConfig(null, null, null, null, null, null, null) : intelligence;
+        intelligence = intelligence == null ? new IntelligenceConfig(null, null, null, null, null, null, null, null) : intelligence;
     }
 
     public BetxConfig(
@@ -51,11 +51,11 @@ public record BetxConfig(
             new BetfairConfig(null, null, null, null),
             List.of(),
             new MarketDataConfig(60, 0, List.of("1"), List.of("MATCH_ODDS"), true, 50),
-            new StorageConfig("sqlite", "./data/betx.db"),
+            new StorageConfig("sqlite", "./data/betx.db", true, 48),
             new RiskConfig(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3),
             List.of(new StrategyConfig("value-football", true, BigDecimal.valueOf(0.06), BigDecimal.valueOf(500))),
             new MlConfig(false, "./models/value_model.pkl", BigDecimal.valueOf(0.70)),
-            new IntelligenceConfig(false, "openrouter", "x-ai/grok-4.3", "OPENROUTER_API_KEY", null, 20, 70)
+            new IntelligenceConfig(false, "openrouter", "x-ai/grok-4.3", "OPENROUTER_API_KEY", null, 20, 70, null)
         );
     }
 

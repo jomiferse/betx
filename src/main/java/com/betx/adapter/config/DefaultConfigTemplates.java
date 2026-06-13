@@ -32,12 +32,16 @@ public final class DefaultConfigTemplates {
                     enabled: false
                     request_confirmation: true
                     max_stake: 5
+                    # Daily realized/liquidated loss limit read from Betfair settlements.
                     max_daily_loss: 25
+                    # Real open positions read from Betfair, including manual external bets.
                     max_open_positions: 3
 
             storage:
               type: sqlite
               path: ./data/betx.db
+              cleanup_market_snapshots_enabled: true
+              market_snapshot_retention_hours: 48
 
             market_data:
               poll_interval_seconds: 60
@@ -67,6 +71,7 @@ public final class DefaultConfigTemplates {
               api_key:
               timeout_seconds: 20
               min_confidence: 70
+              auto_betting_policy: strict_approve
             """;
     }
 }

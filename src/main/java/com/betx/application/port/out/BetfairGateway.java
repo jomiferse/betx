@@ -6,9 +6,11 @@ import com.betx.domain.betfair.BetfairMarketBook;
 import com.betx.domain.betfair.BetfairMarketCatalogue;
 import com.betx.domain.betfair.BetfairMarketQuery;
 import com.betx.domain.betfair.BetfairSession;
+import com.betx.domain.exposure.ExchangeExposure;
 import com.betx.domain.order.BetExecutionResult;
 import com.betx.domain.order.BetOrder;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 public interface BetfairGateway {
@@ -28,5 +30,9 @@ public interface BetfairGateway {
 
     default BetExecutionResult placeOrder(BetfairSession session, BetOrder order) {
         return BetExecutionResult.rejected("Live bet execution is not implemented for configured exchanges.");
+    }
+
+    default ExchangeExposure readExposure(BetfairSession session, Instant settledSince) {
+        return ExchangeExposure.unavailable("Exchange exposure is not implemented for configured exchanges.");
     }
 }

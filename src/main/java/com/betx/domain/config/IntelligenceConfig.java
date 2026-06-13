@@ -9,7 +9,8 @@ public record IntelligenceConfig(
     @JsonProperty("api_key_env") String apiKeyEnv,
     @JsonProperty("api_key") String apiKey,
     @JsonProperty("timeout_seconds") Integer timeoutSeconds,
-    @JsonProperty("min_confidence") Integer minConfidence
+    @JsonProperty("min_confidence") Integer minConfidence,
+    @JsonProperty("auto_betting_policy") IntelligenceAutoBettingPolicy autoBettingPolicy
 ) {
     private static final boolean DEFAULT_ENABLED = false;
     private static final String DEFAULT_PROVIDER = "openrouter";
@@ -26,5 +27,18 @@ public record IntelligenceConfig(
         apiKey = apiKey == null || apiKey.isBlank() ? null : apiKey;
         timeoutSeconds = timeoutSeconds == null ? DEFAULT_TIMEOUT_SECONDS : timeoutSeconds;
         minConfidence = minConfidence == null ? DEFAULT_MIN_CONFIDENCE : minConfidence;
+        autoBettingPolicy = autoBettingPolicy == null ? IntelligenceAutoBettingPolicy.STRICT_APPROVE : autoBettingPolicy;
+    }
+
+    public IntelligenceConfig(
+        Boolean enabled,
+        String provider,
+        String model,
+        String apiKeyEnv,
+        String apiKey,
+        Integer timeoutSeconds,
+        Integer minConfidence
+    ) {
+        this(enabled, provider, model, apiKeyEnv, apiKey, timeoutSeconds, minConfidence, null);
     }
 }

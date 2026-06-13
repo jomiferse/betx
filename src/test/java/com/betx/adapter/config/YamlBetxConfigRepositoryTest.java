@@ -7,6 +7,7 @@ import com.betx.common.ConfigException;
 import com.betx.domain.betfair.BetfairCountry;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
+import com.betx.domain.config.IntelligenceAutoBettingPolicy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.nio.file.Files;
@@ -61,6 +62,7 @@ class YamlBetxConfigRepositoryTest {
               api_key_env: OPENROUTER_API_KEY
               timeout_seconds: 15
               min_confidence: 75
+              auto_betting_policy: block_only_on_reject
             """, BetxConfig.class);
 
         assertThat(config.exchanges()).hasSize(2);
@@ -80,6 +82,37 @@ class YamlBetxConfigRepositoryTest {
         assertThat(config.intelligence().apiKeyEnv()).isEqualTo("OPENROUTER_API_KEY");
         assertThat(config.intelligence().timeoutSeconds()).isEqualTo(15);
         assertThat(config.intelligence().minConfidence()).isEqualTo(75);
+        assertThat(config.intelligence().autoBettingPolicy()).isEqualTo(IntelligenceAutoBettingPolicy.BLOCK_ONLY_ON_REJECT);
+    }
+
+    @Test
+    void defaultsMissingIntelligenceAutoBettingPolicyToStrictApprove() throws Exception {
+        BetxConfig config = mapper.readValue("""
+            intelligence:
+              enabled: true
+              provider: openrouter
+              model: x-ai/grok-4.3
+              api_key_env: OPENROUTER_API_KEY
+              timeout_seconds: 15
+              min_confidence: 75
+            """, BetxConfig.class);
+
+        assertThat(config.intelligence().autoBettingPolicy()).isEqualTo(IntelligenceAutoBettingPolicy.STRICT_APPROVE);
+    }
+
+    @Test
+    void rejectsUnsupportedIntelligenceAutoBettingPolicy() {
+        assertThatThrownBy(() -> mapper.readValue("""
+            intelligence:
+              enabled: true
+              provider: openrouter
+              model: x-ai/grok-4.3
+              api_key_env: OPENROUTER_API_KEY
+              timeout_seconds: 15
+              min_confidence: 75
+              auto_betting_policy: approve_everything
+            """, BetxConfig.class))
+            .hasMessageContaining("intelligence.auto_betting_policy must be one of: strict_approve, block_only_on_reject.");
     }
 
     @Test
@@ -100,6 +133,21 @@ class YamlBetxConfigRepositoryTest {
         assertThat(config.marketData().betfairEventBatchSize()).isEqualTo(25);
         assertThat(config.marketData().eventTypeIds()).containsExactly("1", "2");
         assertThat(config.marketData().marketTypeCodes()).containsExactly("MATCH_ODDS", "OVER_UNDER_25");
+    }
+
+    @Test
+    void readsStorageCleanupPolicyFromYaml() throws Exception {
+        BetxConfig config = mapper.readValue("""
+            storage:
+              type: sqlite
+              path: ./data/custom.db
+              cleanup_market_snapshots_enabled: false
+              market_snapshot_retention_hours: 72
+            """, BetxConfig.class);
+
+        assertThat(config.storage().path()).isEqualTo("./data/custom.db");
+        assertThat(config.storage().cleanupMarketSnapshotsEnabled()).isFalse();
+        assertThat(config.storage().marketSnapshotRetentionHours()).isEqualTo(72);
     }
 
     @Test

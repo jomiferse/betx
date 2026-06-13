@@ -1,16 +1,17 @@
 package com.betx.cli;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.betx.application.TelegramBetIntentService;
+import com.betx.application.BetIntentService;
 import com.betx.application.TelegramConnectionService;
 import com.betx.application.port.out.BetxConfigRepository;
-import com.betx.application.port.out.TelegramBetIntentRepository;
+import com.betx.application.port.out.BetIntentRepository;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.StorageConfig;
-import com.betx.domain.telegram.TelegramBetIntent;
-import com.betx.domain.telegram.TelegramBetIntentStage;
+import com.betx.domain.order.BetIntent;
+import com.betx.domain.order.BetIntentStage;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.math.BigDecimal;
@@ -52,14 +53,15 @@ class TelegramCommandTest {
     @Test
     void betsCommandListsRecentIntents() {
         RecordingIntentRepository intents = new RecordingIntentRepository();
-        intents.save("data.db", intent("intent-1", TelegramBetIntentStage.AWAITING_CONFIRMATION));
-        TelegramBetsCommand command = new TelegramBetsCommand(new TelegramBetIntentService(new StaticConfigRepository(), intents));
+        intents.save("data.db", intent("intent-1", BetIntentStage.AWAITING_CONFIRMATION));
+        TelegramBetsCommand command = new TelegramBetsCommand(new BetIntentService(new StaticConfigRepository(), intents));
         command.configPath = Path.of("custom.yml");
         command.limit = 20;
 
         String output = captureOutput(command::run);
 
         assertThat(output).contains("id=intent-1");
+        assertThat(output).contains("source=TELEGRAM_CONFIRMATION");
         assertThat(output).contains("stage=AWAITING_CONFIRMATION");
         assertThat(output).contains("event=Team A v Team B");
         assertThat(output).contains("runner=Team A");
@@ -69,17 +71,42 @@ class TelegramCommandTest {
     @Test
     void betsCancelCommandCancelsPendingIntent() {
         RecordingIntentRepository intents = new RecordingIntentRepository();
-        intents.save("data.db", intent("intent-1", TelegramBetIntentStage.AWAITING_STAKE));
-        TelegramBetsCancelCommand command = new TelegramBetsCancelCommand(new TelegramBetIntentService(new StaticConfigRepository(), intents));
+        intents.save("data.db", intent("intent-1", BetIntentStage.AWAITING_STAKE));
+        TelegramBetsCancelCommand command = new TelegramBetsCancelCommand(new BetIntentService(new StaticConfigRepository(), intents));
         command.configPath = Path.of("custom.yml");
         command.id = "intent-1";
 
         String output = captureOutput(command::run);
 
-        assertThat(output).contains("TELEGRAM BET INTENT CANCELLED | id=intent-1");
-        assertThat(output).contains("Telegram bet intent cancelled: intent-1");
+        assertThat(output).contains("BET INTENT CANCELLED | id=intent-1");
+        assertThat(output).contains("Bet intent cancelled: intent-1");
         assertThat(intents.findById("data.db", "intent-1"))
-            .hasValueSatisfying(intent -> assertThat(intent.stage()).isEqualTo(TelegramBetIntentStage.CANCELLED));
+            .hasValueSatisfying(intent -> assertThat(intent.stage()).isEqualTo(BetIntentStage.CANCELLED));
+    }
+
+    @Test
+    void connectCommandFailsFastWhenNoConsoleIsAvailableForTokenPrompt() {
+        RecordingTelegramService service = new RecordingTelegramService();
+        service.enabled = true;
+        service.connected = false;
+        service.invokeTokenPrompt = true;
+        TelegramConnectCommand command = new TelegramConnectCommand(service);
+        command.configPath = Path.of("custom.yml");
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        PrintStream original = System.out;
+        System.setOut(new PrintStream(output, true, StandardCharsets.UTF_8));
+        try {
+            assertThatThrownBy(command::run)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Interactive Telegram token entry requires a real terminal. Set TELEGRAM_BOT_TOKEN or run `betx telegram connect` from a terminal with console access.");
+        } finally {
+            System.setOut(original);
+        }
+
+        String rendered = output.toString(StandardCharsets.UTF_8);
+        assertThat(rendered).doesNotContain("secret-token");
+        assertThat(rendered).doesNotContain("Telegram bot token: ");
     }
 
     private String captureOutput(Runnable runnable) {
@@ -94,8 +121,8 @@ class TelegramCommandTest {
         return output.toString(StandardCharsets.UTF_8);
     }
 
-    private TelegramBetIntent intent(String id, TelegramBetIntentStage stage) {
-        return new TelegramBetIntent(
+    private BetIntent intent(String id, BetIntentStage stage) {
+        return new BetIntent(
             id,
             "betfair",
             "1.1",
@@ -142,16 +169,16 @@ class TelegramCommandTest {
         }
     }
 
-    private static final class RecordingIntentRepository implements TelegramBetIntentRepository {
-        private final List<TelegramBetIntent> intents = new ArrayList<>();
+    private static final class RecordingIntentRepository implements BetIntentRepository {
+        private final List<BetIntent> intents = new ArrayList<>();
 
         @Override
-        public Optional<TelegramBetIntent> findActiveByKey(String databasePath, String exchange, String marketId, long selectionId) {
+        public Optional<BetIntent> findActiveByKey(String databasePath, String exchange, String marketId, long selectionId) {
             return Optional.empty();
         }
 
         @Override
-        public Optional<TelegramBetIntent> findLatestByKeySince(
+        public Optional<BetIntent> findLatestByKeySince(
             String databasePath,
             String exchange,
             String marketId,
@@ -162,17 +189,17 @@ class TelegramCommandTest {
         }
 
         @Override
-        public Optional<TelegramBetIntent> findById(String databasePath, String id) {
+        public Optional<BetIntent> findById(String databasePath, String id) {
             return intents.stream().filter(intent -> intent.id().equals(id)).findFirst();
         }
 
         @Override
-        public List<TelegramBetIntent> listRecent(String databasePath, int limit) {
+        public List<BetIntent> listRecent(String databasePath, int limit) {
             return intents.stream().limit(limit).toList();
         }
 
         @Override
-        public List<TelegramBetIntent> listByStages(String databasePath, List<TelegramBetIntentStage> stages, int limit) {
+        public List<BetIntent> listByStages(String databasePath, List<BetIntentStage> stages, int limit) {
             return intents.stream()
                 .filter(intent -> stages.contains(intent.stage()))
                 .limit(limit)
@@ -180,22 +207,22 @@ class TelegramCommandTest {
         }
 
         @Override
-        public long countByStages(String databasePath, List<TelegramBetIntentStage> stages) {
+        public long countByStages(String databasePath, List<BetIntentStage> stages) {
             return 0L;
         }
 
         @Override
-        public BigDecimal sumSelectedStakeByStageSince(String databasePath, TelegramBetIntentStage stage, Instant since) {
+        public BigDecimal sumSelectedStakeByStageSince(String databasePath, BetIntentStage stage, Instant since) {
             return BigDecimal.ZERO;
         }
 
         @Override
-        public void save(String databasePath, TelegramBetIntent intent) {
+        public void save(String databasePath, BetIntent intent) {
             intents.add(intent);
         }
 
         @Override
-        public void update(String databasePath, TelegramBetIntent intent) {
+        public void update(String databasePath, BetIntent intent) {
             for (int index = 0; index < intents.size(); index++) {
                 if (intents.get(index).id().equals(intent.id())) {
                     intents.set(index, intent);
@@ -205,20 +232,15 @@ class TelegramCommandTest {
             intents.add(intent);
         }
 
-        @Override
-        public long loadLastProcessedUpdateId(String databasePath) {
-            return 0L;
-        }
-
-        @Override
-        public void saveLastProcessedUpdateId(String databasePath, long updateId) {
-        }
     }
 
     private static final class RecordingTelegramService extends TelegramConnectionService {
         private String status;
         private ConfigPath configPath;
         private ConfigPath testMessageConfigPath;
+        private boolean enabled;
+        private boolean connected;
+        private boolean invokeTokenPrompt;
 
         private RecordingTelegramService() {
             super(null, null, null);
@@ -233,6 +255,29 @@ class TelegramCommandTest {
         @Override
         public void sendTestMessage(ConfigPath configPath) {
             this.testMessageConfigPath = configPath;
+        }
+
+        @Override
+        public boolean isEnabled(ConfigPath configPath) {
+            return enabled;
+        }
+
+        @Override
+        public boolean isConnected(ConfigPath configPath) {
+            return connected;
+        }
+
+        @Override
+        public com.betx.domain.telegram.TelegramConnectionResult connect(
+            ConfigPath configPath,
+            long timeoutSeconds,
+            java.util.function.Supplier<String> tokenPrompt,
+            java.util.function.Consumer<String> deepLinkConsumer
+        ) {
+            if (invokeTokenPrompt) {
+                tokenPrompt.get();
+            }
+            return new com.betx.domain.telegram.TelegramConnectionResult(false, "unused", null);
         }
     }
 }

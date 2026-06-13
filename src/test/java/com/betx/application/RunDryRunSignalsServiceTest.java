@@ -7,12 +7,15 @@ import com.betx.application.port.out.BetExecutionGateway;
 import com.betx.application.port.out.ExchangeMarketDataGateway;
 import com.betx.application.port.out.ExternalMatchIntelligenceGateway;
 import com.betx.application.port.out.MarketSnapshotRepository;
+import com.betx.application.port.out.SignalHistoryRepository;
 import com.betx.application.port.out.TelegramParseMode;
 import com.betx.domain.betfair.BetfairAutoBettingConfig;
 import com.betx.domain.betfair.BetfairConfig;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.ExchangeConfig;
+import com.betx.domain.config.IntelligenceAutoBettingPolicy;
+import com.betx.domain.config.StorageConfig;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.ObservedMarketSnapshot;
 import java.io.ByteArrayOutputStream;
@@ -102,6 +105,67 @@ class RunDryRunSignalsServiceTest {
 
         assertThat(result.eventsRead()).isEqualTo(192);
         assertThat(result.ignoredEvents()).isEqualTo(2);
+    }
+
+    @Test
+    void cleansExpiredMarketSnapshotsBeforeReadingMarketDataWhenEnabled() {
+        RecordingSnapshotRepository repository = new RecordingSnapshotRepository();
+        BetxConfig defaults = BetxConfig.defaults();
+        BetxConfig config = new BetxConfig(
+            defaults.app(),
+            defaults.telegram(),
+            defaults.betfair(),
+            List.of(exchange("betfair", true)),
+            defaults.marketData(),
+            new StorageConfig("sqlite", "data.db", true, 48),
+            defaults.risk(),
+            defaults.strategies(),
+            defaults.ml(),
+            defaults.intelligence()
+        );
+        RunDryRunSignalsService service = service(
+            config,
+            List.of(gateway("betfair", List.of(snapshot("betfair", "1.1")), null)),
+            new RecordingBetExecutionGateway(),
+            new NoopExternalMatchIntelligenceGateway(),
+            repository
+        );
+
+        service.run(CONFIG_PATH);
+
+        assertThat(repository.expiredCutoffs()).containsExactly(
+            Instant.parse("2026-05-29T10:01:00Z"),
+            Instant.parse("2026-05-29T10:01:00Z")
+        );
+    }
+
+    @Test
+    void cleansExpiredMarketSnapshotsAfterSavingReturnedMarketData() {
+        RecordingSnapshotRepository repository = new RecordingSnapshotRepository();
+        BetxConfig defaults = BetxConfig.defaults();
+        BetxConfig config = new BetxConfig(
+            defaults.app(),
+            defaults.telegram(),
+            defaults.betfair(),
+            List.of(exchange("betfair", true)),
+            defaults.marketData(),
+            new StorageConfig("sqlite", "data.db", true, 48),
+            defaults.risk(),
+            defaults.strategies(),
+            defaults.ml(),
+            defaults.intelligence()
+        );
+        RunDryRunSignalsService service = service(
+            config,
+            List.of(gateway("betfair", List.of(snapshot("betfair", "1.old")), null)),
+            new RecordingBetExecutionGateway(),
+            new NoopExternalMatchIntelligenceGateway(),
+            repository
+        );
+
+        service.run(CONFIG_PATH);
+
+        assertThat(repository.operations()).containsExactly("cleanup", "save", "cleanup");
     }
 
     @Test
@@ -504,6 +568,98 @@ class RunDryRunSignalsServiceTest {
     }
 
     @Test
+    void strictApprovePolicyAllowsApproveForUnattendedAutoBetting() {
+        DryRunSignalsResult result = runWithUnattendedIntelligence(
+            IntelligenceAutoBettingPolicy.STRICT_APPROVE,
+            MatchIntelligenceDecision.APPROVE
+        );
+
+        assertThat(result.signals()).hasSize(1);
+    }
+
+    @Test
+    void strictApprovePolicyBlocksWatchForUnattendedAutoBetting() {
+        DryRunSignalsResult result = runWithUnattendedIntelligence(
+            IntelligenceAutoBettingPolicy.STRICT_APPROVE,
+            MatchIntelligenceDecision.WATCH
+        );
+
+        assertThat(result.signals()).isEmpty();
+    }
+
+    @Test
+    void strictApprovePolicyBlocksRejectForUnattendedAutoBetting() {
+        DryRunSignalsResult result = runWithUnattendedIntelligence(
+            IntelligenceAutoBettingPolicy.STRICT_APPROVE,
+            MatchIntelligenceDecision.REJECT
+        );
+
+        assertThat(result.signals()).isEmpty();
+    }
+
+    @Test
+    void strictApprovePolicyBlocksUnavailableForUnattendedAutoBetting() {
+        DryRunSignalsResult result = runWithUnattendedIntelligence(
+            IntelligenceAutoBettingPolicy.STRICT_APPROVE,
+            MatchIntelligenceDecision.UNAVAILABLE
+        );
+
+        assertThat(result.signals()).isEmpty();
+    }
+
+    @Test
+    void blockOnlyOnRejectPolicyAllowsApproveForUnattendedAutoBetting() {
+        DryRunSignalsResult result = runWithUnattendedIntelligence(
+            IntelligenceAutoBettingPolicy.BLOCK_ONLY_ON_REJECT,
+            MatchIntelligenceDecision.APPROVE
+        );
+
+        assertThat(result.signals()).hasSize(1);
+    }
+
+    @Test
+    void blockOnlyOnRejectPolicyAllowsWatchForUnattendedAutoBetting() {
+        BetxConfig config = unattendedAutoBettingConfig(IntelligenceAutoBettingPolicy.BLOCK_ONLY_ON_REJECT);
+        RunDryRunSignalsService service = service(
+            config,
+            List.of(gateway("betfair", List.of(snapshot("betfair", "1.1")), null)),
+            new RecordingBetExecutionGateway(),
+            new StaticIntelligenceGateway(assessment(MatchIntelligenceDecision.WATCH)),
+            repositoryWithPrevious("betfair", "1.1")
+        );
+
+        List<String> output = new ArrayList<>();
+        DryRunSignalsResult result = service.run(CONFIG_PATH, true, true, output::add);
+
+        assertThat(result.signals()).hasSize(1);
+        assertThat(output)
+            .anySatisfy(message -> assertThat(message)
+                .contains("INTELLIGENCE BET ALLOWED | provider=openrouter")
+                .contains("policy=block_only_on_reject")
+                .contains("decision=WATCH"));
+    }
+
+    @Test
+    void blockOnlyOnRejectPolicyBlocksRejectForUnattendedAutoBetting() {
+        DryRunSignalsResult result = runWithUnattendedIntelligence(
+            IntelligenceAutoBettingPolicy.BLOCK_ONLY_ON_REJECT,
+            MatchIntelligenceDecision.REJECT
+        );
+
+        assertThat(result.signals()).isEmpty();
+    }
+
+    @Test
+    void blockOnlyOnRejectPolicyBlocksUnavailableForUnattendedAutoBetting() {
+        DryRunSignalsResult result = runWithUnattendedIntelligence(
+            IntelligenceAutoBettingPolicy.BLOCK_ONLY_ON_REJECT,
+            MatchIntelligenceDecision.UNAVAILABLE
+        );
+
+        assertThat(result.signals()).isEmpty();
+    }
+
+    @Test
     void intelligenceRejectIsAdvisoryWhenAutoBettingRequiresConfirmation() {
         BetxConfig config = BetxConfig.defaults()
             .withIntelligence(new com.betx.domain.config.IntelligenceConfig(
@@ -592,14 +748,130 @@ class RunDryRunSignalsServiceTest {
             repositoryWithPrevious("betfair", "1.1")
         );
 
-        String output = captureOutput(() -> service.run(CONFIG_PATH));
+        List<String> output = new ArrayList<>();
+        service.run(CONFIG_PATH, true, true, output::add);
 
         assertThat(output)
-            .contains("INTELLIGENCE ASSESSMENT | provider=openrouter")
-            .contains("decision=APPROVE")
-            .contains("confidence=84")
-            .contains("marketId=1.1")
-            .contains("selectionId=42");
+            .anySatisfy(message -> assertThat(message)
+                .contains("INTELLIGENCE ASSESSMENT | provider=openrouter")
+                .contains("decision=APPROVE")
+                .contains("confidence=84")
+                .contains("marketId=1.1")
+                .contains("selectionId=42"));
+    }
+
+    @Test
+    void savesSignalHistoryForBetAndWatchDecisionsWithContext() {
+        RecordingSnapshotRepository snapshotRepository = repositoryWithPrevious("betfair", "1.1");
+        RecordingSignalHistoryRepository historyRepository = new RecordingSignalHistoryRepository();
+        BetxConfig config = BetxConfig.defaults()
+            .withIntelligence(new com.betx.domain.config.IntelligenceConfig(
+                true,
+                "openrouter",
+                "x-ai/grok-4.3",
+                "OPENROUTER_API_KEY",
+                null,
+                20,
+                70
+            ))
+            .withExchanges(List.of(new ExchangeConfig(
+                "betfair",
+                true,
+                new BetfairConfig(
+                    "user",
+                    "password",
+                    "app-key",
+                    null,
+                    new BetfairAutoBettingConfig(true, true, BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3)
+                )
+            )));
+        RunDryRunSignalsService service = new RunDryRunSignalsService(
+            new StaticConfigRepository(config),
+            List.of(gateway("betfair", List.of(snapshot("betfair", "1.1"), weakSnapshot()), null)),
+            new NoopTelegramConnectionService(),
+            new RecordingBetExecutionGateway(),
+            snapshotRepository,
+            new MarketSnapshotChangeDetector(),
+            new StaticIntelligenceGateway(new MatchIntelligenceAssessment(
+                "betfair",
+                "1.1",
+                42L,
+                MatchIntelligenceDecision.APPROVE,
+                84,
+                "No negative team news found.",
+                List.of(),
+                List.of(),
+                List.of()
+            )),
+            historyRepository,
+            Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC)
+        );
+
+        DryRunSignalsResult result = service.run(CONFIG_PATH);
+
+        assertThat(result.signalHistoryEntries()).hasSize(2);
+        assertThat(historyRepository.saved()).hasSize(2);
+        assertThat(historyRepository.saved().getFirst()).satisfies(entry -> {
+            assertThat(entry.recommendation()).isEqualTo(com.betx.domain.signal.RecommendationType.BET);
+            assertThat(entry.observedAt()).isEqualTo(Instant.parse("2026-05-31T10:01:00Z"));
+            assertThat(entry.score()).isGreaterThanOrEqualTo(70);
+            assertThat(entry.reason()).contains("favorable_odds_movement");
+            assertThat(entry.bestBackPrice()).isEqualByComparingTo("2.50");
+            assertThat(entry.backPercentageDelta()).isEqualByComparingTo("-3.84615385");
+            assertThat(entry.liquidityPercentageDelta()).isEqualByComparingTo("20.00000000");
+            assertThat(entry.intelligenceDecision()).isEqualTo(MatchIntelligenceDecision.APPROVE);
+            assertThat(entry.intelligenceConfidence()).isEqualTo(84);
+            assertThat(entry.intelligenceSummary()).isEqualTo("No negative team news found.");
+        });
+        assertThat(historyRepository.saved().get(1).recommendation()).isEqualTo(com.betx.domain.signal.RecommendationType.WATCH);
+    }
+
+    @Test
+    void doesNotSaveSignalHistoryForNoBetDecisions() {
+        RecordingSignalHistoryRepository historyRepository = new RecordingSignalHistoryRepository();
+        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        RunDryRunSignalsService service = new RunDryRunSignalsService(
+            new StaticConfigRepository(config),
+            List.of(gateway("betfair", List.of(noBetSnapshot()), null)),
+            new NoopTelegramConnectionService(),
+            new RecordingBetExecutionGateway(),
+            new RecordingSnapshotRepository(),
+            new MarketSnapshotChangeDetector(),
+            new NoopExternalMatchIntelligenceGateway(),
+            historyRepository,
+            Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC)
+        );
+
+        DryRunSignalsResult result = service.run(CONFIG_PATH);
+
+        assertThat(result.runnerAnalyses()).singleElement()
+            .satisfies(analysis -> assertThat(analysis.recommendation()).isEqualTo(com.betx.domain.signal.RecommendationType.NO_BET));
+        assertThat(result.signalHistoryEntries()).isEmpty();
+        assertThat(historyRepository.saved()).isEmpty();
+    }
+
+    @Test
+    void signalHistoryFailureDoesNotFailSignalCycle() {
+        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        RecordingSignalHistoryRepository historyRepository = new RecordingSignalHistoryRepository();
+        historyRepository.failSaves = true;
+        RunDryRunSignalsService service = new RunDryRunSignalsService(
+            new StaticConfigRepository(config),
+            List.of(gateway("betfair", List.of(snapshot("betfair", "1.1")), null)),
+            new NoopTelegramConnectionService(),
+            new RecordingBetExecutionGateway(),
+            repositoryWithPrevious("betfair", "1.1"),
+            new MarketSnapshotChangeDetector(),
+            new NoopExternalMatchIntelligenceGateway(),
+            historyRepository,
+            Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC)
+        );
+
+        DryRunSignalsResult result = service.run(CONFIG_PATH);
+
+        assertThat(result.signals()).hasSize(1);
+        assertThat(result.failures()).isEmpty();
+        assertThat(result.snapshotsSaved()).isEqualTo(1);
     }
 
     private RunDryRunSignalsService service(
@@ -635,6 +907,60 @@ class RunDryRunSignalsServiceTest {
             new MarketSnapshotChangeDetector(),
             intelligenceGateway,
             Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC)
+        );
+    }
+
+    private DryRunSignalsResult runWithUnattendedIntelligence(
+        IntelligenceAutoBettingPolicy policy,
+        MatchIntelligenceDecision decision
+    ) {
+        BetxConfig config = unattendedAutoBettingConfig(policy);
+        RunDryRunSignalsService service = service(
+            config,
+            List.of(gateway("betfair", List.of(snapshot("betfair", "1.1")), null)),
+            new RecordingBetExecutionGateway(),
+            new StaticIntelligenceGateway(assessment(decision)),
+            repositoryWithPrevious("betfair", "1.1")
+        );
+        return service.run(CONFIG_PATH);
+    }
+
+    private BetxConfig unattendedAutoBettingConfig(IntelligenceAutoBettingPolicy policy) {
+        return BetxConfig.defaults()
+            .withIntelligence(new com.betx.domain.config.IntelligenceConfig(
+                true,
+                "openrouter",
+                "x-ai/grok-4.3",
+                "OPENROUTER_API_KEY",
+                null,
+                20,
+                70,
+                policy
+            ))
+            .withExchanges(List.of(new ExchangeConfig(
+                "betfair",
+                true,
+                new BetfairConfig(
+                    "user",
+                    "password",
+                    "app-key",
+                    null,
+                    new BetfairAutoBettingConfig(true, false, BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3)
+                )
+            )));
+    }
+
+    private MatchIntelligenceAssessment assessment(MatchIntelligenceDecision decision) {
+        return new MatchIntelligenceAssessment(
+            "betfair",
+            "1.1",
+            42L,
+            decision,
+            decision == MatchIntelligenceDecision.UNAVAILABLE ? 0 : 88,
+            "Assessment summary.",
+            List.of("Assessment reason"),
+            List.of(),
+            List.of(MatchIntelligenceSource.fromUrl("https://example.com/news"))
         );
     }
 
@@ -716,6 +1042,40 @@ class RunDryRunSignalsServiceTest {
             BigDecimal.valueOf(2.60),
             BigDecimal.valueOf(0.04),
             BigDecimal.valueOf(1_200)
+        );
+    }
+
+    private MarketSnapshot weakSnapshot() {
+        return new MarketSnapshot(
+            "betfair",
+            "1.2",
+            "Match Odds",
+            "Team C v Team D",
+            "La Liga",
+            Instant.parse("2026-06-01T18:00:00Z"),
+            43L,
+            "Team C",
+            BigDecimal.valueOf(2.50),
+            BigDecimal.valueOf(2.60),
+            BigDecimal.valueOf(0.04),
+            BigDecimal.valueOf(1_200)
+        );
+    }
+
+    private MarketSnapshot noBetSnapshot() {
+        return new MarketSnapshot(
+            "betfair",
+            "1.3",
+            "Match Odds",
+            "Team E v Team F",
+            "La Liga",
+            Instant.parse("2026-06-01T18:00:00Z"),
+            44L,
+            "Team E",
+            BigDecimal.valueOf(2.50),
+            BigDecimal.valueOf(4.00),
+            BigDecimal.valueOf(0.60),
+            BigDecimal.valueOf(50)
         );
     }
 
@@ -854,6 +1214,8 @@ class RunDryRunSignalsServiceTest {
         private final java.util.Map<String, List<ObservedMarketSnapshot>> recentSnapshots = new java.util.HashMap<>();
         private final List<String> recentRequests = new ArrayList<>();
         private final List<ObservedMarketSnapshot> saved = new ArrayList<>();
+        private final List<Instant> expiredCutoffs = new ArrayList<>();
+        private final List<String> operations = new ArrayList<>();
 
         @Override
         public Optional<ObservedMarketSnapshot> findLatest(String databasePath, String exchange, String marketId, long selectionId) {
@@ -879,11 +1241,27 @@ class RunDryRunSignalsServiceTest {
 
         @Override
         public void save(String databasePath, ObservedMarketSnapshot snapshot) {
+            operations.add("save");
             saved.add(snapshot);
+        }
+
+        @Override
+        public int deleteExpiredMarkets(String databasePath, Instant marketStartTimeBefore) {
+            operations.add("cleanup");
+            expiredCutoffs.add(marketStartTimeBefore);
+            return 0;
         }
 
         private List<ObservedMarketSnapshot> saved() {
             return saved;
+        }
+
+        private List<Instant> expiredCutoffs() {
+            return expiredCutoffs;
+        }
+
+        private List<String> operations() {
+            return operations;
         }
 
         private void putPrevious(ObservedMarketSnapshot snapshot) {
@@ -909,6 +1287,31 @@ class RunDryRunSignalsServiceTest {
 
         private String key(String exchange, String marketId, long selectionId) {
             return exchange + "|" + marketId + "|" + selectionId;
+        }
+    }
+
+    private static final class RecordingSignalHistoryRepository implements SignalHistoryRepository {
+        private final List<SignalHistoryEntry> saved = new ArrayList<>();
+        private boolean failSaves;
+
+        @Override
+        public void saveDecision(String databasePath, SignalHistoryEntry entry) {
+            if (failSaves) {
+                throw new IllegalStateException("database unavailable");
+            }
+            saved.add(entry);
+        }
+
+        @Override
+        public void linkIntent(String databasePath, SignalHistoryKey key, com.betx.domain.order.BetIntent intent) {
+        }
+
+        @Override
+        public void updateOrderState(String databasePath, com.betx.domain.order.BetIntent intent) {
+        }
+
+        private List<SignalHistoryEntry> saved() {
+            return saved;
         }
     }
 }

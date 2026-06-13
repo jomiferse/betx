@@ -14,6 +14,7 @@ public record DryRunSignalsResult(
     List<MarketSnapshotChange> changes,
     List<RunnerAnalysis> runnerAnalyses,
     List<MatchIntelligenceAssessment> intelligenceAssessments,
+    List<SignalHistoryEntry> signalHistoryEntries,
     int marketsRead,
     int ignoredMarkets,
     int eventsRead,
@@ -25,6 +26,7 @@ public record DryRunSignalsResult(
         changes = changes == null ? List.of() : List.copyOf(changes);
         runnerAnalyses = runnerAnalyses == null ? List.of() : List.copyOf(runnerAnalyses);
         intelligenceAssessments = intelligenceAssessments == null ? List.of() : List.copyOf(intelligenceAssessments);
+        signalHistoryEntries = signalHistoryEntries == null ? List.of() : List.copyOf(signalHistoryEntries);
     }
 
     public DryRunSignalsResult(
@@ -49,6 +51,38 @@ public record DryRunSignalsResult(
             changes,
             runnerAnalyses,
             List.of(),
+            List.of(),
+            marketsRead,
+            ignoredMarkets,
+            eventsRead,
+            ignoredEvents
+        );
+    }
+
+    public DryRunSignalsResult(
+        List<BetSignal> signals,
+        List<String> failures,
+        boolean noEnabledExchanges,
+        int snapshotsSaved,
+        int comparisonsCalculated,
+        List<MarketSnapshotChange> changes,
+        List<RunnerAnalysis> runnerAnalyses,
+        List<MatchIntelligenceAssessment> intelligenceAssessments,
+        int marketsRead,
+        int ignoredMarkets,
+        int eventsRead,
+        int ignoredEvents
+    ) {
+        this(
+            signals,
+            failures,
+            noEnabledExchanges,
+            snapshotsSaved,
+            comparisonsCalculated,
+            changes,
+            runnerAnalyses,
+            intelligenceAssessments,
+            List.of(),
             marketsRead,
             ignoredMarkets,
             eventsRead,
@@ -57,6 +91,6 @@ public record DryRunSignalsResult(
     }
 
     public DryRunSignalsResult(List<BetSignal> signals, List<String> failures, boolean noEnabledExchanges) {
-        this(signals, failures, noEnabledExchanges, 0, 0, List.of(), List.of(), List.of(), 0, 0, 0, 0);
+        this(signals, failures, noEnabledExchanges, 0, 0, List.of(), List.of(), List.of(), List.of(), 0, 0, 0, 0);
     }
 }

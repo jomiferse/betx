@@ -1,8 +1,8 @@
 package com.betx.cli;
 
-import com.betx.application.TelegramBetIntentService;
+import com.betx.application.BetIntentService;
 import com.betx.domain.config.ConfigPath;
-import com.betx.domain.telegram.TelegramBetIntent;
+import com.betx.domain.order.BetIntent;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import org.springframework.stereotype.Component;
@@ -12,11 +12,11 @@ import picocli.CommandLine.Option;
 @Component
 @Command(
     name = "bets",
-    description = "List recent Telegram bet confirmations.",
+    description = "List recent bet intents.",
     subcommands = {TelegramBetsCancelCommand.class}
 )
 public class TelegramBetsCommand implements Runnable {
-    private final TelegramBetIntentService service;
+    private final BetIntentService service;
 
     @Option(names = {"--config", "-c"}, defaultValue = "betx.yml", description = "Path to betx.yml.")
     Path configPath;
@@ -24,7 +24,7 @@ public class TelegramBetsCommand implements Runnable {
     @Option(names = "--limit", defaultValue = "20", description = "Maximum intents to list.")
     int limit;
 
-    public TelegramBetsCommand(TelegramBetIntentService service) {
+    public TelegramBetsCommand(BetIntentService service) {
         this.service = service;
     }
 
@@ -32,14 +32,15 @@ public class TelegramBetsCommand implements Runnable {
     public void run() {
         var intents = service.listRecent(new ConfigPath(configPath), limit);
         if (intents.isEmpty()) {
-            System.out.println("No Telegram bet intents found.");
+            System.out.println("No bet intents found.");
             return;
         }
         intents.forEach(intent -> System.out.println(format(intent)));
     }
 
-    private String format(TelegramBetIntent intent) {
+    private String format(BetIntent intent) {
         return "id=" + intent.id()
+            + " | source=" + intent.source()
             + " | stage=" + intent.stage()
             + " | event=" + value(intent.eventName())
             + " | runner=" + value(intent.displayRunner())

@@ -44,6 +44,9 @@ public class BetxConfigValidator {
         if (intelligence.minConfidence() < 0 || intelligence.minConfidence() > 100) {
             throw new ConfigException("intelligence.min_confidence must be between 0 and 100.");
         }
+        if (intelligence.autoBettingPolicy() == null) {
+            throw new ConfigException("intelligence.auto_betting_policy must be one of: strict_approve, block_only_on_reject.");
+        }
         if (intelligence.apiKeyEnv().startsWith("sk-")) {
             throw new ConfigException("intelligence.api_key_env must be an environment variable name, not an API key.");
         }

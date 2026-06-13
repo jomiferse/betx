@@ -76,13 +76,18 @@ class TelegramConnectionServiceTest {
         RecordingConfigRepository repository = new RecordingConfigRepository(
             configWithTelegram(new TelegramConfig(true, null, null, null, null, null, null, null, null, null))
         );
+        RecordingTelegramStateRepository stateRepository = new RecordingTelegramStateRepository();
         RecordingTelegramGateway gateway = new RecordingTelegramGateway();
         gateway.botUsername = "betx_bot";
-        gateway.updates = List.of(new TelegramUpdate(10L, "12345", "/start link-code", "user", "Jose"));
+        gateway.updates = List.of(
+            new TelegramUpdate(10L, "12345", "/start link-code", "user", "Jose"),
+            new TelegramUpdate(11L, "12345", null, "user", "Jose", "callback-1", "bet:intent-1:yes", 77)
+        );
         TelegramConnectionService service = new TelegramConnectionService(
             repository,
             new MapEnvironmentProvider(Map.of()),
             gateway,
+            stateRepository,
             CLOCK,
             () -> "link-code"
         );
@@ -101,6 +106,38 @@ class TelegramConnectionServiceTest {
             .containsEntry("username", "user")
             .containsEntry("first_name", "Jose");
         assertThat(gateway.sentMessages()).containsExactly(new SentMessage("token", "12345", TelegramConnectionService.CONFIRMATION_MESSAGE));
+        assertThat(stateRepository.lastProcessedUpdateId()).isEqualTo(10L);
+    }
+
+    @Test
+    void connectStartsFromPersistedOffsetAndAdvancesIt() {
+        RecordingConfigRepository repository = new RecordingConfigRepository(
+            configWithTelegram(new TelegramConfig(true, null, null, null, null, null, null, null, null, null))
+        );
+        RecordingTelegramStateRepository stateRepository = new RecordingTelegramStateRepository();
+        stateRepository.lastProcessedUpdateId = 10L;
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        gateway.botUsername = "betx_bot";
+        gateway.updates = List.of(
+            new TelegramUpdate(10L, "99999", "/start stale-code", "old-user", "Old"),
+            new TelegramUpdate(11L, "12345", "/start link-code", "user", "Jose")
+        );
+        TelegramConnectionService service = new TelegramConnectionService(
+            repository,
+            new MapEnvironmentProvider(Map.of()),
+            gateway,
+            stateRepository,
+            CLOCK,
+            () -> "link-code"
+        );
+
+        var result = service.connect(CONFIG_PATH, 0, () -> "token", deepLink -> {
+        });
+
+        assertThat(result.connected()).isTrue();
+        assertThat(result.chatId()).isEqualTo("12345");
+        assertThat(gateway.requestedOffsets()).containsExactly(11L);
+        assertThat(stateRepository.lastProcessedUpdateId()).isEqualTo(11L);
     }
 
     private TelegramConnectionService service(BetxConfig config) {
@@ -108,7 +145,14 @@ class TelegramConnectionServiceTest {
     }
 
     private TelegramConnectionService service(BetxConfig config, Map<String, String> environment, RecordingTelegramGateway gateway) {
-        return new TelegramConnectionService(new RecordingConfigRepository(config), new MapEnvironmentProvider(environment), gateway, CLOCK, () -> "link-code");
+        return new TelegramConnectionService(
+            new RecordingConfigRepository(config),
+            new MapEnvironmentProvider(environment),
+            gateway,
+            new RecordingTelegramStateRepository(),
+            CLOCK,
+            () -> "link-code"
+        );
     }
 
     private BetxConfig configWithTelegram(TelegramConfig telegram) {
@@ -163,6 +207,7 @@ class TelegramConnectionServiceTest {
 
     private static final class RecordingTelegramGateway implements TelegramBotGateway {
         private final List<SentMessage> sentMessages = new ArrayList<>();
+        private final List<Long> requestedOffsets = new ArrayList<>();
         private String botUsername = "bot";
         private List<TelegramUpdate> updates = List.of();
 
@@ -173,6 +218,7 @@ class TelegramConnectionServiceTest {
 
         @Override
         public List<TelegramUpdate> getUpdates(String token, Long offset, int timeoutSeconds) {
+            requestedOffsets.add(offset);
             return updates;
         }
 
@@ -183,6 +229,28 @@ class TelegramConnectionServiceTest {
 
         private List<SentMessage> sentMessages() {
             return sentMessages;
+        }
+
+        private List<Long> requestedOffsets() {
+            return requestedOffsets;
+        }
+    }
+
+    private static final class RecordingTelegramStateRepository implements com.betx.application.port.out.TelegramStateRepository {
+        private long lastProcessedUpdateId;
+
+        @Override
+        public long loadLastProcessedUpdateId(String databasePath) {
+            return lastProcessedUpdateId;
+        }
+
+        @Override
+        public void saveLastProcessedUpdateId(String databasePath, long updateId) {
+            lastProcessedUpdateId = updateId;
+        }
+
+        private long lastProcessedUpdateId() {
+            return lastProcessedUpdateId;
         }
     }
 
