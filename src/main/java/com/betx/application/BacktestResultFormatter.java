@@ -29,6 +29,13 @@ public class BacktestResultFormatter {
         topTrades(result).forEach(trade -> lines.add(formatTrade(trade)));
         lines.add("Bottom trades");
         bottomTrades(result).forEach(trade -> lines.add(formatTrade(trade)));
+        lines.add("Strategy evaluation");
+        for (BacktestSegmentType type : BacktestSegmentType.values()) {
+            lines.add("By " + displayName(type));
+            result.evaluation().segments(type).stream()
+                .limit(5)
+                .forEach(segment -> lines.add(formatSegment(segment)));
+        }
         return lines;
     }
 
@@ -54,6 +61,39 @@ public class BacktestResultFormatter {
             + " | odds=" + value(trade.odds())
             + " | stake=" + value(trade.stake())
             + " | pnl=" + trade.profitLoss().toPlainString();
+    }
+
+    private String formatSegment(BacktestSegment segment) {
+        return "SEGMENT | " + label(segment.type())
+            + " | " + segment.name()
+            + " | trades=" + segment.trades()
+            + " | wins=" + segment.wins()
+            + " | losses=" + segment.losses()
+            + " | staked=" + value(segment.totalStaked())
+            + " | pnl=" + twoDecimal(segment.profitLoss())
+            + " | roi=" + twoDecimal(segment.roiPercent()) + "%"
+            + " | strikeRate=" + twoDecimal(segment.strikeRatePercent()) + "%"
+            + " | maxDrawdown=" + twoDecimal(segment.maxDrawdown());
+    }
+
+    private String displayName(BacktestSegmentType type) {
+        return switch (type) {
+            case ODDS_BAND -> "odds band";
+            case RUNNER_TYPE -> "runner type";
+            case COMPETITION -> "competition";
+            case CONFIDENCE -> "confidence";
+            case ODDS_MOVEMENT -> "odds movement";
+        };
+    }
+
+    private String label(BacktestSegmentType type) {
+        return switch (type) {
+            case ODDS_BAND -> "odds_band";
+            case RUNNER_TYPE -> "runner_type";
+            case COMPETITION -> "competition";
+            case CONFIDENCE -> "confidence";
+            case ODDS_MOVEMENT -> "odds_movement";
+        };
     }
 
     private String value(BigDecimal value) {

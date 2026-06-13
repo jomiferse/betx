@@ -5,31 +5,29 @@ import java.math.RoundingMode;
 import java.util.Comparator;
 import java.util.List;
 
-/** Aggregate metrics for one historical backtest run. */
-public record BacktestResult(
-    int rowsRead,
-    int runnersAnalyzed,
-    List<BacktestTrade> trades,
+/** Performance metrics for one backtest evaluation bucket. */
+public record BacktestSegment(
+    BacktestSegmentType type,
+    String name,
+    int trades,
     int wins,
     int losses,
     BigDecimal totalStaked,
     BigDecimal profitLoss,
     BigDecimal roiPercent,
     BigDecimal strikeRatePercent,
-    BigDecimal maxDrawdown,
-    BacktestEvaluation evaluation
+    BigDecimal maxDrawdown
 ) {
-    public BacktestResult {
-        trades = trades == null ? List.of() : List.copyOf(trades);
+    public BacktestSegment {
+        name = name == null || name.isBlank() ? "unknown" : name;
         totalStaked = totalStaked == null ? BigDecimal.ZERO : totalStaked;
         profitLoss = profitLoss == null ? BigDecimal.ZERO : profitLoss;
         roiPercent = roiPercent == null ? BigDecimal.ZERO : roiPercent;
         strikeRatePercent = strikeRatePercent == null ? BigDecimal.ZERO : strikeRatePercent;
         maxDrawdown = maxDrawdown == null ? BigDecimal.ZERO : maxDrawdown;
-        evaluation = evaluation == null ? BacktestEvaluation.empty() : evaluation;
     }
 
-    public static BacktestResult from(int rowsRead, int runnersAnalyzed, List<BacktestTrade> trades) {
+    public static BacktestSegment from(BacktestSegmentType type, String name, List<BacktestTrade> trades) {
         List<BacktestTrade> orderedTrades = trades == null
             ? List.of()
             : trades.stream().sorted(Comparator.comparing(BacktestTrade::observedAt)).toList();
@@ -41,26 +39,28 @@ public record BacktestResult(
         BigDecimal profitLoss = orderedTrades.stream()
             .map(BacktestTrade::profitLoss)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal roi = percent(profitLoss, totalStaked);
-        BigDecimal strikeRate = orderedTrades.isEmpty()
-            ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
-            : BigDecimal.valueOf(wins)
-                .divide(BigDecimal.valueOf(orderedTrades.size()), 10, RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(100))
-                .setScale(2, RoundingMode.HALF_UP);
-        return new BacktestResult(
-            rowsRead,
-            runnersAnalyzed,
-            orderedTrades,
+        return new BacktestSegment(
+            type,
+            name,
+            orderedTrades.size(),
             wins,
             losses,
             totalStaked,
             profitLoss,
-            roi,
-            strikeRate,
-            maxDrawdown(orderedTrades),
-            BacktestEvaluation.from(orderedTrades)
+            percent(profitLoss, totalStaked),
+            strikeRate(wins, orderedTrades.size()),
+            maxDrawdown(orderedTrades)
         );
+    }
+
+    private static BigDecimal strikeRate(int wins, int trades) {
+        if (trades == 0) {
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
+        return BigDecimal.valueOf(wins)
+            .divide(BigDecimal.valueOf(trades), 10, RoundingMode.HALF_UP)
+            .multiply(BigDecimal.valueOf(100))
+            .setScale(2, RoundingMode.HALF_UP);
     }
 
     private static BigDecimal percent(BigDecimal numerator, BigDecimal denominator) {

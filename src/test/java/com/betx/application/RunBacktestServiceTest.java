@@ -39,6 +39,10 @@ class RunBacktestServiceTest {
             assertThat(trade.odds()).isEqualByComparingTo("2.50");
             assertThat(trade.stake()).isEqualByComparingTo("5");
             assertThat(trade.profitLoss()).isEqualByComparingTo("7.50");
+            assertThat(trade.competitionName()).isEqualTo("La Liga");
+            assertThat(trade.confidenceLabel()).isEqualTo("High confidence");
+            assertThat(trade.oddsMovementPercent()).isEqualByComparingTo("-3.84615385");
+            assertThat(trade.runnerType()).isEqualTo(BacktestRunnerType.UNKNOWN);
         });
         assertThat(result.wins()).isEqualTo(1);
         assertThat(result.losses()).isZero();
@@ -95,6 +99,20 @@ class RunBacktestServiceTest {
         assertThat(result.rowsRead()).isEqualTo(2);
         assertThat(result.runnersAnalyzed()).isZero();
         assertThat(result.trades()).isEmpty();
+    }
+
+    @Test
+    void infersFootballDataRunnerTypeFromSelectionId() {
+        RecordingHistoryReader reader = new RecordingHistoryReader(List.of(
+            row("2026-06-01T10:00:00Z", 1L, BigDecimal.valueOf(2.60), BigDecimal.valueOf(1_000), BacktestOutcome.WIN),
+            row("2026-06-01T10:01:00Z", 1L, BigDecimal.valueOf(2.50), BigDecimal.valueOf(1_200), BacktestOutcome.WIN)
+        ));
+        RunBacktestService service = new RunBacktestService(new StaticConfigRepository(BetxConfig.defaults()), reader);
+
+        BacktestResult result = service.run(CONFIG_PATH, INPUT_PATH);
+
+        assertThat(result.trades()).singleElement()
+            .satisfies(trade -> assertThat(trade.runnerType()).isEqualTo(BacktestRunnerType.HOME));
     }
 
     private static BacktestInputRow row(
