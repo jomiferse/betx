@@ -37,7 +37,12 @@ class BacktestCommandTest {
             .contains("Top trades")
             .contains("TRADE | WIN | observedAt=2026-06-01T10:01:00Z | event=Team A v Team B | runner=Team A | odds=2.5 | stake=5 | pnl=7.50")
             .contains("Bottom trades")
-            .contains("TRADE | LOSE | observedAt=2026-06-01T10:03:00Z | event=Team C v Team D | runner=Team C | odds=3 | stake=5 | pnl=-5");
+            .contains("TRADE | LOSE | observedAt=2026-06-01T10:03:00Z | event=Team C v Team D | runner=Team C | odds=3 | stake=5 | pnl=-5")
+            .contains("Strategy evaluation")
+            .contains("By odds band")
+            .contains("SEGMENT | odds_band | 2.01-3.00 | trades=2 | wins=1 | losses=1")
+            .contains("By runner type")
+            .contains("By odds movement");
     }
 
     private static BacktestResult result() {

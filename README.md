@@ -227,6 +227,8 @@ observed_at,exchange,market_id,market_name,event_name,competition_name,market_st
 
 `result` must be `WIN` or `LOSE`. BetX places one simulated BACK trade on the first qualifying `BET` signal per runner, using `risk.max_stake`, and prints rows analyzed, simulated trades, hit rate, ROI, profit/loss, max drawdown, and top/bottom trades.
 
+Backtest output also includes a strategy evaluation section that groups simulated trades by entry odds band, inferred runner type, competition, confidence label, and opening-to-entry odds movement. These segments make it easier to see whether the current strategy is being helped by specific leagues, price ranges, or pre-match steam/drift patterns before changing live strategy rules.
+
 Football-Data CSV files can be converted into this normalized format:
 
 ```bash
@@ -236,7 +238,7 @@ java -jar target/betx.jar backtest convert-football-data --input backtest/SP1.cs
 java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv
 ```
 
-The converter uses Bet365 opening and closing match odds columns (`B365H/D/A` and `B365CH/CD/CA`) to create two synthetic observations per home/draw/away runner. Football-Data does not include exchange liquidity or lay prices, so BetX writes fixed liquidity and an estimated lay price suitable for strategy replay, not exact exchange microstructure analysis.
+The converter uses Bet365 opening and closing match odds columns (`B365H/D/A` and `B365CH/CD/CA`) to create two synthetic observations per home/draw/away runner. Football-Data does not include exchange liquidity or lay prices, so BetX writes fixed liquidity and an estimated lay price suitable for strategy replay, not exact exchange microstructure analysis. Treat the evaluation as evidence about pre-match odds movement and settled profitability, not proof of Betfair order-book execution quality.
 
 ## License
 

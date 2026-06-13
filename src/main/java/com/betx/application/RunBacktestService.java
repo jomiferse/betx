@@ -12,6 +12,7 @@ import com.betx.domain.signal.RecommendationType;
 import com.betx.domain.signal.RunnerAnalysis;
 import com.betx.domain.signal.ValueFootballSignalStrategy;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -68,7 +69,7 @@ public class RunBacktestService {
             );
             runnersAnalyzed++;
             if (analysis.recommendation() == RecommendationType.BET && tradedRunners.add(key)) {
-                trades.add(toTrade(row, analysis, config.risk().maxStake()));
+                trades.add(toTrade(row, analysis, config.risk().maxStake(), Optional.ofNullable(recent.peekFirst())));
             }
             recent.addFirst(new ObservedMarketSnapshot(row.observedAt(), row.toMarketSnapshot()));
             while (recent.size() > RECENT_SNAPSHOT_LIMIT) {
@@ -85,7 +86,12 @@ public class RunBacktestService {
             .findFirst();
     }
 
-    private BacktestTrade toTrade(BacktestInputRow row, RunnerAnalysis analysis, BigDecimal stake) {
+    private BacktestTrade toTrade(
+        BacktestInputRow row,
+        RunnerAnalysis analysis,
+        BigDecimal stake,
+        Optional<ObservedMarketSnapshot> previousSnapshot
+    ) {
         BigDecimal profitLoss = row.outcome() == BacktestOutcome.WIN
             ? stake.multiply(analysis.bestBackPrice().subtract(BigDecimal.ONE))
             : stake.negate();
@@ -101,11 +107,25 @@ public class RunBacktestService {
             analysis.bestBackPrice(),
             stake,
             row.outcome(),
-            profitLoss
+            profitLoss,
+            row.competitionName(),
+            analysis.score().confidenceLabel(),
+            previousSnapshot.map(previous -> percentageDelta(previous.snapshot().bestBackPrice(), analysis.bestBackPrice())).orElse(null),
+            BacktestRunnerType.fromSelectionId(row.selectionId())
         );
     }
 
     private String runnerKey(BacktestInputRow row) {
         return row.exchange() + "|" + row.marketId() + "|" + row.selectionId();
+    }
+
+    private BigDecimal percentageDelta(BigDecimal previous, BigDecimal current) {
+        if (previous == null || current == null || previous.compareTo(BigDecimal.ZERO) == 0) {
+            return null;
+        }
+        return current.subtract(previous)
+            .divide(previous, 10, RoundingMode.HALF_UP)
+            .multiply(BigDecimal.valueOf(100))
+            .setScale(8, RoundingMode.HALF_UP);
     }
 }
