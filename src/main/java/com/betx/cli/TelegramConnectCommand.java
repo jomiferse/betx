@@ -4,7 +4,6 @@ import com.betx.application.TelegramConnectionService;
 import com.betx.domain.config.ConfigPath;
 import java.io.Console;
 import java.nio.file.Path;
-import java.util.Scanner;
 import org.springframework.stereotype.Component;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -67,7 +66,8 @@ public class TelegramConnectCommand implements Runnable {
             );
             return password == null ? null : new String(password);
         }
-        System.out.print("Telegram bot token: ");
-        return new Scanner(System.in).nextLine();
+        throw new IllegalStateException(
+            "Interactive Telegram token entry requires a real terminal. Set TELEGRAM_BOT_TOKEN or run `betx telegram connect` from a terminal with console access."
+        );
     }
 }

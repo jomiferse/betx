@@ -9,6 +9,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 import com.betx.application.MatchIntelligenceDecision;
 import com.betx.application.MatchIntelligenceRequest;
+import com.betx.domain.config.IntelligenceAutoBettingPolicy;
 import com.betx.domain.config.IntelligenceConfig;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.RecommendationType;
@@ -36,6 +37,7 @@ class OpenRouterMatchIntelligenceGatewayTest {
             .andExpect(jsonPath("$.tools[0].type").value("openrouter:web_search"))
             .andExpect(jsonPath("$.messages[0].content").value(containsString("Return only compact valid JSON.")))
             .andExpect(jsonPath("$.messages[0].content").value(containsString("Be conservative. Automatic betting requires strong evidence.")))
+            .andExpect(jsonPath("$.messages[1].content").value(containsString("Automatic execution policy: only APPROVE may place a live order.")))
             .andRespond(withSuccess("""
                 {
                   "choices": [{
@@ -77,6 +79,7 @@ class OpenRouterMatchIntelligenceGatewayTest {
         );
         server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions"))
             .andExpect(header("Authorization", "Bearer inline-key"))
+            .andExpect(jsonPath("$.messages[1].content").value(containsString("Automatic execution policy: WATCH may proceed; REJECT and UNAVAILABLE block live orders.")))
             .andRespond(withSuccess("""
                 {
                   "choices": [{
@@ -88,10 +91,19 @@ class OpenRouterMatchIntelligenceGatewayTest {
                 """, MediaType.APPLICATION_JSON));
 
         var assessment = gateway.assess(new MatchIntelligenceRequest(
-            new IntelligenceConfig(true, "openrouter", "x-ai/grok-4.3", "OPENROUTER_API_KEY", "inline-key", 20, 70),
+            new IntelligenceConfig(
+                true,
+                "openrouter",
+                "x-ai/grok-4.3",
+                "OPENROUTER_API_KEY",
+                "inline-key",
+                20,
+                70,
+                IntelligenceAutoBettingPolicy.BLOCK_ONLY_ON_REJECT
+            ),
             analysis(),
             true,
-            true
+            false
         ));
 
         assertThat(assessment.decision()).isEqualTo(MatchIntelligenceDecision.WATCH);

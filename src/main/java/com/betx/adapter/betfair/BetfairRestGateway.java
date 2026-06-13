@@ -8,6 +8,8 @@ import com.betx.domain.betfair.BetfairMarketCatalogue;
 import com.betx.domain.betfair.BetfairMarketQuery;
 import com.betx.domain.betfair.BetfairRunnerPrice;
 import com.betx.domain.betfair.BetfairSession;
+import com.betx.domain.exposure.ExchangeExposure;
+import com.betx.domain.exposure.ExchangeExposurePosition;
 import com.betx.domain.order.BetExecutionResult;
 import com.betx.domain.order.BetOrder;
 import com.betx.domain.signal.BetSide;
@@ -23,6 +25,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -232,12 +236,37 @@ public class BetfairRestGateway implements BetfairGateway {
             JsonNode report = reports.get(0);
             String reportStatus = text(report, "status");
             if ("SUCCESS".equalsIgnoreCase(reportStatus)) {
-                return new BetExecutionResult(true, text(report, "betId").isBlank() ? "Bet placed." : "Bet placed. BetId=" + text(report, "betId"));
+                String betId = text(report, "betId");
+                return new BetExecutionResult(true, betId.isBlank() ? "Bet placed." : "Bet placed. BetId=" + betId, betId);
             }
             return BetExecutionResult.rejected(text(report, "errorCode").isBlank() ? "Betfair rejected the order." : text(report, "errorCode"));
         }
 
         return BetExecutionResult.rejected(text(result, "errorCode").isBlank() ? "Betfair rejected the order." : text(result, "errorCode"));
+    }
+
+    @Override
+    public ExchangeExposure readExposure(BetfairSession session, Instant settledSince) {
+        JsonNode currentOrders = invoke(session, "SportsAPING/v1.0/listCurrentOrders", mapper.createObjectNode())
+            .path("currentOrders");
+        ObjectNode clearedParams = mapper.createObjectNode();
+        clearedParams.put("betStatus", "SETTLED");
+        clearedParams.put("groupBy", "BET");
+        if (settledSince != null) {
+            ObjectNode settledDateRange = clearedParams.putObject("settledDateRange");
+            settledDateRange.put("from", settledSince.toString());
+        }
+        JsonNode clearedOrders = invoke(session, "SportsAPING/v1.0/listClearedOrders", clearedParams)
+            .path("clearedOrders");
+
+        List<ExchangeExposurePosition> positions = parseExposurePositions(currentOrders);
+        BigDecimal currentExposure = positions.stream()
+            .map(ExchangeExposurePosition::risk)
+            .reduce(BigDecimal.ZERO, BigDecimal::add)
+            .setScale(2, RoundingMode.HALF_UP);
+        BigDecimal realizedProfitLoss = sumProfit(clearedOrders).setScale(2, RoundingMode.HALF_UP);
+
+        return new ExchangeExposure(true, positions.size(), currentExposure, realizedProfitLoss, positions, settledBetIds(clearedOrders), null);
     }
 
     private Map<Long, String> parseRunnerNames(JsonNode runnersNode) {
@@ -312,6 +341,60 @@ public class BetfairRestGateway implements BetfairGateway {
         return runners;
     }
 
+    private List<ExchangeExposurePosition> parseExposurePositions(JsonNode ordersNode) {
+        List<ExchangeExposurePosition> positions = new ArrayList<>();
+        if (ordersNode == null || !ordersNode.isArray()) {
+            return positions;
+        }
+        for (JsonNode order : ordersNode) {
+            BigDecimal matched = decimalOrZero(order, "sizeMatched");
+            BigDecimal remaining = decimalOrZero(order, "sizeRemaining");
+            BigDecimal stake = matched.add(remaining);
+            if (stake.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            BetSide side = "LAY".equalsIgnoreCase(text(order, "side")) ? BetSide.LAY : BetSide.BACK;
+            BigDecimal price = decimal(order.path("priceSize"), "price");
+            BigDecimal risk = side == BetSide.LAY && price != null
+                ? price.subtract(BigDecimal.ONE).multiply(stake)
+                : stake;
+            positions.add(new ExchangeExposurePosition(
+                text(order, "betId"),
+                text(order, "marketId"),
+                order.path("selectionId").asLong(),
+                side,
+                stake.setScale(2, RoundingMode.HALF_UP),
+                risk.setScale(2, RoundingMode.HALF_UP)
+            ));
+        }
+        return positions;
+    }
+
+    private BigDecimal sumProfit(JsonNode ordersNode) {
+        BigDecimal total = BigDecimal.ZERO;
+        if (ordersNode == null || !ordersNode.isArray()) {
+            return total;
+        }
+        for (JsonNode order : ordersNode) {
+            total = total.add(decimalOrZero(order, "profit"));
+        }
+        return total;
+    }
+
+    private Set<String> settledBetIds(JsonNode ordersNode) {
+        if (ordersNode == null || !ordersNode.isArray()) {
+            return Set.of();
+        }
+        List<String> ids = new ArrayList<>();
+        for (JsonNode order : ordersNode) {
+            String betId = text(order, "betId");
+            if (!betId.isBlank()) {
+                ids.add(betId);
+            }
+        }
+        return ids.stream().collect(Collectors.toSet());
+    }
+
     private BigDecimal bestPrice(JsonNode prices) {
         if (prices == null || !prices.isArray() || prices.isEmpty()) {
             return null;
@@ -343,6 +426,11 @@ public class BetfairRestGateway implements BetfairGateway {
             return null;
         }
         return node.path(field).decimalValue();
+    }
+
+    private BigDecimal decimalOrZero(JsonNode node, String field) {
+        BigDecimal value = decimal(node, field);
+        return value == null ? BigDecimal.ZERO : value;
     }
 
     private String encode(String value) {

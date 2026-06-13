@@ -1,55 +1,61 @@
 package com.betx.application;
 
 import com.betx.application.port.out.BetxConfigRepository;
-import com.betx.application.port.out.TelegramBetIntentRepository;
+import com.betx.application.port.out.BetIntentRepository;
 import com.betx.domain.config.ConfigPath;
-import com.betx.domain.telegram.TelegramBetIntent;
-import com.betx.domain.telegram.TelegramBetIntentStage;
+import com.betx.domain.order.BetIntent;
+import com.betx.domain.order.BetIntentStage;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.function.Consumer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-/** Application service for inspecting and managing Telegram bet intents. */
+/** Application service for inspecting and managing bet intents. */
 @Service
-public class TelegramBetIntentService {
+public class BetIntentService {
     private final BetxConfigRepository configRepository;
-    private final TelegramBetIntentRepository intentRepository;
+    private final BetIntentRepository intentRepository;
     private final Clock clock;
 
     @Autowired
-    public TelegramBetIntentService(BetxConfigRepository configRepository, TelegramBetIntentRepository intentRepository) {
+    public BetIntentService(BetxConfigRepository configRepository, BetIntentRepository intentRepository) {
         this(configRepository, intentRepository, Clock.systemUTC());
     }
 
-    TelegramBetIntentService(BetxConfigRepository configRepository, TelegramBetIntentRepository intentRepository, Clock clock) {
+    BetIntentService(BetxConfigRepository configRepository, BetIntentRepository intentRepository, Clock clock) {
         this.configRepository = configRepository;
         this.intentRepository = intentRepository;
         this.clock = clock;
     }
 
-    public List<TelegramBetIntent> listRecent(ConfigPath configPath, int limit) {
+    public List<BetIntent> listRecent(ConfigPath configPath, int limit) {
         var config = configRepository.load(configPath);
         return intentRepository.listRecent(config.storage().path(), limit);
     }
 
-    public TelegramBetIntent cancel(ConfigPath configPath, String id) {
+    public BetIntent cancel(ConfigPath configPath, String id) {
+        return cancel(configPath, id, ignored -> {
+        });
+    }
+
+    public BetIntent cancel(ConfigPath configPath, String id, Consumer<String> output) {
         var config = configRepository.load(configPath);
-        TelegramBetIntent intent = intentRepository.findById(config.storage().path(), id)
-            .orElseThrow(() -> new IllegalArgumentException("Telegram bet intent not found: " + id));
+        BetIntent intent = intentRepository.findById(config.storage().path(), id)
+            .orElseThrow(() -> new IllegalArgumentException("Bet intent not found: " + id));
         if (!intent.stage().isActive()) {
-            throw new IllegalStateException("Telegram bet intent is not pending: " + id);
+            throw new IllegalStateException("Bet intent is not pending: " + id);
         }
-        TelegramBetIntent cancelled = intent.withStageAt(
-            TelegramBetIntentStage.CANCELLED,
+        BetIntent cancelled = intent.withStageAt(
+            BetIntentStage.CANCELLED,
             intent.availableBalance(),
             intent.selectedStake(),
             "Cancelled from CLI.",
             Instant.now(clock)
         );
         intentRepository.update(config.storage().path(), cancelled);
-        System.out.println("TELEGRAM BET INTENT CANCELLED | id=" + cancelled.id()
+        output.accept("BET INTENT CANCELLED | id=" + cancelled.id()
             + " | exchange=" + cancelled.exchange()
             + " | marketId=" + cancelled.marketId()
             + " | selectionId=" + cancelled.selectionId());

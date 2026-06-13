@@ -245,10 +245,30 @@ class StartCommandTest {
 
         captureOutput(command::run);
 
-        assertThat(confirmations.syncedResults()).hasSize(3);
+        assertThat(confirmations.syncedResults()).hasSize(2);
         assertThat(confirmations.syncedResults().get(0).signals()).hasSize(1);
         assertThat(confirmations.syncedResults().get(1).signals()).isEmpty();
-        assertThat(confirmations.syncedResults().get(2).signals()).isEmpty();
+    }
+
+    @Test
+    void autoBettingWithConfirmationOnceUsesShortDrainInsteadOfFullPollInterval() {
+        BetxConfig config = configWithAutoBetting(60, true, true);
+        RecordingTelegramBetConfirmationService confirmations = new RecordingTelegramBetConfirmationService();
+        SequencedDryRunSignalsService dryRunSignalsService = new SequencedDryRunSignalsService(
+            config,
+            new DryRunSignalsResult(
+                List.of(new BetSignal("matchbook", "m-1", 42L, BetSide.BACK, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "test", "live")),
+                List.of(),
+                false
+            )
+        );
+        StartCommand command = command(config, dryRunSignalsService, confirmations);
+
+        captureOutput(command::run);
+
+        assertThat(confirmations.syncedResults()).hasSize(2);
+        assertThat(confirmations.syncedResults().get(0).signals()).hasSize(1);
+        assertThat(confirmations.syncedResults().get(1).signals()).isEmpty();
     }
 
     private StartCommand command(BetxConfig config, List<ExchangeMarketDataGateway> gateways) {
@@ -441,6 +461,14 @@ class StartCommandTest {
         @Override
         public void sync(ConfigPath configPath, DryRunSignalsResult result) {
         }
+
+        @Override
+        public void sync(
+            ConfigPath configPath,
+            DryRunSignalsResult result,
+            java.util.function.Consumer<String> outputConsumer
+        ) {
+        }
     }
 
     private static final class RecordingTelegramBetConfirmationService extends TelegramBetConfirmationService {
@@ -452,6 +480,15 @@ class StartCommandTest {
 
         @Override
         public void sync(ConfigPath configPath, DryRunSignalsResult result) {
+            syncedResults.add(result);
+        }
+
+        @Override
+        public void sync(
+            ConfigPath configPath,
+            DryRunSignalsResult result,
+            java.util.function.Consumer<String> outputConsumer
+        ) {
             syncedResults.add(result);
         }
 
@@ -477,6 +514,16 @@ class StartCommandTest {
             DryRunSignalsResult result = results.get(Math.min(index, results.size() - 1));
             index++;
             return result;
+        }
+
+        @Override
+        public DryRunSignalsResult run(
+            ConfigPath configPath,
+            boolean sendTelegramAlerts,
+            boolean logSuppressedTelegramAlerts,
+            java.util.function.Consumer<String> outputConsumer
+        ) {
+            return run(configPath, sendTelegramAlerts, logSuppressedTelegramAlerts);
         }
 
         private List<Boolean> logSuppressedTelegramAlerts() {

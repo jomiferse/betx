@@ -354,6 +354,87 @@ class BetfairRestGatewayTest {
 
         assertThat(result.accepted()).isTrue();
         assertThat(result.message()).contains("bet-1");
+        assertThat(result.externalOrderId()).isEqualTo("bet-1");
+        server.verify();
+    }
+
+    @Test
+    void readsExposureFromCurrentAndClearedOrders() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        BetfairRestGateway gateway = new BetfairRestGateway(builder, new ObjectMapper().findAndRegisterModules());
+        server.expect(requestTo("https://api.betfair.com/exchange/betting/json-rpc/v1"))
+            .andExpect(content().json("""
+                {
+                  "method": "SportsAPING/v1.0/listCurrentOrders",
+                  "params": {}
+                }
+                """))
+            .andRespond(withSuccess("""
+                {
+                  "jsonrpc": "2.0",
+                  "result": {
+                    "currentOrders": [
+                      {
+                        "betId": "manual-1",
+                        "marketId": "1.111",
+                        "selectionId": 42,
+                        "side": "BACK",
+                        "priceSize": {"price": 2.50, "size": 4.00},
+                        "sizeMatched": 2.00,
+                        "sizeRemaining": 2.00
+                      },
+                      {
+                        "betId": "manual-2",
+                        "marketId": "1.222",
+                        "selectionId": 43,
+                        "side": "BACK",
+                        "priceSize": {"price": 3.00, "size": 5.00},
+                        "sizeMatched": 5.00,
+                        "sizeRemaining": 0.00
+                      }
+                    ]
+                  },
+                  "id": 1
+                }
+                """, APPLICATION_JSON));
+        server.expect(requestTo("https://api.betfair.com/exchange/betting/json-rpc/v1"))
+            .andExpect(content().json("""
+                {
+                  "method": "SportsAPING/v1.0/listClearedOrders",
+                  "params": {
+                    "betStatus": "SETTLED",
+                    "groupBy": "BET",
+                    "settledDateRange": {
+                      "from": "2026-06-05T00:00:00Z"
+                    }
+                  }
+                }
+                """))
+            .andRespond(withSuccess("""
+                {
+                  "jsonrpc": "2.0",
+                  "result": {
+                    "clearedOrders": [
+                      {"betId": "settled-1", "profit": -3.50},
+                      {"betId": "settled-2", "profit": 1.25}
+                    ]
+                  },
+                  "id": 1
+                }
+                """, APPLICATION_JSON));
+
+        var exposure = gateway.readExposure(
+            new BetfairSession("session-token", "app-key"),
+            java.time.Instant.parse("2026-06-05T00:00:00Z")
+        );
+
+        assertThat(exposure.available()).isTrue();
+        assertThat(exposure.openPositions()).isEqualTo(2);
+        assertThat(exposure.currentExposure()).isEqualByComparingTo("9.00");
+        assertThat(exposure.realizedProfitLoss()).isEqualByComparingTo("-2.25");
+        assertThat(exposure.settledExternalOrderIds()).containsExactlyInAnyOrder("settled-1", "settled-2");
+        assertThat(exposure.positions()).hasSize(2);
         server.verify();
     }
 

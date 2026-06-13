@@ -156,7 +156,21 @@ public class OpenRouterMatchIntelligenceGateway implements ExternalMatchIntellig
             + "Technical score: " + analysis.score().value() + "/100\n"
             + "Technical reasons: " + String.join("; ", analysis.score().reasons()) + "\n"
             + "Auto-betting enabled: " + request.autoBettingEnabled() + "\n"
-            + "Telegram confirmation required: " + request.requestConfirmation() + "\n";
+            + "Telegram confirmation required: " + request.requestConfirmation() + "\n"
+            + "Automatic execution policy: " + automaticExecutionPolicy(request) + "\n";
+    }
+
+    private String automaticExecutionPolicy(MatchIntelligenceRequest request) {
+        if (!request.autoBettingEnabled()) {
+            return "no live order can be placed because auto-betting is disabled.";
+        }
+        if (request.requestConfirmation()) {
+            return "Telegram confirmation is required before any live order.";
+        }
+        return switch (request.config().autoBettingPolicy()) {
+            case STRICT_APPROVE -> "only APPROVE may place a live order.";
+            case BLOCK_ONLY_ON_REJECT -> "WATCH may proceed; REJECT and UNAVAILABLE block live orders.";
+        };
     }
 
     private MatchIntelligenceAssessment parseResponse(MatchIntelligenceRequest request, JsonNode response) {

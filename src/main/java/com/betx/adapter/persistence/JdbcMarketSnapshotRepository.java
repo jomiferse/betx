@@ -13,8 +13,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /** JDBC-backed SQLite repository for normalized market snapshots. */
@@ -23,6 +26,7 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
     private static final String DEFAULT_DATABASE_PATH = "./data/betx.db";
 
     private final String databasePath;
+    private final Set<String> initializedDatabases = Collections.synchronizedSet(new HashSet<>());
 
     public JdbcMarketSnapshotRepository() {
         this(DEFAULT_DATABASE_PATH);
@@ -46,8 +50,8 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
 
     @Override
     public Optional<ObservedMarketSnapshot> findLatest(String databasePath, String exchange, String marketId, long selectionId) {
+        ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT observed_at, exchange, market_id, market_name, event_name, competition_name, market_start_time,
                        runner_name,
@@ -77,8 +81,8 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
         if (limit <= 0) {
             return List.of();
         }
+        ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT observed_at, exchange, market_id, market_name, event_name, competition_name, market_start_time,
                        runner_name,
@@ -107,8 +111,8 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
 
     @Override
     public void save(String databasePath, ObservedMarketSnapshot observed) {
+        ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
             MarketSnapshot snapshot = observed.snapshot();
             try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO market_snapshots (
@@ -137,8 +141,65 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
         }
     }
 
+    @Override
+    public int deleteExpiredMarkets(String databasePath, Instant marketStartTimeBefore) {
+        if (marketStartTimeBefore == null) {
+            return 0;
+        }
+        ensureSchemaInitialized(databasePath);
+        try (Connection connection = connection(databasePath)) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                DELETE FROM market_snapshots
+                WHERE market_start_time IS NOT NULL AND market_start_time < ?
+                """)) {
+                statement.setString(1, marketStartTimeBefore.toString());
+                return statement.executeUpdate();
+            }
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not delete expired market snapshots.", exc);
+        }
+    }
+
+    @Override
+    public int deleteMarket(String databasePath, String exchange, String marketId) {
+        if (exchange == null || exchange.isBlank() || marketId == null || marketId.isBlank()) {
+            return 0;
+        }
+        ensureSchemaInitialized(databasePath);
+        try (Connection connection = connection(databasePath)) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                DELETE FROM market_snapshots
+                WHERE exchange = ? AND market_id = ?
+                """)) {
+                statement.setString(1, exchange);
+                statement.setString(2, marketId);
+                return statement.executeUpdate();
+            }
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not delete market snapshots.", exc);
+        }
+    }
+
+    private void ensureSchemaInitialized(String path) {
+        String resolvedPath = resolvedDatabasePath(path);
+        if (initializedDatabases.contains(resolvedPath)) {
+            return;
+        }
+        synchronized (initializedDatabases) {
+            if (initializedDatabases.contains(resolvedPath)) {
+                return;
+            }
+            try (Connection connection = connection(resolvedPath)) {
+                ensureSchema(connection);
+                initializedDatabases.add(resolvedPath);
+            } catch (SQLException exc) {
+                throw new IllegalStateException("Could not initialize market snapshot schema.", exc);
+            }
+        }
+    }
+
     private Connection connection(String path) throws SQLException {
-        Path database = Path.of(path);
+        Path database = Path.of(resolvedDatabasePath(path));
         Path parent = database.toAbsolutePath().getParent();
         if (parent != null) {
             try {
@@ -147,7 +208,14 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
                 throw new IllegalStateException("Could not create data directory: " + parent, exc);
             }
         }
-        return DriverManager.getConnection("jdbc:sqlite:" + path);
+        return DriverManager.getConnection("jdbc:sqlite:" + database);
+    }
+
+    private String resolvedDatabasePath(String path) {
+        return Path.of(path == null || path.isBlank() ? databasePath : path)
+            .toAbsolutePath()
+            .normalize()
+            .toString();
     }
 
     private void ensureSchema(Connection connection) throws SQLException {

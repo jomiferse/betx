@@ -1,6 +1,7 @@
 package com.betx.application.port.out;
 
 import com.betx.domain.signal.ObservedMarketSnapshot;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -13,4 +14,12 @@ public interface MarketSnapshotRepository {
     }
 
     void save(String databasePath, ObservedMarketSnapshot snapshot);
+
+    default int deleteExpiredMarkets(String databasePath, Instant marketStartTimeBefore) {
+        return 0;
+    }
+
+    default int deleteMarket(String databasePath, String exchange, String marketId) {
+        return 0;
+    }
 }

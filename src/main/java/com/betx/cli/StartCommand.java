@@ -24,6 +24,8 @@ import picocli.CommandLine.Option;
 @Component
 @Command(name = "start", description = "Start BetX market scanning.")
 public class StartCommand implements Runnable {
+    private static final int ONCE_CONFIRMATION_DRAIN_POLLS = 1;
+
     private final StartBetxService startBetxService;
     private final RunDryRunSignalsService dryRunSignalsService;
     private final StartupStatusRenderer renderer;
@@ -96,15 +98,15 @@ public class StartCommand implements Runnable {
         boolean firstCycle = true;
         do {
             boolean sendTelegramAlerts = !requestConfirmation && (once || !firstCycle);
-            DryRunSignalsResult result = dryRunSignalsService.run(config, sendTelegramAlerts, !requestConfirmation);
+            DryRunSignalsResult result = dryRunSignalsService.run(config, sendTelegramAlerts, !requestConfirmation, System.out::println);
             if (requestConfirmation) {
-                telegramBetConfirmationService.sync(config, result);
+                telegramBetConfirmationService.sync(config, result, System.out::println);
             }
             printResult(result, status.autoBettingEnabled(), status.requestConfirmation());
             if (once) {
                 if (requestConfirmation && !result.signals().isEmpty()) {
-                    System.out.println("Waiting briefly for Telegram confirmation buttons...");
-                    waitForNextCycle(config, status.pollIntervalSeconds(), true);
+                    System.out.println("Waiting briefly for Telegram confirmation updates...");
+                    waitForNextCycle(config, callbackPollSeconds * ONCE_CONFIRMATION_DRAIN_POLLS, true);
                 }
                 return;
             }
@@ -227,7 +229,7 @@ public class StartCommand implements Runnable {
             }
             remainingMillis -= pauseMillis;
             if (liveMode) {
-                telegramBetConfirmationService.sync(config, new DryRunSignalsResult(List.of(), List.of(), false));
+                telegramBetConfirmationService.sync(config, new DryRunSignalsResult(List.of(), List.of(), false), System.out::println);
             }
         }
         return true;

@@ -59,4 +59,12 @@ class BetxConfigTest {
         assertThat(config.marketData().eventTypeIds()).containsExactly("1");
         assertThat(config.marketData().marketTypeCodes()).containsExactly("MATCH_ODDS");
     }
+
+    @Test
+    void providesDefaultMarketSnapshotCleanupPolicy() {
+        BetxConfig config = BetxConfig.defaults();
+
+        assertThat(config.storage().cleanupMarketSnapshotsEnabled()).isTrue();
+        assertThat(config.storage().marketSnapshotRetentionHours()).isEqualTo(48);
+    }
 }

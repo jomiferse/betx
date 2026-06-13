@@ -1,5 +1,6 @@
 package com.betx.domain.config;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -196,6 +197,30 @@ class BetxConfigValidatorTest {
     void acceptsInlineOpenRouterApiKeyInApiKey() {
         BetxConfig config = BetxConfig.defaults()
             .withIntelligence(new IntelligenceConfig(true, "openrouter", "x-ai/grok-4.3", "OPENROUTER_API_KEY", "sk-or-v1-secret", 20, 70));
+
+        assertThatCode(() -> validator.validate(config)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void defaultsMissingIntelligenceAutoBettingPolicyToStrictApprove() {
+        IntelligenceConfig config = new IntelligenceConfig(true, "openrouter", "x-ai/grok-4.3", "OPENROUTER_API_KEY", null, 20, 70);
+
+        assertThat(config.autoBettingPolicy()).isEqualTo(IntelligenceAutoBettingPolicy.STRICT_APPROVE);
+    }
+
+    @Test
+    void acceptsBlockOnlyOnRejectIntelligenceAutoBettingPolicy() {
+        BetxConfig config = BetxConfig.defaults()
+            .withIntelligence(new IntelligenceConfig(
+                true,
+                "openrouter",
+                "x-ai/grok-4.3",
+                "OPENROUTER_API_KEY",
+                null,
+                20,
+                70,
+                IntelligenceAutoBettingPolicy.BLOCK_ONLY_ON_REJECT
+            ));
 
         assertThatCode(() -> validator.validate(config)).doesNotThrowAnyException();
     }

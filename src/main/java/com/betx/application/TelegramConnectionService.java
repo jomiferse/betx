@@ -4,6 +4,7 @@ import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.EnvironmentProvider;
 import com.betx.application.port.out.TelegramBotGateway;
 import com.betx.application.port.out.TelegramParseMode;
+import com.betx.application.port.out.TelegramStateRepository;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.telegram.TelegramConnectionContext;
@@ -29,6 +30,7 @@ public class TelegramConnectionService {
     private final BetxConfigRepository configRepository;
     private final EnvironmentProvider environment;
     private final TelegramBotGateway telegramGateway;
+    private final TelegramStateRepository telegramStateRepository;
     private final Clock clock;
     private final Supplier<String> linkCodeFactory;
 
@@ -36,9 +38,32 @@ public class TelegramConnectionService {
     public TelegramConnectionService(
         BetxConfigRepository configRepository,
         EnvironmentProvider environment,
+        TelegramBotGateway telegramGateway,
+        TelegramStateRepository telegramStateRepository
+    ) {
+        this(
+            configRepository,
+            environment,
+            telegramGateway,
+            telegramStateRepository,
+            Clock.systemUTC(),
+            TelegramConnectionService::secureLinkCode
+        );
+    }
+
+    public TelegramConnectionService(
+        BetxConfigRepository configRepository,
+        EnvironmentProvider environment,
         TelegramBotGateway telegramGateway
     ) {
-        this(configRepository, environment, telegramGateway, Clock.systemUTC(), TelegramConnectionService::secureLinkCode);
+        this(
+            configRepository,
+            environment,
+            telegramGateway,
+            new NoopTelegramStateRepository(),
+            Clock.systemUTC(),
+            TelegramConnectionService::secureLinkCode
+        );
     }
 
     public TelegramConnectionService(
@@ -47,19 +72,38 @@ public class TelegramConnectionService {
         TelegramBotGateway telegramGateway,
         Clock clock
     ) {
-        this(configRepository, environment, telegramGateway, clock, TelegramConnectionService::secureLinkCode);
+        this(
+            configRepository,
+            environment,
+            telegramGateway,
+            new NoopTelegramStateRepository(),
+            clock,
+            TelegramConnectionService::secureLinkCode
+        );
     }
 
     public TelegramConnectionService(
         BetxConfigRepository configRepository,
         EnvironmentProvider environment,
         TelegramBotGateway telegramGateway,
+        TelegramStateRepository telegramStateRepository,
+        Clock clock
+    ) {
+        this(configRepository, environment, telegramGateway, telegramStateRepository, clock, TelegramConnectionService::secureLinkCode);
+    }
+
+    public TelegramConnectionService(
+        BetxConfigRepository configRepository,
+        EnvironmentProvider environment,
+        TelegramBotGateway telegramGateway,
+        TelegramStateRepository telegramStateRepository,
         Clock clock,
         Supplier<String> linkCodeFactory
     ) {
         this.configRepository = configRepository;
         this.environment = environment;
         this.telegramGateway = telegramGateway;
+        this.telegramStateRepository = telegramStateRepository == null ? new NoopTelegramStateRepository() : telegramStateRepository;
         this.clock = clock;
         this.linkCodeFactory = linkCodeFactory;
     }
@@ -104,23 +148,30 @@ public class TelegramConnectionService {
         String botUsername = resolveBotUsername(config, token);
         String linkCode = linkCodeFactory.get();
         String deepLink = buildDeepLink(botUsername, linkCode);
+        String databasePath = config.storage().path();
 
         configRepository.saveTelegramFields(configPath, Map.of("bot_token", token, "bot_username", botUsername, "pending_link_code", linkCode));
         deepLinkConsumer.accept(deepLink);
 
         long deadline = System.currentTimeMillis() + Math.max(timeoutSeconds, 0L) * 1000L;
-        Long offset = null;
+        long lastProcessedUpdateId = telegramStateRepository.loadLastProcessedUpdateId(databasePath);
+        Long offset = lastProcessedUpdateId == 0L ? null : lastProcessedUpdateId + 1L;
         do {
             var updates = telegramGateway.getUpdates(token, offset, 10);
-            if (!updates.isEmpty()) {
-                offset = updates.stream().mapToLong(TelegramUpdate::updateId).max().orElse(0L) + 1L;
-            }
+            long acknowledgedUpdateId = lastProcessedUpdateId;
             for (TelegramUpdate update : updates) {
                 if (linkCode.equals(update.startPayload())) {
+                    telegramStateRepository.saveLastProcessedUpdateId(databasePath, update.updateId());
                     configRepository.saveTelegramFields(configPath, connectedFields(update));
                     telegramGateway.sendMessage(token, update.chatId(), CONFIRMATION_MESSAGE);
                     return new TelegramConnectionResult(true, deepLink, update.chatId());
                 }
+                acknowledgedUpdateId = Math.max(acknowledgedUpdateId, update.updateId());
+            }
+            if (acknowledgedUpdateId > lastProcessedUpdateId) {
+                lastProcessedUpdateId = acknowledgedUpdateId;
+                telegramStateRepository.saveLastProcessedUpdateId(databasePath, lastProcessedUpdateId);
+                offset = lastProcessedUpdateId + 1L;
             }
             if (timeoutSeconds > 0) {
                 sleepBriefly();
@@ -286,6 +337,17 @@ public class TelegramConnectionService {
         } catch (InterruptedException exc) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Telegram connection interrupted.", exc);
+        }
+    }
+
+    private static final class NoopTelegramStateRepository implements TelegramStateRepository {
+        @Override
+        public long loadLastProcessedUpdateId(String databasePath) {
+            return 0L;
+        }
+
+        @Override
+        public void saveLastProcessedUpdateId(String databasePath, long updateId) {
         }
     }
 }

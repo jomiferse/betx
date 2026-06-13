@@ -1,8 +1,9 @@
 package com.betx.adapter.persistence;
 
-import com.betx.application.port.out.TelegramBetIntentRepository;
-import com.betx.domain.telegram.TelegramBetIntent;
-import com.betx.domain.telegram.TelegramBetIntentStage;
+import com.betx.application.port.out.BetIntentRepository;
+import com.betx.domain.order.BetIntent;
+import com.betx.domain.order.BetIntentSource;
+import com.betx.domain.order.BetIntentStage;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.file.Files;
@@ -14,34 +15,37 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
 /** JDBC-backed SQLite repository for live bet confirmations. */
 @Component
-public class JdbcTelegramBetIntentRepository implements TelegramBetIntentRepository {
+public class JdbcBetIntentRepository implements BetIntentRepository {
     private static final String DEFAULT_DATABASE_PATH = "./data/betx.db";
-    private static final String LAST_UPDATE_ID_KEY = "telegram_last_processed_update_id";
 
     private final String databasePath;
+    private final Set<String> initializedDatabases = Collections.synchronizedSet(new HashSet<>());
 
-    public JdbcTelegramBetIntentRepository() {
+    public JdbcBetIntentRepository() {
         this(DEFAULT_DATABASE_PATH);
     }
 
-    public JdbcTelegramBetIntentRepository(String databasePath) {
+    public JdbcBetIntentRepository(String databasePath) {
         this.databasePath = databasePath == null || databasePath.isBlank() ? DEFAULT_DATABASE_PATH : databasePath;
     }
 
     @Override
-    public Optional<TelegramBetIntent> findActiveByKey(String databasePath, String exchange, String marketId, long selectionId) {
+    public Optional<BetIntent> findActiveByKey(String databasePath, String exchange, String marketId, long selectionId) {
+        ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT *
-                FROM telegram_bet_intents
+                FROM bet_intents
                 WHERE exchange = ? AND market_id = ? AND selection_id = ? AND stage IN ('AWAITING_CONFIRMATION', 'AWAITING_STAKE')
                 ORDER BY created_at DESC
                 LIMIT 1
@@ -62,18 +66,18 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
     }
 
     @Override
-    public Optional<TelegramBetIntent> findLatestByKeySince(
+    public Optional<BetIntent> findLatestByKeySince(
         String databasePath,
         String exchange,
         String marketId,
         long selectionId,
         Instant since
     ) {
+        ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT *
-                FROM telegram_bet_intents
+                FROM bet_intents
                 WHERE exchange = ? AND market_id = ? AND selection_id = ? AND updated_at >= ?
                 ORDER BY updated_at DESC
                 LIMIT 1
@@ -95,12 +99,12 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
     }
 
     @Override
-    public Optional<TelegramBetIntent> findById(String databasePath, String id) {
+    public Optional<BetIntent> findById(String databasePath, String id) {
+        ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT *
-                FROM telegram_bet_intents
+                FROM bet_intents
                 WHERE id = ?
                 LIMIT 1
                 """)) {
@@ -118,18 +122,18 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
     }
 
     @Override
-    public List<TelegramBetIntent> listRecent(String databasePath, int limit) {
+    public List<BetIntent> listRecent(String databasePath, int limit) {
+        ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT *
-                FROM telegram_bet_intents
+                FROM bet_intents
                 ORDER BY updated_at DESC
                 LIMIT ?
                 """)) {
                 statement.setInt(1, Math.max(1, limit));
                 try (ResultSet resultSet = statement.executeQuery()) {
-                    List<TelegramBetIntent> intents = new java.util.ArrayList<>();
+                    List<BetIntent> intents = new java.util.ArrayList<>();
                     while (resultSet.next()) {
                         intents.add(map(resultSet));
                     }
@@ -142,16 +146,16 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
     }
 
     @Override
-    public List<TelegramBetIntent> listByStages(String databasePath, List<TelegramBetIntentStage> stages, int limit) {
+    public List<BetIntent> listByStages(String databasePath, List<BetIntentStage> stages, int limit) {
         if (stages == null || stages.isEmpty()) {
             return List.of();
         }
         String placeholders = stages.stream().map(stage -> "?").collect(Collectors.joining(", "));
+        ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT *
-                FROM telegram_bet_intents
+                FROM bet_intents
                 WHERE stage IN (%s)
                 ORDER BY updated_at DESC
                 LIMIT ?
@@ -159,7 +163,7 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
                 bindStages(statement, stages);
                 statement.setInt(stages.size() + 1, Math.max(1, limit));
                 try (ResultSet resultSet = statement.executeQuery()) {
-                    List<TelegramBetIntent> intents = new java.util.ArrayList<>();
+                    List<BetIntent> intents = new java.util.ArrayList<>();
                     while (resultSet.next()) {
                         intents.add(map(resultSet));
                     }
@@ -172,16 +176,16 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
     }
 
     @Override
-    public long countByStages(String databasePath, List<TelegramBetIntentStage> stages) {
+    public long countByStages(String databasePath, List<BetIntentStage> stages) {
         if (stages == null || stages.isEmpty()) {
             return 0L;
         }
         String placeholders = stages.stream().map(stage -> "?").collect(Collectors.joining(", "));
+        ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT COUNT(*) AS total
-                FROM telegram_bet_intents
+                FROM bet_intents
                 WHERE stage IN (%s)
                 """.formatted(placeholders))) {
                 bindStages(statement, stages);
@@ -195,12 +199,12 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
     }
 
     @Override
-    public BigDecimal sumSelectedStakeByStageSince(String databasePath, TelegramBetIntentStage stage, Instant since) {
+    public BigDecimal sumSelectedStakeByStageSince(String databasePath, BetIntentStage stage, Instant since) {
+        ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT selected_stake
-                FROM telegram_bet_intents
+                FROM bet_intents
                 WHERE stage = ? AND updated_at >= ? AND selected_stake IS NOT NULL
                 """)) {
                 statement.setString(1, stage.name());
@@ -219,70 +223,30 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
     }
 
     @Override
-    public void save(String databasePath, TelegramBetIntent intent) {
+    public void save(String databasePath, BetIntent intent) {
         upsert(databasePath, intent, false);
     }
 
     @Override
-    public void update(String databasePath, TelegramBetIntent intent) {
+    public void update(String databasePath, BetIntent intent) {
         upsert(databasePath, intent, true);
     }
 
-    @Override
-    public long loadLastProcessedUpdateId(String databasePath) {
+    private void upsert(String databasePath, BetIntent intent, boolean update) {
+        ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
-            try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT state_value
-                FROM telegram_state
-                WHERE state_key = ?
-                LIMIT 1
-                """)) {
-                statement.setString(1, LAST_UPDATE_ID_KEY);
-                try (ResultSet resultSet = statement.executeQuery()) {
-                    if (!resultSet.next()) {
-                        return 0L;
-                    }
-                    return Long.parseLong(resultSet.getString("state_value"));
-                }
-            }
-        } catch (SQLException exc) {
-            throw new IllegalStateException("Could not read Telegram state.", exc);
-        }
-    }
-
-    @Override
-    public void saveLastProcessedUpdateId(String databasePath, long updateId) {
-        try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
-            try (PreparedStatement statement = connection.prepareStatement("""
-                INSERT INTO telegram_state (state_key, state_value)
-                VALUES (?, ?)
-                ON CONFLICT(state_key) DO UPDATE SET state_value = excluded.state_value
-                """)) {
-                statement.setString(1, LAST_UPDATE_ID_KEY);
-                statement.setString(2, String.valueOf(updateId));
-                statement.executeUpdate();
-            }
-        } catch (SQLException exc) {
-            throw new IllegalStateException("Could not save Telegram state.", exc);
-        }
-    }
-
-    private void upsert(String databasePath, TelegramBetIntent intent, boolean update) {
-        try (Connection connection = connection(databasePath)) {
-            ensureSchema(connection);
             String sql = update ? """
-                UPDATE telegram_bet_intents
-                SET exchange = ?, market_id = ?, selection_id = ?, event_name = ?, market_name = ?, runner_name = ?,
+                UPDATE bet_intents
+                SET source = ?, exchange = ?, market_id = ?, selection_id = ?, event_name = ?, market_name = ?, runner_name = ?,
                     reason = ?, odds = ?, max_stake = ?, available_balance = ?, selected_stake = ?, stage = ?,
-                    result_message = ?, created_at = ?, updated_at = ?
+                    result_message = ?, external_order_id = ?, created_at = ?, updated_at = ?
                 WHERE id = ?
                 """ : """
-                INSERT INTO telegram_bet_intents (
-                    id, exchange, market_id, selection_id, event_name, market_name, runner_name,
-                    reason, odds, max_stake, available_balance, selected_stake, stage, result_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO bet_intents (
+                    id, source, exchange, market_id, selection_id, event_name, market_name, runner_name,
+                    reason, odds, max_stake, available_balance, selected_stake, stage, result_message,
+                    external_order_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 if (update) {
@@ -297,8 +261,29 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
         }
     }
 
-    private void bindIntentInsert(PreparedStatement statement, TelegramBetIntent intent) throws SQLException {
+    private void bindIntentInsert(PreparedStatement statement, BetIntent intent) throws SQLException {
         statement.setString(1, intent.id());
+        statement.setString(2, intent.source().name());
+        statement.setString(3, intent.exchange());
+        statement.setString(4, intent.marketId());
+        statement.setLong(5, intent.selectionId());
+        statement.setString(6, intent.eventName());
+        statement.setString(7, intent.marketName());
+        statement.setString(8, intent.runnerName());
+        statement.setString(9, intent.reason());
+        setDecimal(statement, 10, intent.odds());
+        setDecimal(statement, 11, intent.maxStake());
+        setDecimal(statement, 12, intent.availableBalance());
+        setDecimal(statement, 13, intent.selectedStake());
+        statement.setString(14, intent.stage().name());
+        statement.setString(15, intent.resultMessage());
+        statement.setString(16, intent.externalOrderId());
+        statement.setString(17, intent.createdAt().toString());
+        statement.setString(18, intent.updatedAt().toString());
+    }
+
+    private void bindIntentUpdate(PreparedStatement statement, BetIntent intent) throws SQLException {
+        statement.setString(1, intent.source().name());
         statement.setString(2, intent.exchange());
         statement.setString(3, intent.marketId());
         statement.setLong(4, intent.selectionId());
@@ -312,31 +297,32 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
         setDecimal(statement, 12, intent.selectedStake());
         statement.setString(13, intent.stage().name());
         statement.setString(14, intent.resultMessage());
-        statement.setString(15, intent.createdAt().toString());
-        statement.setString(16, intent.updatedAt().toString());
+        statement.setString(15, intent.externalOrderId());
+        statement.setString(16, intent.createdAt().toString());
+        statement.setString(17, intent.updatedAt().toString());
+        statement.setString(18, intent.id());
     }
 
-    private void bindIntentUpdate(PreparedStatement statement, TelegramBetIntent intent) throws SQLException {
-        statement.setString(1, intent.exchange());
-        statement.setString(2, intent.marketId());
-        statement.setLong(3, intent.selectionId());
-        statement.setString(4, intent.eventName());
-        statement.setString(5, intent.marketName());
-        statement.setString(6, intent.runnerName());
-        statement.setString(7, intent.reason());
-        setDecimal(statement, 8, intent.odds());
-        setDecimal(statement, 9, intent.maxStake());
-        setDecimal(statement, 10, intent.availableBalance());
-        setDecimal(statement, 11, intent.selectedStake());
-        statement.setString(12, intent.stage().name());
-        statement.setString(13, intent.resultMessage());
-        statement.setString(14, intent.createdAt().toString());
-        statement.setString(15, intent.updatedAt().toString());
-        statement.setString(16, intent.id());
+    private void ensureSchemaInitialized(String path) {
+        String resolvedPath = resolvedDatabasePath(path);
+        if (initializedDatabases.contains(resolvedPath)) {
+            return;
+        }
+        synchronized (initializedDatabases) {
+            if (initializedDatabases.contains(resolvedPath)) {
+                return;
+            }
+            try (Connection connection = connection(resolvedPath)) {
+                ensureSchema(connection);
+                initializedDatabases.add(resolvedPath);
+            } catch (SQLException exc) {
+                throw new IllegalStateException("Could not initialize bet intent schema.", exc);
+            }
+        }
     }
 
     private Connection connection(String path) throws SQLException {
-        Path database = Path.of(path == null || path.isBlank() ? databasePath : path);
+        Path database = Path.of(resolvedDatabasePath(path));
         Path parent = database.toAbsolutePath().getParent();
         if (parent != null) {
             try {
@@ -348,11 +334,19 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
         return DriverManager.getConnection("jdbc:sqlite:" + database);
     }
 
+    private String resolvedDatabasePath(String path) {
+        return Path.of(path == null || path.isBlank() ? databasePath : path)
+            .toAbsolutePath()
+            .normalize()
+            .toString();
+    }
+
     private void ensureSchema(Connection connection) throws SQLException {
         try (Statement statement = connection.createStatement()) {
             statement.executeUpdate("""
-                CREATE TABLE IF NOT EXISTS telegram_bet_intents (
+                CREATE TABLE IF NOT EXISTS bet_intents (
                     id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
                     exchange TEXT NOT NULL,
                     market_id TEXT NOT NULL,
                     selection_id INTEGER NOT NULL,
@@ -366,27 +360,25 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
                     selected_stake TEXT,
                     stage TEXT NOT NULL,
                     result_message TEXT,
+                    external_order_id TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """);
-            addColumnIfMissing(connection, "telegram_bet_intents", "result_message", "TEXT");
+            addColumnIfMissing(connection, "bet_intents", "source", "TEXT NOT NULL DEFAULT 'TELEGRAM_CONFIRMATION'");
+            addColumnIfMissing(connection, "bet_intents", "result_message", "TEXT");
+            addColumnIfMissing(connection, "bet_intents", "external_order_id", "TEXT");
             statement.executeUpdate("""
-                CREATE INDEX IF NOT EXISTS idx_telegram_bet_intents_active
-                ON telegram_bet_intents(exchange, market_id, selection_id, stage, created_at DESC)
-                """);
-            statement.executeUpdate("""
-                CREATE TABLE IF NOT EXISTS telegram_state (
-                    state_key TEXT PRIMARY KEY,
-                    state_value TEXT NOT NULL
-                )
+                CREATE INDEX IF NOT EXISTS idx_bet_intents_active
+                ON bet_intents(exchange, market_id, selection_id, stage, created_at DESC)
                 """);
         }
     }
 
-    private TelegramBetIntent map(ResultSet resultSet) throws SQLException {
-        return new TelegramBetIntent(
+    private BetIntent map(ResultSet resultSet) throws SQLException {
+        return new BetIntent(
             resultSet.getString("id"),
+            BetIntentSource.valueOf(resultSet.getString("source")),
             resultSet.getString("exchange"),
             resultSet.getString("market_id"),
             resultSet.getLong("selection_id"),
@@ -399,13 +391,14 @@ public class JdbcTelegramBetIntentRepository implements TelegramBetIntentReposit
             decimal(resultSet, "available_balance"),
             decimal(resultSet, "selected_stake"),
             resultSet.getString("result_message"),
-            TelegramBetIntentStage.valueOf(resultSet.getString("stage")),
+            resultSet.getString("external_order_id"),
+            BetIntentStage.valueOf(resultSet.getString("stage")),
             Instant.parse(resultSet.getString("created_at")),
             Instant.parse(resultSet.getString("updated_at"))
         );
     }
 
-    private void bindStages(PreparedStatement statement, List<TelegramBetIntentStage> stages) throws SQLException {
+    private void bindStages(PreparedStatement statement, List<BetIntentStage> stages) throws SQLException {
         for (int index = 0; index < stages.size(); index++) {
             statement.setString(index + 1, stages.get(index).name());
         }
