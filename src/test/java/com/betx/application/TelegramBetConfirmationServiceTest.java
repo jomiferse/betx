@@ -402,6 +402,44 @@ class TelegramBetConfirmationServiceTest {
     }
 
     @Test
+    void automaticBettingStopsCurrentCycleWhenOpenPositionCapacityIsFilled() {
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        CountingAccountGateway accountGateway = new CountingAccountGateway(BigDecimal.valueOf(12.5));
+        CountingExposureGateway exposureGateway = new CountingExposureGateway(new ExchangeExposure(
+            true,
+            0,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            List.of(),
+            Set.of(),
+            null
+        ));
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(1), BigDecimal.valueOf(25), 5, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            accountGateway,
+            exposureGateway,
+            executionGateway
+        );
+        List<BetSignal> signals = java.util.stream.IntStream.range(0, 20)
+            .mapToObj(index -> signal("betfair", "1." + index, 42L + index, BigDecimal.valueOf(2.5), BigDecimal.ONE))
+            .toList();
+        List<RunnerAnalysis> analyses = java.util.stream.IntStream.range(0, 20)
+            .mapToObj(index -> analysis("Runner " + index, "1." + index, 42L + index))
+            .toList();
+
+        service.sync(CONFIG_PATH, resultOf(signals, analyses));
+
+        assertThat(executionGateway.orders()).hasSize(5);
+        assertThat(intents.saved()).hasSize(5);
+        assertThat(exposureGateway.calls()).isEqualTo(1);
+        assertThat(accountGateway.calls()).isEqualTo(1);
+    }
+
+    @Test
     void skipsRecentIntentForSameSelectionDuringCooldown() {
         RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
         RecordingTelegramGateway gateway = new RecordingTelegramGateway();
@@ -1148,6 +1186,22 @@ class TelegramBetConfirmationServiceTest {
         );
     }
 
+    private DryRunSignalsResult resultOf(List<BetSignal> signals, List<RunnerAnalysis> analyses) {
+        return new DryRunSignalsResult(
+            signals,
+            List.of(),
+            false,
+            0,
+            0,
+            List.of(),
+            analyses,
+            0,
+            0,
+            0,
+            0
+        );
+    }
+
     private DryRunSignalsResult resultWithHistory(BetSignal signal, RunnerAnalysis analysis) {
         return new DryRunSignalsResult(
             List.of(signal),
@@ -1593,6 +1647,25 @@ class TelegramBetConfirmationServiceTest {
         }
     }
 
+    private static final class CountingAccountGateway implements ExchangeAccountGateway {
+        private final BigDecimal balance;
+        private int calls;
+
+        private CountingAccountGateway(BigDecimal balance) {
+            this.balance = balance;
+        }
+
+        @Override
+        public Optional<BigDecimal> availableBalance(BetxConfig config, String exchange) {
+            calls++;
+            return Optional.of(balance);
+        }
+
+        int calls() {
+            return calls;
+        }
+    }
+
     private static final class RecordingMarketSnapshotRepository implements MarketSnapshotRepository {
         private final List<String> deletedMarkets = new ArrayList<>();
 
@@ -1670,6 +1743,25 @@ class TelegramBetConfirmationServiceTest {
         @Override
         public ExchangeExposure exposure(BetxConfig config, String exchange, Instant settledSince) {
             return exposure;
+        }
+    }
+
+    private static final class CountingExposureGateway implements ExchangeExposureGateway {
+        private final ExchangeExposure exposure;
+        private int calls;
+
+        private CountingExposureGateway(ExchangeExposure exposure) {
+            this.exposure = exposure;
+        }
+
+        @Override
+        public ExchangeExposure exposure(BetxConfig config, String exchange, Instant settledSince) {
+            calls++;
+            return exposure;
+        }
+
+        int calls() {
+            return calls;
         }
     }
 

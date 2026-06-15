@@ -77,10 +77,13 @@ public record BacktestComparisonReport(
             .map(BacktestPaperTrade::netPnl)
             .toList());
         java.math.BigDecimal closingRoi = roi(settledPaperTrades.stream()
+            .filter(trade -> trade.closingOdds() != null)
             .map(trade -> profitLoss(trade.result(), trade.closingOdds(), java.math.BigDecimal.valueOf(5)))
             .toList());
         BacktestPaperValidationStatus status;
-        if (settledPaperTrades.size() < minimum) {
+        if (clvSummary.status() == BacktestClvStatus.INSUFFICIENT_DATA) {
+            status = BacktestPaperValidationStatus.INSUFFICIENT_DATA;
+        } else if (settledPaperTrades.size() < minimum) {
             status = BacktestPaperValidationStatus.INSUFFICIENT_SAMPLE;
         } else if (clvSummary.status() == BacktestClvStatus.VALID_PROSPECTIVE) {
             if (theoreticalRoi.compareTo(java.math.BigDecimal.ZERO) > 0

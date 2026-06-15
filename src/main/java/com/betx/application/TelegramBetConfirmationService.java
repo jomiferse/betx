@@ -227,7 +227,7 @@ public class TelegramBetConfirmationService {
         BetxConfig config = configRepository.load(configPath);
         boolean confirmationRequired = confirmationRequired(config);
         expireStalePendingIntents(config);
-        reconcileSettledIntents(config);
+        Map<String, ExchangeExposure> exposureByExchange = reconcileSettledIntents(config);
         Optional<TelegramConnectionContext> context = Optional.empty();
         if (config.telegram().enabled()) {
             context = telegramConnectionService.connectionContext(configPath);
@@ -243,7 +243,7 @@ public class TelegramBetConfirmationService {
             return;
         }
 
-        executeAutomaticBets(configPath, config, result);
+        executeAutomaticBets(configPath, config, result, exposureByExchange);
     }
 
     private void expireStalePendingIntents(BetxConfig config) {
@@ -271,9 +271,11 @@ public class TelegramBetConfirmationService {
             });
     }
 
-    private void reconcileSettledIntents(BetxConfig config) {
+    private Map<String, ExchangeExposure> reconcileSettledIntents(BetxConfig config) {
+        Map<String, ExchangeExposure> exposureByExchange = new LinkedHashMap<>();
         config.enabledExchanges().forEach(exchange -> {
             ExchangeExposure exposure = exposureGateway.exposure(config, exchange.name(), todayStart());
+            exposureByExchange.put(exchange.name(), exposure);
             if (exposure == null || !exposure.available()) {
                 emit("TELEGRAM BET RECONCILIATION SKIPPED | reason=exposure_unavailable"
                     + " | exchange=" + exchange.name());
@@ -314,6 +316,7 @@ public class TelegramBetConfirmationService {
                     }
                 });
         });
+        return exposureByExchange;
     }
 
     private void offerBetConfirmations(ConfigPath configPath, BetxConfig config, DryRunSignalsResult result) {
@@ -398,7 +401,12 @@ public class TelegramBetConfirmationService {
         }
     }
 
-    private void executeAutomaticBets(ConfigPath configPath, BetxConfig config, DryRunSignalsResult result) {
+    private void executeAutomaticBets(
+        ConfigPath configPath,
+        BetxConfig config,
+        DryRunSignalsResult result,
+        Map<String, ExchangeExposure> exposureByExchange
+    ) {
         if (result == null || result.signals().isEmpty()) {
             return;
         }
@@ -406,10 +414,18 @@ public class TelegramBetConfirmationService {
             .filter(analysis -> analysis.recommendation() == RecommendationType.BET)
             .collect(Collectors.toMap(this::key, Function.identity(), (left, right) -> left, LinkedHashMap::new));
         Map<String, SignalHistoryEntry> historyByKey = historyByKey(result);
+        Map<String, AutomaticBettingExchangeState> exchangeStates = new LinkedHashMap<>();
 
         for (BetSignal signal : result.signals()) {
             BetfairAutoBettingConfig autoBetting = autoBettingConfig(config, signal.exchange());
             if (!autoBetting.enabled() || autoBetting.requestConfirmation()) {
+                continue;
+            }
+            AutomaticBettingExchangeState exchangeState = exchangeStates.computeIfAbsent(
+                signal.exchange(),
+                ignored -> automaticBettingExchangeState(config, signal.exchange(), autoBetting, exposureByExchange)
+            );
+            if (exchangeState.closed()) {
                 continue;
             }
             String key = key(signal.exchange(), signal.marketId(), signal.selectionId());
@@ -432,13 +448,22 @@ public class TelegramBetConfirmationService {
                 auditSkipped("cooldown", signal.exchange(), signal.marketId(), signal.selectionId());
                 continue;
             }
-            Optional<RiskBlock> riskBlock = exposureRiskBlock(config, signal.exchange());
-            BigDecimal stake = maxAllowedStake(config, accountGateway.availableBalance(config, signal.exchange()).orElse(null), autoBetting.maxStake());
+            Optional<RiskBlock> riskBlock = exchangeState.riskBlock();
+            BigDecimal stake = maxAllowedStake(config, exchangeState.availableBalance(), autoBetting.maxStake());
             if (riskBlock.isPresent()) {
                 auditSkipped(riskBlock.get().reason(), signal.exchange(), signal.marketId(), signal.selectionId());
                 BetIntent intent = saveAutomaticBlockedIntent(config, signal, analysis, autoBetting, stake, riskBlock.get().message(), now);
                 linkHistoryForSignal(config, historyByKey, signal, intent);
                 safeUpdateSignalHistory(config, intent);
+                exchangeState.close();
+                continue;
+            }
+            if (exchangeState.remainingOpenPositionCapacity() <= 0) {
+                auditSkipped("max_open_positions", signal.exchange(), signal.marketId(), signal.selectionId());
+                BetIntent intent = saveAutomaticBlockedIntent(config, signal, analysis, autoBetting, stake, "Open position limit reached.", now);
+                linkHistoryForSignal(config, historyByKey, signal, intent);
+                safeUpdateSignalHistory(config, intent);
+                exchangeState.close();
                 continue;
             }
             var execution = executionGateway.execute(configPath, new BetOrder(
@@ -473,11 +498,15 @@ public class TelegramBetConfirmationService {
             linkHistoryForSignal(config, historyByKey, signal, intent);
             safeUpdateSignalHistory(config, intent);
             if (execution.accepted()) {
+                exchangeState.recordAcceptedOrder();
                 emit("AUTO BET ORDER ACCEPTED | id=" + intent.id()
                     + " | stake=" + stake
                     + " | exchange=" + intent.exchange()
                     + " | marketId=" + intent.marketId()
                     + " | selectionId=" + intent.selectionId());
+                if (exchangeState.remainingOpenPositionCapacity() <= 0) {
+                    exchangeState.close();
+                }
             } else {
                 emit("AUTO BET ORDER REJECTED | id=" + intent.id()
                     + " | message=" + execution.message()
@@ -486,6 +515,21 @@ public class TelegramBetConfirmationService {
                     + " | selectionId=" + intent.selectionId());
             }
         }
+    }
+
+    private AutomaticBettingExchangeState automaticBettingExchangeState(
+        BetxConfig config,
+        String exchange,
+        BetfairAutoBettingConfig autoBetting,
+        Map<String, ExchangeExposure> exposureByExchange
+    ) {
+        ExchangeExposure exposure = exposureByExchange == null || !exposureByExchange.containsKey(exchange)
+            ? exposureGateway.exposure(config, exchange, todayStart())
+            : exposureByExchange.get(exchange);
+        Optional<RiskBlock> riskBlock = exposureRiskBlock(autoBetting, exposure);
+        BigDecimal availableBalance = riskBlock.isPresent() ? null : accountGateway.availableBalance(config, exchange).orElse(null);
+        int openPositions = exposure == null || !exposure.available() ? 0 : exposure.openPositions();
+        return new AutomaticBettingExchangeState(autoBetting.maxOpenPositions(), openPositions, availableBalance, riskBlock);
     }
 
     private void processCallbacks(ConfigPath configPath, BetxConfig config, TelegramConnectionContext context) {
@@ -754,6 +798,10 @@ public class TelegramBetConfirmationService {
     private Optional<RiskBlock> exposureRiskBlock(BetxConfig config, String exchange) {
         BetfairAutoBettingConfig autoBetting = autoBettingConfig(config, exchange);
         ExchangeExposure exposure = exposureGateway.exposure(config, exchange, todayStart());
+        return exposureRiskBlock(autoBetting, exposure);
+    }
+
+    private Optional<RiskBlock> exposureRiskBlock(BetfairAutoBettingConfig autoBetting, ExchangeExposure exposure) {
         if (exposure == null || !exposure.available()) {
             return Optional.of(new RiskBlock("exposure_unavailable", "Exposure unavailable. Bet blocked for safety."));
         }
@@ -1021,6 +1069,51 @@ public class TelegramBetConfirmationService {
     }
 
     private record RiskBlock(String reason, String message) {
+    }
+
+    private static final class AutomaticBettingExchangeState {
+        private final int maxOpenPositions;
+        private final int initialOpenPositions;
+        private final BigDecimal availableBalance;
+        private final Optional<RiskBlock> riskBlock;
+        private int acceptedOrders;
+        private boolean closed;
+
+        private AutomaticBettingExchangeState(
+            int maxOpenPositions,
+            int initialOpenPositions,
+            BigDecimal availableBalance,
+            Optional<RiskBlock> riskBlock
+        ) {
+            this.maxOpenPositions = maxOpenPositions;
+            this.initialOpenPositions = initialOpenPositions;
+            this.availableBalance = availableBalance;
+            this.riskBlock = riskBlock == null ? Optional.empty() : riskBlock;
+        }
+
+        private Optional<RiskBlock> riskBlock() {
+            return riskBlock;
+        }
+
+        private BigDecimal availableBalance() {
+            return availableBalance;
+        }
+
+        private int remainingOpenPositionCapacity() {
+            return maxOpenPositions - initialOpenPositions - acceptedOrders;
+        }
+
+        private void recordAcceptedOrder() {
+            acceptedOrders++;
+        }
+
+        private boolean closed() {
+            return closed;
+        }
+
+        private void close() {
+            closed = true;
+        }
     }
 
     private static final class NoopMarketSnapshotRepository implements MarketSnapshotRepository {

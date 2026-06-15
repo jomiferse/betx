@@ -13,6 +13,7 @@ public record MarketSnapshot(
     Instant marketStartTime,
     long selectionId,
     String runnerName,
+    RunnerType runnerType,
     BigDecimal bestBackPrice,
     BigDecimal bestLayPrice,
     BigDecimal spread,
@@ -27,7 +28,39 @@ public record MarketSnapshot(
             throw new IllegalArgumentException("selectionId must be greater than zero.");
         }
         runnerName = runnerName == null || runnerName.isBlank() ? null : runnerName.strip();
+        runnerType = runnerType == null ? RunnerType.UNKNOWN : runnerType;
         liquidity = liquidity == null ? BigDecimal.ZERO : liquidity;
+    }
+
+    public MarketSnapshot(
+        String exchange,
+        String marketId,
+        String marketName,
+        String eventName,
+        String competitionName,
+        Instant marketStartTime,
+        long selectionId,
+        String runnerName,
+        BigDecimal bestBackPrice,
+        BigDecimal bestLayPrice,
+        BigDecimal spread,
+        BigDecimal liquidity
+    ) {
+        this(
+            exchange,
+            marketId,
+            marketName,
+            eventName,
+            competitionName,
+            marketStartTime,
+            selectionId,
+            runnerName,
+            RunnerType.UNKNOWN,
+            bestBackPrice,
+            bestLayPrice,
+            spread,
+            liquidity
+        );
     }
 
     public MarketSnapshot(
@@ -52,6 +85,7 @@ public record MarketSnapshot(
             marketStartTime,
             selectionId,
             null,
+            RunnerType.UNKNOWN,
             bestBackPrice,
             bestLayPrice,
             spread,

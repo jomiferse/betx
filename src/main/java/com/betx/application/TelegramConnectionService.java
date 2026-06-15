@@ -33,6 +33,7 @@ public class TelegramConnectionService {
     private final TelegramStateRepository telegramStateRepository;
     private final Clock clock;
     private final Supplier<String> linkCodeFactory;
+    private final TelegramMessageLogWriter messageLogWriter;
 
     @Autowired
     public TelegramConnectionService(
@@ -100,12 +101,25 @@ public class TelegramConnectionService {
         Clock clock,
         Supplier<String> linkCodeFactory
     ) {
+        this(configRepository, environment, telegramGateway, telegramStateRepository, clock, linkCodeFactory, new TelegramMessageLogWriter());
+    }
+
+    public TelegramConnectionService(
+        BetxConfigRepository configRepository,
+        EnvironmentProvider environment,
+        TelegramBotGateway telegramGateway,
+        TelegramStateRepository telegramStateRepository,
+        Clock clock,
+        Supplier<String> linkCodeFactory,
+        TelegramMessageLogWriter messageLogWriter
+    ) {
         this.configRepository = configRepository;
         this.environment = environment;
         this.telegramGateway = telegramGateway;
         this.telegramStateRepository = telegramStateRepository == null ? new NoopTelegramStateRepository() : telegramStateRepository;
         this.clock = clock;
         this.linkCodeFactory = linkCodeFactory;
+        this.messageLogWriter = messageLogWriter == null ? TelegramMessageLogWriter.disabled() : messageLogWriter;
     }
 
     public String status(ConfigPath configPath) {
@@ -164,6 +178,7 @@ public class TelegramConnectionService {
                     telegramStateRepository.saveLastProcessedUpdateId(databasePath, update.updateId());
                     configRepository.saveTelegramFields(configPath, connectedFields(update));
                     telegramGateway.sendMessage(token, update.chatId(), CONFIRMATION_MESSAGE);
+                    messageLogWriter.recordSentMessage(config, CONFIRMATION_MESSAGE);
                     return new TelegramConnectionResult(true, deepLink, update.chatId());
                 }
                 acknowledgedUpdateId = Math.max(acknowledgedUpdateId, update.updateId());
@@ -192,6 +207,7 @@ public class TelegramConnectionService {
             throw new IllegalStateException("Telegram is not connected.");
         }
         telegramGateway.sendMessage(token, chatId, TEST_MESSAGE);
+        messageLogWriter.recordSentMessage(config, TEST_MESSAGE);
     }
 
     public boolean sendMessageIfConnected(ConfigPath configPath, String text) {
@@ -208,7 +224,8 @@ public class TelegramConnectionService {
         TelegramParseMode parseMode,
         Map<String, Object> replyMarkup
     ) {
-        return connectionContext(configPath)
+        BetxConfig config = configRepository.load(configPath);
+        return connectionContext(config)
             .map(context -> {
                 if (parseMode == null) {
                     if (replyMarkup == null) {
@@ -221,6 +238,7 @@ public class TelegramConnectionService {
                 } else {
                     telegramGateway.sendMessage(context.token(), context.chatId(), text, parseMode, replyMarkup);
                 }
+                messageLogWriter.recordSentMessage(config, text);
                 return true;
             })
             .orElse(false);
@@ -257,6 +275,10 @@ public class TelegramConnectionService {
 
     public Optional<TelegramConnectionContext> connectionContext(ConfigPath configPath) {
         BetxConfig config = configRepository.load(configPath);
+        return connectionContext(config);
+    }
+
+    private Optional<TelegramConnectionContext> connectionContext(BetxConfig config) {
         if (!config.telegram().enabled()) {
             return Optional.empty();
         }

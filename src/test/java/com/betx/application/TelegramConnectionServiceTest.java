@@ -6,10 +6,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.EnvironmentProvider;
 import com.betx.application.port.out.TelegramBotGateway;
+import com.betx.domain.config.AppConfig;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.TelegramConfig;
 import com.betx.domain.telegram.TelegramUpdate;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
@@ -19,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class TelegramConnectionServiceTest {
     private static final ConfigPath CONFIG_PATH = new ConfigPath(Path.of("betx.yml"));
@@ -51,6 +54,43 @@ class TelegramConnectionServiceTest {
 
         assertThat(sent).isTrue();
         assertThat(gateway.sentMessages()).containsExactly(new SentMessage("token", "12345", "hello"));
+    }
+
+    @Test
+    void logsSentTelegramMessagesWhenLogLevelIsInfo(@TempDir Path tempDir) throws Exception {
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        TelegramMessageLogWriter messageLogWriter = new TelegramMessageLogWriter(tempDir.resolve("logs").resolve("telegram"), CLOCK);
+        TelegramConnectionService service = service(
+            configWithTelegram(new TelegramConfig(true, "token", null, null, null, "12345", "2026-05-31T12:00:00Z", null, null, null), "info"),
+            Map.of(),
+            gateway,
+            messageLogWriter
+        );
+
+        boolean sent = service.sendMessageIfConnected(CONFIG_PATH, "hello\nworld");
+
+        Path logFile = tempDir.resolve("logs").resolve("telegram").resolve("messages_31052026.txt");
+        assertThat(sent).isTrue();
+        assertThat(logFile).exists();
+        assertThat(Files.readString(logFile))
+            .contains("2026-05-31T12:00:00Z | hello\\nworld");
+    }
+
+    @Test
+    void doesNotLogSentTelegramMessagesWhenLogLevelIsNotInfo(@TempDir Path tempDir) {
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        TelegramMessageLogWriter messageLogWriter = new TelegramMessageLogWriter(tempDir.resolve("logs").resolve("telegram"), CLOCK);
+        TelegramConnectionService service = service(
+            configWithTelegram(new TelegramConfig(true, "token", null, null, null, "12345", "2026-05-31T12:00:00Z", null, null, null), "warn"),
+            Map.of(),
+            gateway,
+            messageLogWriter
+        );
+
+        boolean sent = service.sendMessageIfConnected(CONFIG_PATH, "hello");
+
+        assertThat(sent).isTrue();
+        assertThat(tempDir.resolve("logs")).doesNotExist();
     }
 
     @Test
@@ -89,7 +129,8 @@ class TelegramConnectionServiceTest {
             gateway,
             stateRepository,
             CLOCK,
-            () -> "link-code"
+            () -> "link-code",
+            TelegramMessageLogWriter.disabled()
         );
         List<String> deepLinks = new ArrayList<>();
 
@@ -128,7 +169,8 @@ class TelegramConnectionServiceTest {
             gateway,
             stateRepository,
             CLOCK,
-            () -> "link-code"
+            () -> "link-code",
+            TelegramMessageLogWriter.disabled()
         );
 
         var result = service.connect(CONFIG_PATH, 0, () -> "token", deepLink -> {
@@ -145,20 +187,34 @@ class TelegramConnectionServiceTest {
     }
 
     private TelegramConnectionService service(BetxConfig config, Map<String, String> environment, RecordingTelegramGateway gateway) {
+        return service(config, environment, gateway, TelegramMessageLogWriter.disabled());
+    }
+
+    private TelegramConnectionService service(
+        BetxConfig config,
+        Map<String, String> environment,
+        RecordingTelegramGateway gateway,
+        TelegramMessageLogWriter messageLogWriter
+    ) {
         return new TelegramConnectionService(
             new RecordingConfigRepository(config),
             new MapEnvironmentProvider(environment),
             gateway,
             new RecordingTelegramStateRepository(),
             CLOCK,
-            () -> "link-code"
+            () -> "link-code",
+            messageLogWriter
         );
     }
 
     private BetxConfig configWithTelegram(TelegramConfig telegram) {
+        return configWithTelegram(telegram, "info");
+    }
+
+    private BetxConfig configWithTelegram(TelegramConfig telegram, String logLevel) {
         BetxConfig defaults = BetxConfig.defaults();
         return new BetxConfig(
-            defaults.app(),
+            new AppConfig(logLevel),
             telegram,
             defaults.betfair(),
             defaults.exchanges(),

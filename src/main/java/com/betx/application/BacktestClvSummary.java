@@ -32,13 +32,7 @@ public record BacktestClvSummary(
             .sorted()
             .toList();
         if (clvs.isEmpty()) {
-            return new BacktestClvSummary(
-                effectiveStatus,
-                0,
-                BigDecimal.ZERO.setScale(8, RoundingMode.HALF_UP),
-                BigDecimal.ZERO.setScale(8, RoundingMode.HALF_UP),
-                BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
-            );
+            return new BacktestClvSummary(BacktestClvStatus.INSUFFICIENT_DATA, 0, null, null, null);
         }
         BigDecimal total = clvs.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal average = total.divide(BigDecimal.valueOf(clvs.size()), 8, RoundingMode.HALF_UP);
