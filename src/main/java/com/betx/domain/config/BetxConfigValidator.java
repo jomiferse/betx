@@ -23,6 +23,15 @@ public class BetxConfigValidator {
         if (config.marketData().betfairEventBatchSize() <= 0) {
             throw new ConfigException("market_data.betfair_event_batch_size must be greater than zero.");
         }
+        if (config.paper().pollInterval().isZero() || config.paper().pollInterval().isNegative()) {
+            throw new ConfigException("paper.poll_interval must be greater than zero.");
+        }
+        if (config.paper().closingCaptureMinutesBeforeStart() < 0) {
+            throw new ConfigException("paper.closing_capture_minutes_before_start must be zero or greater.");
+        }
+        if (config.paper().settlementPollInterval().isZero() || config.paper().settlementPollInterval().isNegative()) {
+            throw new ConfigException("paper.settlement_poll_interval must be greater than zero.");
+        }
         validateIntelligence(config.intelligence());
         config.exchanges().stream()
             .filter(exchange -> "betfair".equals(exchange.name()))

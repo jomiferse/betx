@@ -17,14 +17,16 @@ class FootballDataBacktestConvertCommandTest {
     void printsConversionSummary() {
         RecordingConverter converter = new RecordingConverter(new FootballDataConversionResult(12, 60));
         FootballDataBacktestConvertCommand command = new FootballDataBacktestConvertCommand(converter);
-        command.inputPath = Path.of("SP1.csv");
+        command.inputPaths = List.of(Path.of("SP1.csv"));
         command.outputPath = Path.of("history.csv");
+        command.season = "2025/26";
+        command.oddsSource = "opening-closing";
 
         String output = captureOutput(command::run);
 
         assertThat(converter.inputPaths()).containsExactly(Path.of("SP1.csv"));
         assertThat(converter.outputPaths()).containsExactly(Path.of("history.csv"));
-        assertThat(output).contains("Football-Data conversion complete | matches=12 | rows=60 | output=history.csv");
+        assertThat(output).contains("Football-Data conversion complete | matches=12 | rows=60 | duplicatesSkipped=0 | oddsSource=opening-closing | output=history.csv");
     }
 
     private static String captureOutput(Runnable runnable) {
@@ -49,8 +51,13 @@ class FootballDataBacktestConvertCommandTest {
         }
 
         @Override
-        public FootballDataConversionResult convert(Path inputPath, Path outputPath) {
-            inputPaths.add(inputPath);
+        public FootballDataConversionResult convert(
+            List<Path> inputPaths,
+            Path outputPath,
+            String season,
+            String oddsSource
+        ) {
+            this.inputPaths.addAll(inputPaths);
             outputPaths.add(outputPath);
             return result;
         }

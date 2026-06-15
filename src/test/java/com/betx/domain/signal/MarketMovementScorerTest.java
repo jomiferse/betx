@@ -50,6 +50,21 @@ class MarketMovementScorerTest {
     }
 
     @Test
+    void usesConfiguredOddsDropThresholdForFavorableMovement() {
+        EventMarketAnalyzer stricterAnalyzer = new EventMarketAnalyzer(new BigDecimal("-3.00"));
+
+        RunnerAnalysis analysis = stricterAnalyzer.analyze(
+            snapshot("2.45", "2.55", "0.04081633", "1200"),
+            List.of(observed("2026-05-31T10:00:00Z", "2.50", "2.60", "1200")),
+            strategyConfig,
+            riskConfig
+        );
+
+        assertThat(analysis.recommendation()).isEqualTo(RecommendationType.WATCH);
+        assertThat(analysis.reason()).doesNotContain("favorable_odds_movement");
+    }
+
+    @Test
     void rejectsInvalidBaseQualityRegardlessOfMovement() {
         RunnerAnalysis analysis = analyzer.analyze(
             snapshot("2.00", "2.08", "0.04000000", "250"),
@@ -94,7 +109,7 @@ class MarketMovementScorerTest {
             "La Liga",
             Instant.parse("2026-06-01T18:00:00Z"),
             42L,
-            "Team A",
+            "Runner A",
             new BigDecimal(back),
             new BigDecimal(lay),
             new BigDecimal(spread),

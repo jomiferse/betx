@@ -332,6 +332,7 @@ public class BetfairRestGateway implements BetfairGateway {
             JsonNode ex = runner.path("ex");
             runners.add(new BetfairRunnerPrice(
                 runner.path("selectionId").asLong(),
+                text(runner, "status"),
                 decimal(runner, "lastPriceTraded"),
                 bestPrice(ex.path("availableToBack")),
                 bestPrice(ex.path("availableToLay")),

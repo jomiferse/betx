@@ -11,6 +11,7 @@ import picocli.CommandLine.Command;
     subcommands = {
         InitCommand.class,
         StartCommand.class,
+        PaperTradeCommand.class,
         BacktestCommand.class,
         TelegramCommand.class,
         BetfairCommand.class,
