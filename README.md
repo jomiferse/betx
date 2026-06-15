@@ -213,7 +213,7 @@ A `BET` recommendation requires a score of at least `70/100`. Lower scores remai
 
 ## Historical Backtesting
 
-BetX can replay a normalized historical CSV through the current `value-football` analyzer without calling live exchanges, Telegram, OpenRouter, or order execution:
+BetX can replay a normalized historical CSV through a research comparison engine without calling live exchanges, Telegram, OpenRouter, or order execution:
 
 ```bash
 java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv
@@ -222,23 +222,117 @@ java -jar target/betx.jar backtest --config betx.yml --input backtest/history.cs
 The CSV must include these columns:
 
 ```text
-observed_at,exchange,market_id,market_name,event_name,competition_name,market_start_time,selection_id,runner_name,best_back_price,best_lay_price,spread,liquidity,result
+observed_at,exchange,market_id,market_name,event_name,competition_name,season,odds_source,market_start_time,selection_id,runner_name,best_back_price,best_lay_price,spread,liquidity,result
 ```
 
-`result` must be `WIN` or `LOSE`. BetX places one simulated BACK trade on the first qualifying `BET` signal per runner, using `risk.max_stake`, and prints rows analyzed, simulated trades, hit rate, ROI, profit/loss, max drawdown, and top/bottom trades.
+`season` and `odds_source` are optional for legacy files and inferred as `YYYY/YY` plus `unknown` when missing. New Football-Data imports write them explicitly. `result` must be `WIN` or `LOSE`, and result fields are used only for settlement after recommendations are created. BetX compares these strategies under the same historical replay model:
 
-Backtest output also includes a strategy evaluation section that groups simulated trades by entry odds band, inferred runner type, competition, confidence label, and opening-to-entry odds movement. These segments make it easier to see whether the current strategy is being helped by specific leagues, price ranges, or pre-match steam/drift patterns before changing live strategy rules.
+- `value-football`
+- `value-football-draw-only`
+- `favorite`
+- `home-favorite`
+- `away-underdog`
+- `draw`
+- `random`
+
+The report ranks strategies automatically and prints trades, ROI, max drawdown, and strike rate. League breakdown rows show the same metrics per strategy and competition. The report header also prints the pricing mode, effective commission rate, odds source, and dataset capability:
+
+- `SINGLE_PRICE`: one bookmaker price per runner. Analyzer-backed strategies report explicit incompatibility/rejection diagnostics when movement history is unavailable.
+- `OPENING_CLOSING`: paired bookmaker observations where opening odds are history and closing odds are the tradable observation.
+- `EXCHANGE_SNAPSHOTS`: exchange-style repeated runner snapshots.
+
+`random` is deterministic by default using seed `42`. Override it when comparing repeatable alternative samples:
+
+```bash
+java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv --random-seed 7
+```
+
+Export the ranked strategy and league comparison to CSV. The comparison CSV includes the effective commission and odds-slippage assumptions in every row:
+
+```bash
+java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv --export-csv backtest/comparison.csv
+```
+
+Export the focused `value-football-draw-only` cumulative equity curve to CSV:
+
+```bash
+java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv --export-equity-csv backtest/draw-only-equity.csv
+```
+
+Export focused draw-only paper-trade rows with recommendation, execution, closing-line, result and PnL fields. Historical `opening-closing` backtests mark CLV as `NOT_AVAILABLE` because the recommendation is generated from the closing observation; ROI and execution loss remain valid, but CLV is not used as a signal-quality gate in that mode:
+
+```bash
+java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv --export-paper-csv backtest/draw-only-paper.csv
+```
+
+For prospective paper trading against upcoming configured exchange markets, run the read-only paper recorder. It evaluates only `value-football-draw-only`, stores lifecycle records in the configured SQLite database, saves current snapshots after analysis for the next scan, and does not place orders, send Telegram bet confirmations, mutate live betting state, or call external intelligence. The command is restart-safe and idempotent for the same exchange, market, and selection.
+
+```bash
+java -jar target/betx.jar paper-trade --config betx.yml
+```
+
+To run it autonomously, enable continuous mode either from the CLI or from `betx.yml`:
+
+```bash
+java -jar target/betx.jar paper-trade \
+  --config betx.yml \
+  --continuous \
+  --poll-interval 60s
+```
+
+```yaml
+paper:
+  continuous: true
+  poll_interval: 60s
+  closing_capture_minutes_before_start: 2
+  settlement_poll_interval: 5m
+```
+
+Continuous paper mode reuses the same SQLite database across restarts. It never clears paper trades or market snapshots at startup, so the second and later cycles can analyze against snapshots saved by earlier cycles. Press Ctrl+C to request graceful shutdown; BetX finishes the current paper-trading cycle before exiting.
+
+Paper records move through `RECOMMENDED`, `EXECUTED`, `CLOSED`, `SETTLED`, or `EXECUTION_FAILED`. Recommendation and execution use the live snapshot available at recommendation time. Closing odds are captured later near market start from a separate snapshot and are never exposed to recommendation analysis. Settlement is applied only after a settlement source reports an outcome. CSV export remains available for audit:
+
+```bash
+java -jar target/betx.jar paper-trade --config betx.yml --output data/paper-trades.csv
+```
+
+Paper mode prints operational diagnostics: markets scanned, recommendations generated, duplicates skipped, execution failures, missing closing prices, unsettled markets, settled trades, CLV count, validation status, league breakdown, and rolling 100/250/500 trade windows. Prospective CLV gates use only settled trades with independently captured closing odds. Fewer than 300 settled trades reports `INSUFFICIENT_SAMPLE`; otherwise non-positive median CLV reports `WEAK_EVIDENCE`, positive theoretical ROI with non-positive executable ROI reports `EXECUTION_FAILURE`, and positive median CLV plus positive executable ROI reports `CANDIDATE_EDGE`.
+
+Bookmaker reports default to zero commission. Exchange snapshot reports default to a conservative Betfair-style commission baseline of `0.05`. Override either assumption when needed:
+
+```bash
+java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv --commission-rate 0.02
+java -jar target/betx.jar paper-trade --config betx.yml --commission-rate 0.02
+```
+
+Commission is applied once per market to positive gross market PnL only. Losing and break-even markets pay zero commission. Reports include gross PnL, commission, net PnL, net ROI, gross/net max drawdown, market selection buckets, runner/league/odds-band breakdowns, independent season validation, fixed development/validation/test period diagnostics, leakage diagnostics, analyzer rejection diagnostics, and statistical uncertainty for `value-football-draw-only`.
+
+Execution price degradation can be simulated with `--odds-slippage-rate`. The analyzer still sees the original historical odds; slippage is applied only after recommendations are generated. The default model is `PROFIT_HAIRCUT`, which uses `adjustedOdds = 1 + ((originalOdds - 1) * (1 - slippageRate))`. `TOTAL_ODDS_MULTIPLIER` applies the rate to the whole decimal price. The default rate is `0`. Reports and CSV exports print the selected slippage model, and reports always include `value-football-draw-only` stress scenarios for `0`, `0.01`, `0.02`, and `0.03`:
+
+```bash
+java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv --odds-slippage-rate 0.02 --slippage-model PROFIT_HAIRCUT
+```
+
+The focused draw-only section also reports league-season metrics, average odds, longest losing streak, opening-to-closing movement buckets, CLV availability status, conservative validation gates, rolling windows for 100/250/500 trades, and a cumulative equity curve suitable for external charting. Historical validation uses executable ROI and 3% slippage resilience; prospective validation uses median CLV and positive CLV percentage only when CLV status is `VALID_PROSPECTIVE`.
+
+Robustness diagnostics for league ROI, walk-forward validation, and movement threshold sensitivity remain available:
+
+```bash
+java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv --robustness
+```
 
 Football-Data CSV files can be converted into this normalized format:
 
 ```bash
 mkdir -p backtest
 curl -L -o backtest/SP1.csv https://www.football-data.co.uk/mmz4281/2526/SP1.csv
-java -jar target/betx.jar backtest convert-football-data --input backtest/SP1.csv --output backtest/history.csv
+java -jar target/betx.jar backtest convert-football-data --input backtest/SP1.csv --output backtest/history.csv --odds-source opening-closing
 java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv
 ```
 
-The converter uses Bet365 opening and closing match odds columns (`B365H/D/A` and `B365CH/CD/CA`) to create two synthetic observations per home/draw/away runner. Football-Data does not include exchange liquidity or lay prices, so BetX writes fixed liquidity and an estimated lay price suitable for strategy replay, not exact exchange microstructure analysis. Treat the evaluation as evidence about pre-match odds movement and settled profitability, not proof of Betfair order-book execution quality.
+Use `--odds-source opening-bookmaker` for Bet365 opening columns (`B365H/D/A`), `--odds-source closing-average` for closing average columns (`B365CH/CD/CA`), or `--odds-source opening-closing` to emit both observations for the same match. Paired mode does not fabricate additional intraday snapshots: opening rows are written before closing rows, and only closing rows are treated as tradable observations. The converter preserves league and season on every row, infers the season from the match date when `--season` is omitted, and suppresses duplicate matches when multiple input files are combined.
+
+Football-Data does not include exchange liquidity or lay prices, so BetX writes fixed liquidity and an estimated lay price suitable for strategy replay, not exact exchange microstructure analysis. Treat the evaluation as evidence about pre-match odds and settled profitability, not proof of Betfair order-book execution quality.
 
 ## License
 

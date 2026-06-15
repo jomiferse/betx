@@ -151,6 +151,22 @@ class YamlBetxConfigRepositoryTest {
     }
 
     @Test
+    void readsPaperTradingConfigurationFromYaml() throws Exception {
+        BetxConfig config = mapper.readValue("""
+            paper:
+              continuous: true
+              poll_interval: 60s
+              closing_capture_minutes_before_start: 2
+              settlement_poll_interval: 5m
+            """, BetxConfig.class);
+
+        assertThat(config.paper().continuous()).isTrue();
+        assertThat(config.paper().pollInterval()).isEqualTo(java.time.Duration.ofSeconds(60));
+        assertThat(config.paper().closingCaptureMinutesBeforeStart()).isEqualTo(2);
+        assertThat(config.paper().settlementPollInterval()).isEqualTo(java.time.Duration.ofMinutes(5));
+    }
+
+    @Test
     void convertsLegacyBetfairConfigToEnabledBetfairExchange() throws Exception {
         BetxConfig config = mapper.readValue("""
             betfair:

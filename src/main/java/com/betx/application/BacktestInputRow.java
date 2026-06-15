@@ -3,6 +3,7 @@ package com.betx.application;
 import com.betx.domain.signal.MarketSnapshot;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.ZoneOffset;
 
 /** One historical runner observation plus the settled outcome for that runner. */
 public record BacktestInputRow(
@@ -19,7 +20,9 @@ public record BacktestInputRow(
     BigDecimal bestLayPrice,
     BigDecimal spread,
     BigDecimal liquidity,
-    BacktestOutcome outcome
+    BacktestOutcome outcome,
+    String season,
+    String oddsSource
 ) {
     public BacktestInputRow {
         if (observedAt == null) {
@@ -49,6 +52,44 @@ public record BacktestInputRow(
         if (outcome == null) {
             throw new BacktestValidationException("result must be WIN or LOSE");
         }
+        season = season == null || season.isBlank() ? seasonLabel(marketStartTime == null ? observedAt : marketStartTime) : season.strip();
+        oddsSource = oddsSource == null || oddsSource.isBlank() ? "unknown" : oddsSource.strip();
+    }
+
+    public BacktestInputRow(
+        Instant observedAt,
+        String exchange,
+        String marketId,
+        String marketName,
+        String eventName,
+        String competitionName,
+        Instant marketStartTime,
+        long selectionId,
+        String runnerName,
+        BigDecimal bestBackPrice,
+        BigDecimal bestLayPrice,
+        BigDecimal spread,
+        BigDecimal liquidity,
+        BacktestOutcome outcome
+    ) {
+        this(
+            observedAt,
+            exchange,
+            marketId,
+            marketName,
+            eventName,
+            competitionName,
+            marketStartTime,
+            selectionId,
+            runnerName,
+            bestBackPrice,
+            bestLayPrice,
+            spread,
+            liquidity,
+            outcome,
+            seasonLabel(marketStartTime == null ? observedAt : marketStartTime),
+            "unknown"
+        );
     }
 
     public MarketSnapshot toMarketSnapshot() {
@@ -66,5 +107,16 @@ public record BacktestInputRow(
             spread,
             liquidity
         );
+    }
+
+    private static String seasonLabel(Instant instant) {
+        if (instant == null) {
+            return "unknown";
+        }
+        int year = instant.atZone(ZoneOffset.UTC).getYear();
+        int month = instant.atZone(ZoneOffset.UTC).getMonthValue();
+        int startYear = month >= 7 ? year : year - 1;
+        int endYear = startYear + 1;
+        return startYear + "/" + String.format("%02d", endYear % 100);
     }
 }

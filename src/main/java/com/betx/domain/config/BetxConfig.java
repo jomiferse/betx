@@ -12,6 +12,7 @@ public record BetxConfig(
     List<ExchangeConfig> exchanges,
     @JsonProperty("market_data") MarketDataConfig marketData,
     StorageConfig storage,
+    PaperConfig paper,
     RiskConfig risk,
     List<StrategyConfig> strategies,
     MlConfig ml,
@@ -24,6 +25,7 @@ public record BetxConfig(
         marketData = marketData == null ? new MarketDataConfig(null, null, null, null) : marketData;
         exchanges = normalizeExchanges(exchanges, betfair, marketData);
         storage = storage == null ? new StorageConfig(null, null) : storage;
+        paper = paper == null ? PaperConfig.defaults() : paper;
         risk = risk == null ? new RiskConfig(null, null, null) : risk;
         strategies = strategies == null ? List.of() : List.copyOf(strategies);
         ml = ml == null ? new MlConfig(null, null, null) : ml;
@@ -41,7 +43,22 @@ public record BetxConfig(
         List<StrategyConfig> strategies,
         MlConfig ml
     ) {
-        this(app, telegram, betfair, exchanges, marketData, storage, risk, strategies, ml, null);
+        this(app, telegram, betfair, exchanges, marketData, storage, null, risk, strategies, ml, null);
+    }
+
+    public BetxConfig(
+        AppConfig app,
+        TelegramConfig telegram,
+        BetfairConfig betfair,
+        List<ExchangeConfig> exchanges,
+        MarketDataConfig marketData,
+        StorageConfig storage,
+        RiskConfig risk,
+        List<StrategyConfig> strategies,
+        MlConfig ml,
+        IntelligenceConfig intelligence
+    ) {
+        this(app, telegram, betfair, exchanges, marketData, storage, null, risk, strategies, ml, intelligence);
     }
 
     public static BetxConfig defaults() {
@@ -52,6 +69,7 @@ public record BetxConfig(
             List.of(),
             new MarketDataConfig(60, 0, List.of("1"), List.of("MATCH_ODDS"), true, 50),
             new StorageConfig("sqlite", "./data/betx.db", true, 48),
+            PaperConfig.defaults(),
             new RiskConfig(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3),
             List.of(new StrategyConfig("value-football", true, BigDecimal.valueOf(0.06), BigDecimal.valueOf(500))),
             new MlConfig(false, "./models/value_model.pkl", BigDecimal.valueOf(0.70)),
@@ -60,11 +78,11 @@ public record BetxConfig(
     }
 
     public BetxConfig withExchanges(List<ExchangeConfig> newExchanges) {
-        return new BetxConfig(app, telegram, betfair, newExchanges, marketData, storage, risk, strategies, ml, intelligence);
+        return new BetxConfig(app, telegram, betfair, newExchanges, marketData, storage, paper, risk, strategies, ml, intelligence);
     }
 
     public BetxConfig withIntelligence(IntelligenceConfig newIntelligence) {
-        return new BetxConfig(app, telegram, betfair, exchanges, marketData, storage, risk, strategies, ml, newIntelligence);
+        return new BetxConfig(app, telegram, betfair, exchanges, marketData, storage, paper, risk, strategies, ml, newIntelligence);
     }
 
     public List<ExchangeConfig> enabledExchanges() {

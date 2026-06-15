@@ -67,4 +67,14 @@ class BetxConfigTest {
         assertThat(config.storage().cleanupMarketSnapshotsEnabled()).isTrue();
         assertThat(config.storage().marketSnapshotRetentionHours()).isEqualTo(48);
     }
+
+    @Test
+    void providesDefaultPaperTradingConfiguration() {
+        BetxConfig config = BetxConfig.defaults();
+
+        assertThat(config.paper().continuous()).isFalse();
+        assertThat(config.paper().pollInterval()).isEqualTo(java.time.Duration.ofSeconds(60));
+        assertThat(config.paper().closingCaptureMinutesBeforeStart()).isEqualTo(2);
+        assertThat(config.paper().settlementPollInterval()).isEqualTo(java.time.Duration.ofMinutes(5));
+    }
 }

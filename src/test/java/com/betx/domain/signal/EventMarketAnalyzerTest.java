@@ -63,6 +63,76 @@ class EventMarketAnalyzerTest {
         assertThat(analysis.score().value()).isGreaterThanOrEqualTo(70);
     }
 
+    @Test
+    void rejectsDrawRunnersInMatchOddsMarkets() {
+        MarketSnapshot previous = snapshot("Team A v Team B", "Draw", new BigDecimal("3.30"), new BigDecimal("3.43"), new BigDecimal("1500"));
+        MarketSnapshot current = snapshot("Team A v Team B", "Draw", new BigDecimal("3.20"), new BigDecimal("3.33"), new BigDecimal("1500"));
+
+        RunnerAnalysis analysis = analyzer.analyze(current, Optional.of(previous), strategyConfig, riskConfig);
+
+        assertThat(analysis.recommendation()).isEqualTo(RecommendationType.NO_BET);
+        assertThat(analysis.reason()).isEqualTo("draw_runner_not_supported");
+    }
+
+    @Test
+    void recommendsBetForStableDrawRunnersInMatchOddsMarkets() {
+        MarketSnapshot previous = snapshot("Team A v Team B", "Draw", new BigDecimal("3.30"), new BigDecimal("3.43"), new BigDecimal("1500"));
+        MarketSnapshot current = snapshot("Team A v Team B", "Draw", new BigDecimal("3.30"), new BigDecimal("3.43"), new BigDecimal("1500"));
+
+        RunnerAnalysis analysis = analyzer.analyze(current, Optional.of(previous), strategyConfig, riskConfig);
+
+        assertThat(analysis.recommendation()).isEqualTo(RecommendationType.BET);
+        assertThat(analysis.reason()).contains("stable_draw_profile", "dry_run_only");
+        assertThat(analysis.score().value()).isGreaterThanOrEqualTo(70);
+    }
+
+    @Test
+    void boostsHomeRunnersInMatchOddsMarkets() {
+        MarketSnapshot previous = snapshot("Team A v Team B", "Team A", new BigDecimal("2.50"), new BigDecimal("2.60"), new BigDecimal("1500"));
+        MarketSnapshot current = snapshot("Team A v Team B", "Team A", new BigDecimal("2.50"), new BigDecimal("2.60"), new BigDecimal("1500"));
+
+        RunnerAnalysis analysis = analyzer.analyze(current, Optional.of(previous), strategyConfig, riskConfig);
+
+        assertThat(analysis.recommendation()).isEqualTo(RecommendationType.BET);
+        assertThat(analysis.reason()).contains("home_runner_profile", "dry_run_only");
+        assertThat(analysis.score().value()).isGreaterThanOrEqualTo(70);
+    }
+
+    @Test
+    void rejectsAwayRunnersWithoutValueProfile() {
+        MarketSnapshot previous = snapshot("Team A v Team B", "Team B", new BigDecimal("2.50"), new BigDecimal("2.60"), new BigDecimal("1500"));
+        MarketSnapshot current = snapshot("Team A v Team B", "Team B", new BigDecimal("2.45"), new BigDecimal("2.55"), new BigDecimal("1500"));
+
+        RunnerAnalysis analysis = analyzer.analyze(current, Optional.of(previous), strategyConfig, riskConfig);
+
+        assertThat(analysis.recommendation()).isEqualTo(RecommendationType.NO_BET);
+        assertThat(analysis.reason()).isEqualTo("away_runner_value_profile_missing");
+    }
+
+    @Test
+    void recommendsBetForAwayRunnersWithValueProfile() {
+        MarketSnapshot previous = snapshot("Team A v Team B", "Team B", new BigDecimal("3.30"), new BigDecimal("3.43"), new BigDecimal("1500"));
+        MarketSnapshot current = snapshot("Team A v Team B", "Team B", new BigDecimal("3.20"), new BigDecimal("3.33"), new BigDecimal("1500"));
+
+        RunnerAnalysis analysis = analyzer.analyze(current, Optional.of(previous), strategyConfig, riskConfig);
+
+        assertThat(analysis.recommendation()).isEqualTo(RecommendationType.BET);
+        assertThat(analysis.reason()).contains("away_value_profile", "dry_run_only");
+        assertThat(analysis.score().value()).isGreaterThanOrEqualTo(70);
+    }
+
+    @Test
+    void boostsStableMidOddsAwayRunnersWithValueProfile() {
+        MarketSnapshot previous = snapshot("Team A v Team B", "Team B", new BigDecimal("2.50"), new BigDecimal("2.60"), new BigDecimal("1500"));
+        MarketSnapshot current = snapshot("Team A v Team B", "Team B", new BigDecimal("2.50"), new BigDecimal("2.60"), new BigDecimal("1500"));
+
+        RunnerAnalysis analysis = analyzer.analyze(current, Optional.of(previous), strategyConfig, riskConfig);
+
+        assertThat(analysis.recommendation()).isEqualTo(RecommendationType.BET);
+        assertThat(analysis.reason()).contains("away_value_profile", "dry_run_only");
+        assertThat(analysis.score().value()).isGreaterThanOrEqualTo(70);
+    }
+
     private MarketSnapshot snapshot(String eventName, String runnerName, BigDecimal back, BigDecimal lay, BigDecimal liquidity) {
         return new MarketSnapshot(
             "betfair",

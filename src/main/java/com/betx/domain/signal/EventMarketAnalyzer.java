@@ -15,10 +15,26 @@ public class EventMarketAnalyzer {
     private static final BigDecimal MAX_RELATIVE_SPREAD = BigDecimal.valueOf(0.08);
     private static final BigDecimal MIN_BACK_ODDS = BigDecimal.valueOf(1.5);
     private static final BigDecimal MAX_BACK_ODDS = BigDecimal.valueOf(6.0);
-    private static final BigDecimal FAVORABLE_BACK_DROP_PERCENT = BigDecimal.valueOf(-1.0);
+    private static final BigDecimal DEFAULT_FAVORABLE_BACK_DROP_PERCENT = BigDecimal.valueOf(-1.0);
     private static final BigDecimal FAVORABLE_LIQUIDITY_RISE_PERCENT = BigDecimal.valueOf(2.0);
     private static final BigDecimal LOW_VOLATILITY_PERCENT = BigDecimal.valueOf(15.0);
+    private static final BigDecimal STABLE_DRAW_MOVEMENT_PERCENT = BigDecimal.valueOf(1.0);
+    private static final int HOME_RUNNER_SCORE_BOOST = 25;
+    private static final int STABLE_DRAW_SCORE_BOOST = 25;
+    private static final int AWAY_VALUE_SCORE_BOOST = 25;
     private static final int BET_SCORE_THRESHOLD = 70;
+
+    private final BigDecimal favorableBackDropPercent;
+
+    public EventMarketAnalyzer() {
+        this(DEFAULT_FAVORABLE_BACK_DROP_PERCENT);
+    }
+
+    public EventMarketAnalyzer(BigDecimal favorableBackDropPercent) {
+        this.favorableBackDropPercent = favorableBackDropPercent == null
+            ? DEFAULT_FAVORABLE_BACK_DROP_PERCENT
+            : favorableBackDropPercent;
+    }
 
     public RunnerAnalysis analyze(
         MarketSnapshot snapshot,
@@ -55,10 +71,14 @@ public class EventMarketAnalyzer {
         if (snapshot.bestBackPrice().compareTo(MIN_BACK_ODDS) < 0 || snapshot.bestBackPrice().compareTo(MAX_BACK_ODDS) > 0) {
             return rejected(snapshot, "odds_out_of_range");
         }
+        RunnerProfile runnerProfile = RunnerProfile.from(snapshot);
 
         List<MarketSnapshot> history = recentSnapshots == null
             ? List.of()
             : recentSnapshots.stream().map(ObservedMarketSnapshot::snapshot).toList();
+        if (runnerProfile == RunnerProfile.DRAW && history.isEmpty()) {
+            return rejected(snapshot, "draw_runner_not_supported");
+        }
         if (history.isEmpty()) {
             return RunnerAnalysis.from(
                 snapshot,
@@ -69,9 +89,22 @@ public class EventMarketAnalyzer {
         }
 
         MarketMovementFeatures features = features(snapshot, history);
-        SignalScore score = score(snapshot, history, features);
+        boolean stableDrawProfile = isStableDrawProfile(snapshot, features, runnerProfile);
+        if (runnerProfile == RunnerProfile.DRAW && !stableDrawProfile) {
+            return rejected(snapshot, "draw_runner_not_supported");
+        }
+        boolean awayValueProfile = isAwayValueProfile(snapshot, features, runnerProfile);
+        if (runnerProfile == RunnerProfile.AWAY && !awayValueProfile) {
+            return rejected(snapshot, "away_runner_value_profile_missing");
+        }
+        SignalScore score = score(snapshot, history, features, runnerProfile, stableDrawProfile, awayValueProfile);
         RecommendationType recommendation = score.value() >= BET_SCORE_THRESHOLD ? RecommendationType.BET : RecommendationType.WATCH;
-        return RunnerAnalysis.from(snapshot, recommendation, reason(recommendation, features, score), score);
+        return RunnerAnalysis.from(
+            snapshot,
+            recommendation,
+            reason(recommendation, features, score, runnerProfile, stableDrawProfile, awayValueProfile),
+            score
+        );
     }
 
     public boolean isTestMarket(MarketSnapshot snapshot) {
@@ -99,13 +132,20 @@ public class EventMarketAnalyzer {
         );
     }
 
-    private SignalScore score(MarketSnapshot current, List<MarketSnapshot> history, MarketMovementFeatures features) {
+    private SignalScore score(
+        MarketSnapshot current,
+        List<MarketSnapshot> history,
+        MarketMovementFeatures features,
+        RunnerProfile runnerProfile,
+        boolean stableDrawProfile,
+        boolean awayValueProfile
+    ) {
         List<String> reasons = new ArrayList<>();
         int value = 35;
         reasons.add("Base market quality is acceptable");
 
         MarketSnapshot previous = history.getFirst();
-        if (features.oddsDeltaPercent() != null && features.oddsDeltaPercent().compareTo(FAVORABLE_BACK_DROP_PERCENT) <= 0) {
+        if (features.oddsDeltaPercent() != null && features.oddsDeltaPercent().compareTo(favorableBackDropPercent) <= 0) {
             value += 25;
             reasons.add("Odds moved from " + numeric(previous.bestBackPrice()) + " -> " + numeric(current.bestBackPrice()));
         } else if (features.oddsDeltaPercent() != null && features.oddsDeltaPercent().signum() < 0) {
@@ -144,13 +184,32 @@ public class EventMarketAnalyzer {
             value += 10;
             reasons.add("Movement stands out versus recent baseline");
         }
+        if (runnerProfile == RunnerProfile.HOME) {
+            value += HOME_RUNNER_SCORE_BOOST;
+            reasons.add("Home runner profile");
+        }
+        if (stableDrawProfile) {
+            value += STABLE_DRAW_SCORE_BOOST;
+            reasons.add("Stable draw profile");
+        }
+        if (awayValueProfile) {
+            value += AWAY_VALUE_SCORE_BOOST;
+            reasons.add("Away value profile");
+        }
 
         return SignalScore.fromValue(value, reasons);
     }
 
-    private String reason(RecommendationType recommendation, MarketMovementFeatures features, SignalScore score) {
+    private String reason(
+        RecommendationType recommendation,
+        MarketMovementFeatures features,
+        SignalScore score,
+        RunnerProfile runnerProfile,
+        boolean stableDrawProfile,
+        boolean awayValueProfile
+    ) {
         List<String> tokens = new ArrayList<>(List.of("liquidity_ok", "spread_ok", "odds_range_ok"));
-        if (features.oddsDeltaPercent() != null && features.oddsDeltaPercent().compareTo(FAVORABLE_BACK_DROP_PERCENT) <= 0) {
+        if (features.oddsDeltaPercent() != null && features.oddsDeltaPercent().compareTo(favorableBackDropPercent) <= 0) {
             tokens.add("favorable_odds_movement");
         }
         if (features.liquidityDeltaPercent() != null && features.liquidityDeltaPercent().compareTo(FAVORABLE_LIQUIDITY_RISE_PERCENT) >= 0) {
@@ -161,6 +220,15 @@ public class EventMarketAnalyzer {
         }
         if (score.reasons().contains("Volatility is low")) {
             tokens.add("low_volatility");
+        }
+        if (runnerProfile == RunnerProfile.HOME) {
+            tokens.add("home_runner_profile");
+        }
+        if (stableDrawProfile) {
+            tokens.add("stable_draw_profile");
+        }
+        if (awayValueProfile) {
+            tokens.add("away_value_profile");
         }
         if (recommendation == RecommendationType.BET) {
             tokens.add("dry_run_only");
@@ -222,7 +290,48 @@ public class EventMarketAnalyzer {
         BigDecimal average = prices.stream().reduce(BigDecimal.ZERO, BigDecimal::add)
             .divide(BigDecimal.valueOf(prices.size()), 10, RoundingMode.HALF_UP);
         BigDecimal delta = percentageDelta(average, current.bestBackPrice());
-        return delta != null && delta.compareTo(FAVORABLE_BACK_DROP_PERCENT) <= 0;
+        return delta != null && delta.compareTo(favorableBackDropPercent) <= 0;
+    }
+
+    private boolean isStableDrawProfile(
+        MarketSnapshot snapshot,
+        MarketMovementFeatures features,
+        RunnerProfile runnerProfile
+    ) {
+        if (runnerProfile != RunnerProfile.DRAW || features.oddsDeltaPercent() == null) {
+            return false;
+        }
+        return snapshot.bestBackPrice().compareTo(new BigDecimal("3.00")) > 0
+            && snapshot.bestBackPrice().compareTo(MAX_BACK_ODDS) <= 0
+            && features.oddsDeltaPercent().abs().compareTo(STABLE_DRAW_MOVEMENT_PERCENT) <= 0;
+    }
+
+    private boolean isAwayValueProfile(
+        MarketSnapshot snapshot,
+        MarketMovementFeatures features,
+        RunnerProfile runnerProfile
+    ) {
+        if (runnerProfile != RunnerProfile.AWAY || features.oddsDeltaPercent() == null) {
+            return false;
+        }
+        BigDecimal odds = snapshot.bestBackPrice();
+        BigDecimal movement = features.oddsDeltaPercent();
+        if (odds.compareTo(new BigDecimal("2.00")) <= 0) {
+            return isModerateDrop(movement) || isStrongDrift(movement);
+        }
+        if (odds.compareTo(new BigDecimal("3.00")) <= 0) {
+            return movement.abs().compareTo(STABLE_DRAW_MOVEMENT_PERCENT) <= 0;
+        }
+        return isModerateDrop(movement) || isStrongDrift(movement);
+    }
+
+    private boolean isModerateDrop(BigDecimal movement) {
+        return movement.compareTo(favorableBackDropPercent) <= 0
+            && movement.compareTo(new BigDecimal("-10.00")) > 0;
+    }
+
+    private boolean isStrongDrift(BigDecimal movement) {
+        return movement.compareTo(new BigDecimal("5.00")) > 0;
     }
 
     private String signedPercent(BigDecimal value) {
@@ -242,5 +351,36 @@ public class EventMarketAnalyzer {
             .divide(previous, 10, RoundingMode.HALF_UP)
             .multiply(BigDecimal.valueOf(100))
             .setScale(8, RoundingMode.HALF_UP);
+    }
+
+    private enum RunnerProfile {
+        HOME,
+        DRAW,
+        AWAY,
+        UNKNOWN;
+
+        private static RunnerProfile from(MarketSnapshot snapshot) {
+            if (!isMatchOdds(snapshot) || snapshot.runnerName() == null || snapshot.eventName() == null) {
+                return UNKNOWN;
+            }
+            if ("draw".equalsIgnoreCase(snapshot.runnerName())) {
+                return DRAW;
+            }
+            String[] teams = snapshot.eventName().split("\\s+v\\s+", 2);
+            if (teams.length != 2) {
+                return UNKNOWN;
+            }
+            if (snapshot.runnerName().equalsIgnoreCase(teams[0].strip())) {
+                return HOME;
+            }
+            if (snapshot.runnerName().equalsIgnoreCase(teams[1].strip())) {
+                return AWAY;
+            }
+            return UNKNOWN;
+        }
+
+        private static boolean isMatchOdds(MarketSnapshot snapshot) {
+            return snapshot.marketName() != null && "match odds".equalsIgnoreCase(snapshot.marketName().strip());
+        }
     }
 }

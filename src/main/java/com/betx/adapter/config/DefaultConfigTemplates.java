@@ -43,6 +43,12 @@ public final class DefaultConfigTemplates {
               cleanup_market_snapshots_enabled: true
               market_snapshot_retention_hours: 48
 
+            paper:
+              continuous: false
+              poll_interval: 60s
+              closing_capture_minutes_before_start: 2
+              settlement_poll_interval: 5m
+
             market_data:
               poll_interval_seconds: 60
               scan_all_markets: true

@@ -61,7 +61,9 @@ public class CsvBacktestHistoryReader implements BacktestHistoryReader {
                 decimal(row.bestLayPrice(), "best_lay_price"),
                 decimal(row.spread(), "spread"),
                 decimal(row.liquidity(), "liquidity"),
-                outcome(row.result())
+                outcome(row.result()),
+                blankToNull(row.season()),
+                blankToNull(row.oddsSource())
             );
         } catch (BacktestValidationException exc) {
             throw new BacktestValidationException("Backtest CSV row " + rowNumber + " is invalid: " + exc.getMessage(), exc);
@@ -134,6 +136,8 @@ public class CsvBacktestHistoryReader implements BacktestHistoryReader {
         @JsonProperty("market_name") String marketName,
         @JsonProperty("event_name") String eventName,
         @JsonProperty("competition_name") String competitionName,
+        @JsonProperty("season") String season,
+        @JsonProperty("odds_source") String oddsSource,
         @JsonProperty("market_start_time") String marketStartTime,
         @JsonProperty("selection_id") String selectionId,
         @JsonProperty("runner_name") String runnerName,

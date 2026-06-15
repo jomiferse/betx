@@ -242,7 +242,7 @@ class RunDryRunSignalsServiceTest {
                 "La Liga",
                 Instant.parse("2026-06-01T18:00:00Z"),
                 42L,
-                "Team A",
+                "Runner A",
                 BigDecimal.valueOf(2.47),
                 BigDecimal.valueOf(2.57),
                 BigDecimal.valueOf(0.04),
