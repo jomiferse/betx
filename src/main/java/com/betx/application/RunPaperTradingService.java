@@ -14,6 +14,7 @@ import com.betx.domain.signal.EventMarketAnalyzer;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.ObservedMarketSnapshot;
 import com.betx.domain.signal.RecommendationType;
+import com.betx.domain.signal.RunnerType;
 import com.betx.domain.signal.RunnerAnalysis;
 import com.betx.domain.signal.ValueFootballSignalStrategy;
 import java.math.BigDecimal;
@@ -22,8 +23,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -186,6 +190,7 @@ public class RunPaperTradingService {
 
         Instant observedAt = Instant.now(clock);
         List<String> failures = new ArrayList<>();
+        HistoryDiagnosticAccumulator diagnostics = new HistoryDiagnosticAccumulator();
         int runnersAnalyzed = 0;
         int snapshotsSaved = 0;
         int recommendationsGenerated = 0;
@@ -202,7 +207,9 @@ public class RunPaperTradingService {
                 continue;
             }
             try {
-                for (MarketSnapshot snapshot : gateway.listMarketData(exchange).snapshots()) {
+                List<MarketSnapshot> snapshots = gateway.listMarketData(exchange).snapshots();
+                diagnostics.recordMarketInvariants(snapshots);
+                for (MarketSnapshot snapshot : snapshots) {
                     marketsScanned.add(snapshot.exchange() + "|" + snapshot.marketId());
                     Optional<PaperTrade> existingPaperTrade = paperTradeRepository.findByMarketSelection(
                         config.storage().path(),
@@ -248,10 +255,13 @@ public class RunPaperTradingService {
                         snapshot.selectionId(),
                         RECENT_SNAPSHOT_LIMIT
                     );
+                    diagnostics.recordHistory(snapshot, recent);
+                    diagnostics.recordRunnerClassification(snapshot);
                     runnersAnalyzed++;
                     RunnerAnalysis analysis = analyzer.analyze(snapshot, recent, strategyConfig.get(), config.risk());
                     if (analysis.recommendation() == RecommendationType.BET
-                        && BacktestRunnerType.fromSelectionId(snapshot.selectionId()) == BacktestRunnerType.DRAW) {
+                        && runnerType(snapshot) == RunnerType.DRAW) {
+                        diagnostics.recordAnalyzerOutcome(PaperTradeAnalyzerRejectionReason.ACCEPTED);
                         PaperTrade paperTrade = PaperTrade.recommended(snapshot, observedAt, config.risk().maxStake());
                         PaperTrade executed = executePaperTrade(observedAt, paperTrade, snapshot, oddsSlippageRate, slippageModel);
                         if (executed.status() == PaperTradeStatus.EXECUTION_FAILED) {
@@ -260,6 +270,8 @@ public class RunPaperTradingService {
                             recommendationsGenerated++;
                         }
                         paperTradeRepository.upsert(config.storage().path(), executed);
+                    } else {
+                        diagnostics.recordAnalyzerOutcome(classifyAnalyzerOutcome(snapshot, recent, analysis));
                     }
                     snapshotRepository.save(config.storage().path(), new ObservedMarketSnapshot(observedAt, snapshot));
                     snapshotsSaved++;
@@ -284,8 +296,63 @@ public class RunPaperTradingService {
             executionFailures,
             missingClosingPrices,
             unsettledMarkets,
-            settledTrades
+            settledTrades,
+            diagnostics.toDiagnostics()
         );
+    }
+
+    private PaperTradeAnalyzerRejectionReason classifyAnalyzerOutcome(
+        MarketSnapshot snapshot,
+        List<ObservedMarketSnapshot> recent,
+        RunnerAnalysis analysis
+    ) {
+        if (runnerType(snapshot) != RunnerType.DRAW) {
+            return PaperTradeAnalyzerRejectionReason.NOT_DRAW;
+        }
+        if (recent == null || recent.isEmpty()) {
+            return PaperTradeAnalyzerRejectionReason.INSUFFICIENT_HISTORY;
+        }
+        MarketSnapshot previous = recent.getFirst().snapshot();
+        if (samePrice(previous.bestBackPrice(), snapshot.bestBackPrice())) {
+            return PaperTradeAnalyzerRejectionReason.ODDS_UNCHANGED;
+        }
+        String reason = analysis.reason();
+        if (reason.contains("liquidity_below_minimum")) {
+            return PaperTradeAnalyzerRejectionReason.LIQUIDITY_BELOW_THRESHOLD;
+        }
+        if (reason.contains("spread_above_threshold")) {
+            return PaperTradeAnalyzerRejectionReason.SPREAD_ABOVE_THRESHOLD;
+        }
+        if (reason.contains("odds_out_of_range") || reason.contains("missing_back_or_lay_price")) {
+            return PaperTradeAnalyzerRejectionReason.ODDS_OUT_OF_RANGE;
+        }
+        if (reason.contains("score_below_threshold")) {
+            return PaperTradeAnalyzerRejectionReason.CONFIDENCE_BELOW_THRESHOLD;
+        }
+        if (reason.contains("draw_runner_not_supported")) {
+            return PaperTradeAnalyzerRejectionReason.MOVEMENT_BELOW_THRESHOLD;
+        }
+        return PaperTradeAnalyzerRejectionReason.CONFIDENCE_BELOW_THRESHOLD;
+    }
+
+    private RunnerType runnerType(MarketSnapshot snapshot) {
+        RunnerType type = snapshot.runnerType();
+        if (type != null && type != RunnerType.UNKNOWN) {
+            return type;
+        }
+        return switch (BacktestRunnerType.fromSelectionId(snapshot.selectionId())) {
+            case HOME -> RunnerType.HOME;
+            case DRAW -> RunnerType.DRAW;
+            case AWAY -> RunnerType.AWAY;
+            case UNKNOWN -> RunnerType.UNKNOWN;
+        };
+    }
+
+    private boolean samePrice(BigDecimal left, BigDecimal right) {
+        if (left == null || right == null) {
+            return left == right;
+        }
+        return left.compareTo(right) == 0;
     }
 
     private int settlePersistedTrades(BetxConfig config, Instant observedAt, BigDecimal commissionRate) {
@@ -380,6 +447,135 @@ public class RunPaperTradingService {
         @Override
         public List<PaperTrade> listAll(String databasePath) {
             return List.of();
+        }
+    }
+
+    private static final class HistoryDiagnosticAccumulator {
+        private int previousSnapshotsLoaded;
+        private int runnersWithoutPreviousSnapshot;
+        private int runnersWithPreviousSnapshot;
+        private int runnersWithSufficientHistory;
+        private int runnersWithChangedOdds;
+        private int runnersWithUnchangedOdds;
+        private Instant oldestPreviousSnapshot;
+        private Instant newestPreviousSnapshot;
+        private final Set<String> stableMarketKeys = new HashSet<>();
+        private final Set<String> stableSelectionKeys = new HashSet<>();
+        private final List<PaperTradeRunnerClassificationDiagnostic> runnerClassificationSample = new ArrayList<>();
+        private final List<String> warnings = new ArrayList<>();
+        private final EnumMap<PaperTradeAnalyzerRejectionReason, Integer> analyzerRejectionCounts =
+            new EnumMap<>(PaperTradeAnalyzerRejectionReason.class);
+        private static final int MAX_CLASSIFICATION_SAMPLE = 12;
+
+        private void recordHistory(MarketSnapshot current, List<ObservedMarketSnapshot> recent) {
+            List<ObservedMarketSnapshot> safeRecent = recent == null ? List.of() : recent;
+            previousSnapshotsLoaded += safeRecent.size();
+            if (safeRecent.isEmpty()) {
+                runnersWithoutPreviousSnapshot++;
+                return;
+            }
+            runnersWithPreviousSnapshot++;
+            runnersWithSufficientHistory++;
+            stableMarketKeys.add(current.exchange() + "|" + current.marketId());
+            stableSelectionKeys.add(current.exchange() + "|" + current.marketId() + "|" + current.selectionId());
+            ObservedMarketSnapshot previous = safeRecent.getFirst();
+            if (samePrice(previous.snapshot().bestBackPrice(), current.bestBackPrice())) {
+                runnersWithUnchangedOdds++;
+            } else {
+                runnersWithChangedOdds++;
+            }
+            safeRecent.stream().map(ObservedMarketSnapshot::observedAt).forEach(this::recordPreviousObservedAt);
+        }
+
+        private void recordAnalyzerOutcome(PaperTradeAnalyzerRejectionReason reason) {
+            analyzerRejectionCounts.merge(reason, 1, Integer::sum);
+        }
+
+        private void recordRunnerClassification(MarketSnapshot snapshot) {
+            if (runnerClassificationSample.size() >= MAX_CLASSIFICATION_SAMPLE) {
+                return;
+            }
+            RunnerType type = snapshot.runnerType() == null ? RunnerType.UNKNOWN : snapshot.runnerType();
+            runnerClassificationSample.add(new PaperTradeRunnerClassificationDiagnostic(
+                snapshot.marketId(),
+                snapshot.marketName(),
+                snapshot.selectionId(),
+                snapshot.runnerName(),
+                normalizeRunnerName(snapshot.runnerName()),
+                type,
+                type == RunnerType.DRAW
+            ));
+        }
+
+        private void recordMarketInvariants(List<MarketSnapshot> snapshots) {
+            Map<String, List<MarketSnapshot>> snapshotsByMarket = (snapshots == null ? List.<MarketSnapshot>of() : snapshots).stream()
+                .filter(snapshot -> snapshot.marketName() != null && "match odds".equalsIgnoreCase(snapshot.marketName().strip()))
+                .collect(Collectors.groupingBy(
+                    snapshot -> snapshot.exchange() + "|" + snapshot.marketId(),
+                    LinkedHashMap::new,
+                    Collectors.toList()
+                ));
+            for (Map.Entry<String, List<MarketSnapshot>> entry : snapshotsByMarket.entrySet()) {
+                List<MarketSnapshot> marketSnapshots = entry.getValue();
+                if (marketSnapshots.size() != 3) {
+                    continue;
+                }
+                long drawRunners = marketSnapshots.stream()
+                    .filter(snapshot -> snapshot.runnerType() == RunnerType.DRAW)
+                    .count();
+                if (drawRunners == 0) {
+                    String runnerNames = marketSnapshots.stream()
+                        .map(snapshot -> snapshot.runnerName() == null ? String.valueOf(snapshot.selectionId()) : snapshot.runnerName())
+                        .collect(Collectors.joining(", "));
+                    warnings.add("PAPER_WARNING | complete Match Odds market has zero DRAW runners"
+                        + " | marketId=" + marketSnapshots.getFirst().marketId()
+                        + " | runnerNames=" + runnerNames);
+                }
+            }
+        }
+
+        private PaperTradeHistoryDiagnostics toDiagnostics() {
+            return new PaperTradeHistoryDiagnostics(
+                previousSnapshotsLoaded,
+                runnersWithoutPreviousSnapshot,
+                runnersWithPreviousSnapshot,
+                runnersWithSufficientHistory,
+                runnersWithChangedOdds,
+                runnersWithUnchangedOdds,
+                oldestPreviousSnapshot,
+                newestPreviousSnapshot,
+                stableMarketKeys.size(),
+                stableSelectionKeys.size(),
+                runnerClassificationSample,
+                warnings,
+                analyzerRejectionCounts
+            );
+        }
+
+        private void recordPreviousObservedAt(Instant observedAt) {
+            if (observedAt == null) {
+                return;
+            }
+            if (oldestPreviousSnapshot == null || observedAt.isBefore(oldestPreviousSnapshot)) {
+                oldestPreviousSnapshot = observedAt;
+            }
+            if (newestPreviousSnapshot == null || observedAt.isAfter(newestPreviousSnapshot)) {
+                newestPreviousSnapshot = observedAt;
+            }
+        }
+
+        private boolean samePrice(BigDecimal left, BigDecimal right) {
+            if (left == null || right == null) {
+                return left == right;
+            }
+            return left.compareTo(right) == 0;
+        }
+
+        private String normalizeRunnerName(String runnerName) {
+            if (runnerName == null || runnerName.isBlank()) {
+                return null;
+            }
+            return runnerName.strip().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
         }
     }
 }

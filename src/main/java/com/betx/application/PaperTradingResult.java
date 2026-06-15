@@ -14,11 +14,42 @@ public record PaperTradingResult(
     int executionFailures,
     int missingClosingPrices,
     int unsettledMarkets,
-    int settledTrades
+    int settledTrades,
+    PaperTradeHistoryDiagnostics historyDiagnostics
 ) {
     public PaperTradingResult {
         paperTrades = paperTrades == null ? List.of() : List.copyOf(paperTrades);
         failures = failures == null ? List.of() : List.copyOf(failures);
+        historyDiagnostics = historyDiagnostics == null ? PaperTradeHistoryDiagnostics.empty() : historyDiagnostics;
+    }
+
+    public PaperTradingResult(
+        List<BacktestPaperTrade> paperTrades,
+        List<String> failures,
+        int runnersAnalyzed,
+        int snapshotsSaved,
+        int marketsScanned,
+        int recommendationsGenerated,
+        int duplicatesSkipped,
+        int executionFailures,
+        int missingClosingPrices,
+        int unsettledMarkets,
+        int settledTrades
+    ) {
+        this(
+            paperTrades,
+            failures,
+            runnersAnalyzed,
+            snapshotsSaved,
+            marketsScanned,
+            recommendationsGenerated,
+            duplicatesSkipped,
+            executionFailures,
+            missingClosingPrices,
+            unsettledMarkets,
+            settledTrades,
+            PaperTradeHistoryDiagnostics.empty()
+        );
     }
 
     public PaperTradingResult(

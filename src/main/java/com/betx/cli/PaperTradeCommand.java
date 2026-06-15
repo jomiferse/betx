@@ -3,6 +3,8 @@ package com.betx.cli;
 import com.betx.application.BacktestPaperTradeCsvExporter;
 import com.betx.application.BacktestSlippageModel;
 import com.betx.application.BacktestValidationException;
+import com.betx.application.PaperTradeAnalyzerRejectionReason;
+import com.betx.application.PaperTradeHistoryDiagnostics;
 import com.betx.application.PaperTradingResult;
 import com.betx.application.RunPaperTradingService;
 import com.betx.domain.config.PaperConfig;
@@ -120,8 +122,40 @@ public class PaperTradeCommand implements Runnable {
             + " | commissionRate=" + commissionRate
             + " | slippageModel=" + selectedModel
             + (outputPath == null ? "" : " | output=" + outputPath));
+        printHistoryDiagnostics(result.historyDiagnostics());
         printPaperMetrics(report);
         result.failures().forEach(System.out::println);
+    }
+
+    private void printHistoryDiagnostics(PaperTradeHistoryDiagnostics diagnostics) {
+        PaperTradeHistoryDiagnostics safeDiagnostics = diagnostics == null
+            ? PaperTradeHistoryDiagnostics.empty()
+            : diagnostics;
+        System.out.println("PAPER_HISTORY | previousSnapshotsLoaded=" + safeDiagnostics.previousSnapshotsLoaded()
+            + " | runnersWithoutPreviousSnapshot=" + safeDiagnostics.runnersWithoutPreviousSnapshot()
+            + " | runnersWithPreviousSnapshot=" + safeDiagnostics.runnersWithPreviousSnapshot()
+            + " | runnersWithSufficientHistory=" + safeDiagnostics.runnersWithSufficientHistory()
+            + " | runnersWithChangedOdds=" + safeDiagnostics.runnersWithChangedOdds()
+            + " | runnersWithUnchangedOdds=" + safeDiagnostics.runnersWithUnchangedOdds()
+            + " | oldestPreviousSnapshot=" + instantOrUnavailable(safeDiagnostics.oldestPreviousSnapshot())
+            + " | newestPreviousSnapshot=" + instantOrUnavailable(safeDiagnostics.newestPreviousSnapshot())
+            + " | stableMarketKeys=" + safeDiagnostics.stableMarketKeys()
+            + " | stableSelectionKeys=" + safeDiagnostics.stableSelectionKeys());
+        for (PaperTradeAnalyzerRejectionReason reason : PaperTradeAnalyzerRejectionReason.values()) {
+            System.out.println("PAPER_ANALYZER | reason=" + reason
+                + " | count=" + safeDiagnostics.analyzerRejectionCounts().getOrDefault(reason, 0));
+        }
+        safeDiagnostics.runnerClassificationSample().forEach(diagnostic -> System.out.println(
+            "PAPER_DRAW_CLASSIFICATION"
+                + " | marketId=" + diagnostic.marketId()
+                + " | marketName=" + diagnostic.marketName()
+                + " | selectionId=" + diagnostic.selectionId()
+                + " | runnerName=" + diagnostic.runnerName()
+                + " | normalizedRunnerName=" + diagnostic.normalizedRunnerName()
+                + " | inferredRunnerType=" + diagnostic.inferredRunnerType()
+                + " | isDraw=" + diagnostic.draw()
+        ));
+        safeDiagnostics.warnings().forEach(System.out::println);
     }
 
     private com.betx.application.BacktestComparisonReport report(PaperTradingResult result, BacktestSlippageModel selectedModel) {
@@ -275,6 +309,10 @@ public class PaperTradeCommand implements Runnable {
 
     private String twoDecimal(BigDecimal value) {
         return (value == null ? BigDecimal.ZERO : value).setScale(2, RoundingMode.HALF_UP).toPlainString();
+    }
+
+    private String instantOrUnavailable(java.time.Instant instant) {
+        return instant == null ? "n/a" : instant.toString();
     }
 
     private BacktestSlippageModel selectedSlippageModel() {

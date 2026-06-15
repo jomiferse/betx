@@ -360,10 +360,25 @@ public class EventMarketAnalyzer {
         UNKNOWN;
 
         private static RunnerProfile from(MarketSnapshot snapshot) {
-            if (!isMatchOdds(snapshot) || snapshot.runnerName() == null || snapshot.eventName() == null) {
+            if (!isMatchOdds(snapshot)) {
+                return UNKNOWN;
+            }
+            if (snapshot.runnerType() == RunnerType.HOME) {
+                return HOME;
+            }
+            if (snapshot.runnerType() == RunnerType.DRAW) {
+                return DRAW;
+            }
+            if (snapshot.runnerType() == RunnerType.AWAY) {
+                return AWAY;
+            }
+            if (snapshot.runnerName() == null || snapshot.eventName() == null) {
                 return UNKNOWN;
             }
             if ("draw".equalsIgnoreCase(snapshot.runnerName())) {
+                return DRAW;
+            }
+            if ("the draw".equalsIgnoreCase(snapshot.runnerName().strip())) {
                 return DRAW;
             }
             String[] teams = snapshot.eventName().split("\\s+v\\s+", 2);

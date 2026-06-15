@@ -19,9 +19,11 @@ models/
 # IDEs and OS files
 .idea/
 .vscode/
+*.iml
 .DS_Store
 
 # Logs and temporary files
+logs/
 *.log
 *.tmp
 *.swp

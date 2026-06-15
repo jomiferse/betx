@@ -2,6 +2,7 @@ package com.betx.application;
 
 /** Prospective evidence status for draw-only paper trading. */
 public enum BacktestPaperValidationStatus {
+    INSUFFICIENT_DATA,
     INSUFFICIENT_SAMPLE,
     NEGATIVE_EXECUTABLE_ROI,
     FRAGILE_EDGE,

@@ -99,8 +99,11 @@ public class StartCommand implements Runnable {
         do {
             boolean sendTelegramAlerts = !requestConfirmation && (once || !firstCycle);
             DryRunSignalsResult result = dryRunSignalsService.run(config, sendTelegramAlerts, !requestConfirmation, System.out::println);
-            if (requestConfirmation) {
+            boolean startupAutoBettingCycle = status.autoBettingEnabled() && !requestConfirmation && !once && firstCycle;
+            if (status.autoBettingEnabled() && !startupAutoBettingCycle) {
                 telegramBetConfirmationService.sync(config, result, System.out::println);
+            } else if (startupAutoBettingCycle && !result.signals().isEmpty()) {
+                System.out.println("AUTO BET STARTUP CYCLE SKIPPED | signals=" + result.signals().size());
             }
             printResult(result, status.autoBettingEnabled(), status.requestConfirmation());
             if (once) {

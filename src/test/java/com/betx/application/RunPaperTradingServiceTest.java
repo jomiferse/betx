@@ -13,6 +13,7 @@ import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.ExchangeConfig;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.ObservedMarketSnapshot;
+import com.betx.domain.signal.RunnerType;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -198,6 +199,118 @@ class RunPaperTradingServiceTest {
     }
 
     @Test
+    void secondCycleLoadsPreviousSnapshotBeforeAnalysisAndCurrentSnapshotIsNotInOwnHistory() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        MarketSnapshot openingDraw = snapshot(2L, "Draw", "3.70");
+        MarketSnapshot changedDraw = snapshot(2L, "Draw", "3.68");
+        StatefulGateway gateway = new StatefulGateway(List.of(
+            List.of(openingDraw),
+            List.of(changedDraw)
+        ));
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(gateway),
+            repository,
+            paperTrades,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC)
+        );
+
+        List<PaperTradingResult> results = service.runContinuous(
+            new ConfigPath(Path.of("betx.yml")),
+            BigDecimal.ZERO,
+            BacktestSlippageModel.PROFIT_HAIRCUT,
+            BigDecimal.ZERO,
+            Duration.ofSeconds(60),
+            PaperTradingLoopControl.fixedCycles(2)
+        );
+
+        assertThat(results).hasSize(2);
+        assertThat(results.get(0).historyDiagnostics()).satisfies(diagnostics -> {
+            assertThat(diagnostics.previousSnapshotsLoaded()).isZero();
+            assertThat(diagnostics.runnersWithoutPreviousSnapshot()).isEqualTo(1);
+            assertThat(diagnostics.analyzerRejectionCounts())
+                .containsEntry(PaperTradeAnalyzerRejectionReason.INSUFFICIENT_HISTORY, 1);
+        });
+        assertThat(results.get(1).historyDiagnostics()).satisfies(diagnostics -> {
+            assertThat(diagnostics.previousSnapshotsLoaded()).isEqualTo(1);
+            assertThat(diagnostics.runnersWithPreviousSnapshot()).isEqualTo(1);
+            assertThat(diagnostics.runnersWithSufficientHistory()).isEqualTo(1);
+            assertThat(diagnostics.runnersWithChangedOdds()).isEqualTo(1);
+            assertThat(diagnostics.runnersWithUnchangedOdds()).isZero();
+            assertThat(diagnostics.oldestPreviousSnapshot()).isEqualTo(observedAt);
+            assertThat(diagnostics.newestPreviousSnapshot()).isEqualTo(observedAt);
+            assertThat(diagnostics.stableMarketKeys()).isEqualTo(1);
+            assertThat(diagnostics.stableSelectionKeys()).isEqualTo(1);
+            assertThat(diagnostics.analyzerRejectionCounts())
+                .containsEntry(PaperTradeAnalyzerRejectionReason.ACCEPTED, 1);
+        });
+        assertThat(repository.findRecentResponses).containsExactly(
+            List.of(),
+            List.of(openingDraw.bestBackPrice())
+        );
+        assertThat(paperTrades.saved).singleElement()
+            .satisfies(trade -> assertThat(trade.availableBackOdds()).isEqualByComparingTo("3.68"));
+    }
+
+    @Test
+    void paperCycleWithBetfairDrawRunnerDoesNotRejectAllRunnersAsNotDraw() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        MarketSnapshot home = snapshot(551L, "Team A", RunnerType.HOME, "2.10");
+        MarketSnapshot draw = snapshot(170940L, "The Draw", RunnerType.DRAW, "3.70");
+        MarketSnapshot away = snapshot(998L, "Team B", RunnerType.AWAY, "3.90");
+        repository.recent.add(new ObservedMarketSnapshot(observedAt.minusSeconds(60), home));
+        repository.recent.add(new ObservedMarketSnapshot(observedAt.minusSeconds(60), draw));
+        repository.recent.add(new ObservedMarketSnapshot(observedAt.minusSeconds(60), away));
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(home, draw, away))),
+            repository,
+            paperTrades,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC)
+        );
+
+        PaperTradingResult result = service.run(new ConfigPath(Path.of("betx.yml")), BigDecimal.ZERO, BacktestSlippageModel.PROFIT_HAIRCUT);
+
+        assertThat(result.historyDiagnostics().analyzerRejectionCounts())
+            .containsEntry(PaperTradeAnalyzerRejectionReason.NOT_DRAW, 2)
+            .containsEntry(PaperTradeAnalyzerRejectionReason.ACCEPTED, 1);
+        assertThat(paperTrades.saved).singleElement()
+            .satisfies(trade -> assertThat(trade.selectionId()).isEqualTo(170940L));
+    }
+
+    @Test
+    void warnsWhenCompleteMatchOddsMarketHasNoDrawRunner() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(
+                snapshot(551L, "Team A", RunnerType.HOME, "2.10"),
+                snapshot(170940L, "Market Name Missing Draw", RunnerType.UNKNOWN, "3.70"),
+                snapshot(998L, "Team B", RunnerType.AWAY, "3.90")
+            ))),
+            repository,
+            paperTrades,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC)
+        );
+
+        PaperTradingResult result = service.run(new ConfigPath(Path.of("betx.yml")), BigDecimal.ZERO, BacktestSlippageModel.PROFIT_HAIRCUT);
+
+        assertThat(result.historyDiagnostics().warnings())
+            .singleElement()
+            .isEqualTo("PAPER_WARNING | complete Match Odds market has zero DRAW runners"
+                + " | marketId=market-1 | runnerNames=Team A, Market Name Missing Draw, Team B");
+    }
+
+    @Test
     void continuousRestartResumesExistingLifecycleStateWithoutDuplicateRecommendation() {
         Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
         MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
@@ -310,6 +423,25 @@ class RunPaperTradingServiceTest {
         return snapshot(selectionId, runnerName, odds, new BigDecimal(odds).add(new BigDecimal("0.10")), "1200");
     }
 
+    private static MarketSnapshot snapshot(long selectionId, String runnerName, RunnerType runnerType, String odds) {
+        BigDecimal price = new BigDecimal(odds);
+        return new MarketSnapshot(
+            "betfair",
+            "market-1",
+            "Match Odds",
+            "Team A v Team B",
+            "SP1",
+            Instant.parse("2026-06-15T18:00:00Z"),
+            selectionId,
+            runnerName,
+            runnerType,
+            price,
+            price.add(new BigDecimal("0.10")),
+            new BigDecimal("0.04"),
+            new BigDecimal("1200")
+        );
+    }
+
     private static MarketSnapshot snapshot(long selectionId, String runnerName, String odds, BigDecimal layPrice, String liquidity) {
         BigDecimal price = new BigDecimal(odds);
         return new MarketSnapshot(
@@ -381,6 +513,7 @@ class RunPaperTradingServiceTest {
         private final List<ObservedMarketSnapshot> recent = new ArrayList<>();
         private final List<ObservedMarketSnapshot> saved = new ArrayList<>();
         private final List<String> findRecentRequests = new ArrayList<>();
+        private final List<List<BigDecimal>> findRecentResponses = new ArrayList<>();
 
         @Override
         public Optional<ObservedMarketSnapshot> findLatest(String databasePath, String exchange, String marketId, long selectionId) {
@@ -392,10 +525,15 @@ class RunPaperTradingServiceTest {
         @Override
         public List<ObservedMarketSnapshot> findRecent(String databasePath, String exchange, String marketId, long selectionId, int limit) {
             findRecentRequests.add(exchange + "|" + marketId + "|" + selectionId);
-            return recent.stream()
+            List<ObservedMarketSnapshot> response = recent.stream()
                 .filter(snapshot -> snapshot.snapshot().selectionId() == selectionId)
                 .limit(limit)
                 .toList();
+            findRecentResponses.add(response.stream()
+                .map(ObservedMarketSnapshot::snapshot)
+                .map(MarketSnapshot::bestBackPrice)
+                .toList());
+            return response;
         }
 
         @Override

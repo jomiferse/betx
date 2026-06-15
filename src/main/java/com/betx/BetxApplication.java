@@ -1,6 +1,8 @@
 package com.betx;
 
 import com.betx.cli.BetxRootCommand;
+import java.io.PrintStream;
+import java.time.Clock;
 import java.util.Map;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.ExitCodeGenerator;
@@ -8,6 +10,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.web.client.RestClient;
 import picocli.CommandLine;
@@ -25,6 +28,13 @@ public class BetxApplication implements CommandLineRunner, ExitCodeGenerator {
     }
 
     public static void main(String[] args) {
+        System.exit(runForExitCode(args));
+    }
+
+    static int runForExitCode(String[] args) {
+        PrintStream originalOut = System.out;
+        PrintStream originalErr = System.err;
+        installCliLogging(args, originalOut, originalErr);
         SpringApplication app = new SpringApplication(BetxApplication.class);
         app.setWebApplicationType(WebApplicationType.NONE);
         app.setBannerMode(org.springframework.boot.Banner.Mode.OFF);
@@ -32,7 +42,22 @@ public class BetxApplication implements CommandLineRunner, ExitCodeGenerator {
             "spring.main.log-startup-info", "false",
             "logging.level.root", "OFF"
         ));
-        System.exit(SpringApplication.exit(app.run(args)));
+        try (ConfigurableApplicationContext context = app.run(args)) {
+            return context.getBean(BetxApplication.class).getExitCode();
+        } finally {
+            System.setOut(originalOut);
+            System.setErr(originalErr);
+        }
+    }
+
+    private static void installCliLogging(String[] args, PrintStream originalOut, PrintStream originalErr) {
+        CliLogConfig cliLogConfig = CliLogConfig.fromArgs(args);
+        if (!cliLogConfig.enabled()) {
+            return;
+        }
+        CliLogWriter writer = new CliLogWriter(cliLogConfig.directory(), Clock.systemDefaultZone());
+        System.setOut(writer.loggingPrintStream(originalOut));
+        System.setErr(writer.loggingPrintStream(originalErr));
     }
 
     @Override

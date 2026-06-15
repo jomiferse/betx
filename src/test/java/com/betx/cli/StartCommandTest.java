@@ -104,6 +104,49 @@ class StartCommandTest {
     }
 
     @Test
+    void autoBettingWithoutConfirmationSyncsAutomaticExecution() {
+        BetxConfig config = configWithAutoBetting(2, true, false);
+        RecordingTelegramBetConfirmationService confirmations = new RecordingTelegramBetConfirmationService();
+        SequencedDryRunSignalsService dryRunSignalsService = new SequencedDryRunSignalsService(
+            config,
+            new DryRunSignalsResult(
+                List.of(new BetSignal("betfair", "m-1", 42L, BetSide.BACK, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "test", "live")),
+                List.of(),
+                false
+            )
+        );
+        StartCommand command = command(config, dryRunSignalsService, confirmations);
+
+        String output = captureOutput(command::run);
+
+        assertThat(output).contains("BetX auto-betting is enabled without Telegram confirmation.");
+        assertThat(confirmations.syncedResults()).isNotEmpty();
+        assertThat(confirmations.syncedResults().getFirst().signals()).hasSize(1);
+    }
+
+    @Test
+    void continuousAutoBettingWithoutConfirmationSkipsStartupCycleExecution() {
+        BetxConfig config = configWithAutoBetting(2, true, false);
+        RecordingTelegramBetConfirmationService confirmations = new RecordingTelegramBetConfirmationService();
+        SequencedDryRunSignalsService dryRunSignalsService = new SequencedDryRunSignalsService(
+            config,
+            new DryRunSignalsResult(
+                List.of(new BetSignal("betfair", "m-1", 42L, BetSide.BACK, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "startup", "live")),
+                List.of(),
+                false
+            ),
+            new DryRunSignalsResult(List.of(), List.of(), true)
+        );
+        StartCommand command = command(config, dryRunSignalsService, confirmations);
+        command.once = false;
+
+        captureOutput(command::run);
+
+        assertThat(confirmations.syncedResults()).singleElement()
+            .satisfies(result -> assertThat(result.signals()).isEmpty());
+    }
+
+    @Test
     void onceRunWithLargeAnalysisSetPrintsOnlyBetAnalyses() {
         BetxConfig config = configWithAutoBetting(2, true, true);
         List<RunnerAnalysis> analyses = new java.util.ArrayList<>(java.util.stream.IntStream.range(0, 31)

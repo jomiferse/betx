@@ -4,10 +4,12 @@ import com.betx.domain.betfair.BetfairMarketBook;
 import com.betx.domain.betfair.BetfairMarketCatalogue;
 import com.betx.domain.betfair.BetfairRunnerPrice;
 import com.betx.domain.signal.MarketSnapshot;
+import com.betx.domain.signal.RunnerType;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -40,6 +42,7 @@ public class MarketSnapshotMapper {
     }
 
     private MarketSnapshot toSnapshot(String exchange, BetfairMarketCatalogue catalogue, BetfairMarketBook book, BetfairRunnerPrice runner) {
+        String runnerName = catalogue.runnerName(runner.selectionId()).orElse(null);
         return new MarketSnapshot(
             exchange,
             catalogue.marketId(),
@@ -48,12 +51,48 @@ public class MarketSnapshotMapper {
             catalogue.competitionName(),
             catalogue.marketStartTime(),
             runner.selectionId(),
-            catalogue.runnerName(runner.selectionId()).orElse(null),
+            runnerName,
+            runnerType(catalogue, runnerName),
             runner.bestBackPrice(),
             runner.bestLayPrice(),
             relativeSpread(runner.bestBackPrice(), runner.bestLayPrice()),
             liquidity(book.totalMatched(), runner.totalMatched())
         );
+    }
+
+    private RunnerType runnerType(BetfairMarketCatalogue catalogue, String runnerName) {
+        if (catalogue.marketName() == null || !"match odds".equalsIgnoreCase(catalogue.marketName().strip())) {
+            return RunnerType.UNKNOWN;
+        }
+        String normalizedRunnerName = normalizeRunnerName(runnerName);
+        if (normalizedRunnerName == null) {
+            return RunnerType.UNKNOWN;
+        }
+        if ("draw".equals(normalizedRunnerName) || "the draw".equals(normalizedRunnerName)) {
+            return RunnerType.DRAW;
+        }
+        String eventName = catalogue.eventName();
+        if (eventName == null) {
+            return RunnerType.UNKNOWN;
+        }
+        String[] teams = eventName.split("\\s+v\\s+", 2);
+        if (teams.length != 2) {
+            return RunnerType.UNKNOWN;
+        }
+        if (normalizedRunnerName.equals(normalizeRunnerName(teams[0]))) {
+            return RunnerType.HOME;
+        }
+        if (normalizedRunnerName.equals(normalizeRunnerName(teams[1]))) {
+            return RunnerType.AWAY;
+        }
+        return RunnerType.UNKNOWN;
+    }
+
+    private String normalizeRunnerName(String runnerName) {
+        if (runnerName == null || runnerName.isBlank()) {
+            return null;
+        }
+        return runnerName.strip().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
     }
 
     private BigDecimal relativeSpread(BigDecimal bestBackPrice, BigDecimal bestLayPrice) {

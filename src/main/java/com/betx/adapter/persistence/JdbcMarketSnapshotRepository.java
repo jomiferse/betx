@@ -3,6 +3,7 @@ package com.betx.adapter.persistence;
 import com.betx.application.port.out.MarketSnapshotRepository;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.ObservedMarketSnapshot;
+import com.betx.domain.signal.RunnerType;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -54,7 +55,7 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
         try (Connection connection = connection(databasePath)) {
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT observed_at, exchange, market_id, market_name, event_name, competition_name, market_start_time,
-                       runner_name,
+                       runner_name, runner_type,
                        selection_id, best_back_price, best_lay_price, spread, liquidity
                 FROM market_snapshots
                 WHERE exchange = ? AND market_id = ? AND selection_id = ?
@@ -85,7 +86,7 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
         try (Connection connection = connection(databasePath)) {
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT observed_at, exchange, market_id, market_name, event_name, competition_name, market_start_time,
-                       runner_name,
+                       runner_name, runner_type,
                        selection_id, best_back_price, best_lay_price, spread, liquidity
                 FROM market_snapshots
                 WHERE exchange = ? AND market_id = ? AND selection_id = ?
@@ -117,9 +118,9 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
             try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO market_snapshots (
                     observed_at, exchange, market_id, market_name, event_name, competition_name, market_start_time,
-                    runner_name,
+                    runner_name, runner_type,
                     selection_id, best_back_price, best_lay_price, spread, liquidity
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """)) {
                 statement.setString(1, observed.observedAt().toString());
                 statement.setString(2, snapshot.exchange());
@@ -129,11 +130,12 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
                 statement.setString(6, snapshot.competitionName());
                 statement.setString(7, snapshot.marketStartTime() == null ? null : snapshot.marketStartTime().toString());
                 statement.setString(8, snapshot.runnerName());
-                statement.setLong(9, snapshot.selectionId());
-                setDecimal(statement, 10, snapshot.bestBackPrice());
-                setDecimal(statement, 11, snapshot.bestLayPrice());
-                setDecimal(statement, 12, snapshot.spread());
-                setDecimal(statement, 13, snapshot.liquidity());
+                statement.setString(9, snapshot.runnerType().name());
+                statement.setLong(10, snapshot.selectionId());
+                setDecimal(statement, 11, snapshot.bestBackPrice());
+                setDecimal(statement, 12, snapshot.bestLayPrice());
+                setDecimal(statement, 13, snapshot.spread());
+                setDecimal(statement, 14, snapshot.liquidity());
                 statement.executeUpdate();
             }
         } catch (SQLException exc) {
@@ -231,6 +233,7 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
                     competition_name TEXT,
                     market_start_time TEXT,
                     runner_name TEXT,
+                    runner_type TEXT,
                     selection_id INTEGER NOT NULL,
                     best_back_price TEXT,
                     best_lay_price TEXT,
@@ -243,6 +246,7 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
                 ON market_snapshots(exchange, market_id, selection_id, observed_at DESC)
                 """);
             addColumnIfMissing(connection, "runner_name", "TEXT");
+            addColumnIfMissing(connection, "runner_type", "TEXT");
         }
     }
 
@@ -270,12 +274,24 @@ public class JdbcMarketSnapshotRepository implements MarketSnapshotRepository {
                 marketStartTime == null ? null : Instant.parse(marketStartTime),
                 resultSet.getLong("selection_id"),
                 resultSet.getString("runner_name"),
+                runnerType(resultSet.getString("runner_type")),
                 decimal(resultSet, "best_back_price"),
                 decimal(resultSet, "best_lay_price"),
                 decimal(resultSet, "spread"),
                 decimal(resultSet, "liquidity")
             )
         );
+    }
+
+    private RunnerType runnerType(String value) {
+        if (value == null || value.isBlank()) {
+            return RunnerType.UNKNOWN;
+        }
+        try {
+            return RunnerType.valueOf(value);
+        } catch (IllegalArgumentException exc) {
+            return RunnerType.UNKNOWN;
+        }
     }
 
     private void setDecimal(PreparedStatement statement, int index, BigDecimal value) throws SQLException {

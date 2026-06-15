@@ -301,7 +301,7 @@ public class BacktestResultFormatter {
     private String formatClvSummary(BacktestClvSummary summary) {
         return "CLV | strategy=value-football-draw-only"
             + " | status=" + summary.status()
-            + " | trades=" + summary.trades()
+            + " | validClvTrades=" + summary.trades()
             + " | averageClv=" + valueOrUnavailable(summary.averageClv())
             + " | medianClv=" + valueOrUnavailable(summary.medianClv())
             + " | positiveClv=" + percentOrUnavailable(summary.positiveClvPercent());

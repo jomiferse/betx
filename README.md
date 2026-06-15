@@ -4,7 +4,7 @@ BetX is a terminal-first betting signals engine for football markets.
 
 It reads exchange market data, stores snapshots locally, detects useful price and liquidity movement, and sends actionable Telegram alerts. It is safe by default: auto-betting is disabled unless explicitly configured per exchange.
 
-Current version: `0.3.0`
+Current version: `0.5.0`
 
 ## What It Does
 
@@ -14,6 +14,8 @@ Current version: `0.3.0`
 - Scores each runner from `0-100` using recent odds, liquidity, persistence, and volatility.
 - Sends filtered Telegram alerts for actionable `BET` signals.
 - Supports Betfair auto-betting with optional Telegram confirmation.
+- Runs restart-safe prospective paper trading for `value-football-draw-only`.
+- Writes separated local audit logs for CLI, paper-trade, and Telegram messages.
 
 ## Requirements
 
@@ -132,7 +134,19 @@ When Betfair `auto_betting.enabled` and `request_confirmation` are both true, `B
 
 When `auto_betting.enabled` is true and `request_confirmation` is false, BetX sends orders automatically, capped by the Betfair auto-betting limits.
 
-Before any live order is sent, BetX checks Betfair for real exposure. `max_open_positions` counts open Betfair positions, including manual bets placed outside BetX. `max_daily_loss` is the realized/liquidated loss for the current UTC day from Betfair settlements. If Betfair exposure cannot be read, BetX blocks the live order for safety.
+For unattended continuous mode, the first `start` cycle is treated as a warmup and skips automatic orders. This avoids executing stale startup signals while still allowing subsequent cycles to trade normally under the configured limits.
+
+Before any live order is sent, BetX checks Betfair for real exposure. `max_open_positions` counts open Betfair positions, including manual bets placed outside BetX. `max_daily_loss` is the realized/liquidated loss for the current UTC day from Betfair settlements. If Betfair exposure cannot be read, BetX blocks the live order for safety. BetX reuses per-cycle exposure reads and stops creating new intents once the configured open-position capacity is full, reducing unnecessary Betfair login/request pressure.
+
+## Local Logs
+
+When `app.log_level: info`, BetX mirrors terminal and alert output into daily local audit files:
+
+- CLI commands: `logs/cli/messages_DDMMYYYY.txt`
+- Paper trading: `logs/paper-trade/messages_DDMMYYYY.txt`
+- Sent Telegram messages: `logs/telegram/messages_DDMMYYYY.txt`
+
+These files are runtime artifacts and are ignored by Git. They are useful for auditing exactly what BetX printed or sent without mixing paper-trade diagnostics with normal CLI output.
 
 ## OpenRouter Match Intelligence
 
@@ -289,6 +303,8 @@ paper:
 ```
 
 Continuous paper mode reuses the same SQLite database across restarts. It never clears paper trades or market snapshots at startup, so the second and later cycles can analyze against snapshots saved by earlier cycles. Press Ctrl+C to request graceful shutdown; BetX finishes the current paper-trading cycle before exiting.
+
+When `app.log_level: info`, continuous paper output is also written to `logs/paper-trade/messages_DDMMYYYY.txt`.
 
 Paper records move through `RECOMMENDED`, `EXECUTED`, `CLOSED`, `SETTLED`, or `EXECUTION_FAILED`. Recommendation and execution use the live snapshot available at recommendation time. Closing odds are captured later near market start from a separate snapshot and are never exposed to recommendation analysis. Settlement is applied only after a settlement source reports an outcome. CSV export remains available for audit:
 
