@@ -19,6 +19,15 @@ public interface BetIntentRepository {
         Instant since
     );
 
+    default Optional<BetIntent> findLatestByExchangeResultSince(
+        String databasePath,
+        String exchange,
+        String resultMessage,
+        Instant since
+    ) {
+        return Optional.empty();
+    }
+
     Optional<BetIntent> findById(String databasePath, String id);
 
     List<BetIntent> listRecent(String databasePath, int limit);

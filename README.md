@@ -4,7 +4,7 @@ BetX is a terminal-first betting signals engine for football markets.
 
 It reads exchange market data, stores snapshots locally, detects useful price and liquidity movement, and sends actionable Telegram alerts. It is safe by default: auto-betting is disabled unless explicitly configured per exchange.
 
-Current version: `0.6.0`
+Current version: `0.6.1`
 
 ## What It Does
 

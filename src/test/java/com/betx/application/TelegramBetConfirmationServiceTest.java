@@ -820,6 +820,36 @@ class TelegramBetConfirmationServiceTest {
     }
 
     @Test
+    void maxOpenPositionsDoesNotCreateRepeatedBlockedIntentWithinDedupeWindow() {
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        Clock clock = Clock.fixed(Instant.parse("2026-06-17T00:45:00Z"), ZoneOffset.UTC);
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(3), BigDecimal.valueOf(25), 1, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(1, BigDecimal.ZERO),
+            executionGateway,
+            clock
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5)),
+            analysis("Team A")
+        ));
+        service.sync(CONFIG_PATH, resultOf(
+            signal("betfair", "1.2", 43L, BigDecimal.valueOf(2.7), BigDecimal.valueOf(5)),
+            analysis("Team C", "1.2", 43L)
+        ));
+
+        assertThat(executionGateway.orders()).isEmpty();
+        assertThat(intents.saved()).singleElement()
+            .satisfies(intent -> assertThat(intent.resultMessage()).isEqualTo("Open position limit reached."));
+    }
+
+    @Test
     void blocksAutomaticBetWhenRealizedDailyLossReachesLimit() {
         RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
         RecordingIntentRepository intents = new RecordingIntentRepository();
@@ -1766,6 +1796,20 @@ class TelegramBetConfirmationServiceTest {
                 .filter(intent -> intent.exchange().equals(exchange)
                     && intent.marketId().equals(marketId)
                     && intent.selectionId() == selectionId
+                    && !intent.updatedAt().isBefore(since))
+                .findFirst();
+        }
+
+        @Override
+        public Optional<BetIntent> findLatestByExchangeResultSince(
+            String databasePath,
+            String exchange,
+            String resultMessage,
+            Instant since
+        ) {
+            return saved.stream()
+                .filter(intent -> intent.exchange().equals(exchange)
+                    && resultMessage.equals(intent.resultMessage())
                     && !intent.updatedAt().isBefore(since))
                 .findFirst();
         }
