@@ -101,6 +101,37 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
     }
 
     @Override
+    public Optional<BetIntent> findLatestByExchangeResultSince(
+        String databasePath,
+        String exchange,
+        String resultMessage,
+        Instant since
+    ) {
+        ensureSchemaInitialized(databasePath);
+        try (Connection connection = connection(databasePath)) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT *
+                FROM bet_intents
+                WHERE exchange = ? AND result_message = ? AND updated_at >= ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """)) {
+                statement.setString(1, exchange);
+                statement.setString(2, resultMessage);
+                statement.setString(3, since.toString());
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(map(resultSet));
+                }
+            }
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not read recent exchange-level live bet intent.", exc);
+        }
+    }
+
+    @Override
     public Optional<BetIntent> findById(String databasePath, String id) {
         ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {

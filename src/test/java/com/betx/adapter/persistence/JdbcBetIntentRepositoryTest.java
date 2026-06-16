@@ -76,6 +76,18 @@ class JdbcBetIntentRepositoryTest {
             42L,
             Instant.parse("2026-06-05T08:00:00Z")
         )).hasValueSatisfying(intent -> assertThat(intent.id()).isEqualTo("first"));
+        assertThat(repository.findLatestByExchangeResultSince(
+            databasePath,
+            "betfair",
+            "accepted",
+            Instant.parse("2026-06-05T08:00:00Z")
+        )).hasValueSatisfying(intent -> assertThat(intent.id()).isEqualTo("first"));
+        assertThat(repository.findLatestByExchangeResultSince(
+            databasePath,
+            "betfair",
+            "accepted",
+            Instant.parse("2026-06-05T10:00:00Z")
+        )).isEmpty();
     }
 
     @Test
