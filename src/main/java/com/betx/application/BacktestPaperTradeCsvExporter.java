@@ -12,7 +12,7 @@ import java.util.List;
 public class BacktestPaperTradeCsvExporter {
     public List<String> lines(BacktestComparisonReport report) {
         List<String> lines = new ArrayList<>();
-        lines.add("event_id,market_id,league,season,event,runner,recommendation_timestamp,execution_timestamp,closing_timestamp,available_back_odds,requested_odds,execution_odds,closing_odds,result,gross_pnl,commission,net_pnl,decimal_clv_ratio,implied_probability_change,movement_bucket,slippage_model");
+        lines.add("event_id,market_id,league,season,event,runner,side,recommendation_timestamp,execution_timestamp,closing_timestamp,available_back_odds,requested_odds,execution_odds,closing_odds,result,gross_pnl,commission,net_pnl,decimal_clv_ratio,implied_probability_change,movement_bucket,slippage_model");
         for (BacktestPaperTrade trade : report.paperTrades()) {
             lines.add(line(
                 trade.eventId(),
@@ -21,6 +21,7 @@ public class BacktestPaperTradeCsvExporter {
                 trade.season(),
                 trade.eventName(),
                 trade.runner(),
+                trade.side().name(),
                 trade.recommendationTimestamp().toString(),
                 timestamp(trade.executionTimestamp()),
                 timestamp(trade.closingTimestamp()),

@@ -1,5 +1,6 @@
 package com.betx.application;
 
+import com.betx.domain.signal.BetSide;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
@@ -12,6 +13,7 @@ public record BacktestPaperTrade(
     String season,
     String eventName,
     String runner,
+    BetSide side,
     Instant recommendationTimestamp,
     Instant executionTimestamp,
     Instant closingTimestamp,
@@ -32,6 +34,7 @@ public record BacktestPaperTrade(
         league = league == null || league.isBlank() ? "unknown" : league;
         season = season == null || season.isBlank() ? "unknown" : season;
         runner = runner == null || runner.isBlank() ? "unknown" : runner;
+        side = side == null ? BetSide.BACK : side;
         executionTimestamp = executionTimestamp == null ? recommendationTimestamp : executionTimestamp;
         commission = commission == null ? BigDecimal.ZERO : commission;
         movementBucket = movementBucket == null || movementBucket.isBlank() ? "unknown" : movementBucket;

@@ -6,7 +6,8 @@ public record StorageConfig(
     String type,
     String path,
     @JsonProperty("cleanup_market_snapshots_enabled") Boolean cleanupMarketSnapshotsEnabled,
-    @JsonProperty("market_snapshot_retention_hours") Integer marketSnapshotRetentionHours
+    @JsonProperty("market_snapshot_retention_hours") Integer marketSnapshotRetentionHours,
+    @JsonProperty("paper_evaluations") PaperEvaluationsStorageConfig paperEvaluations
 ) {
     public StorageConfig {
         type = type == null || type.isBlank() ? "sqlite" : type;
@@ -15,9 +16,19 @@ public record StorageConfig(
         marketSnapshotRetentionHours = marketSnapshotRetentionHours == null || marketSnapshotRetentionHours <= 0
             ? 48
             : marketSnapshotRetentionHours;
+        paperEvaluations = paperEvaluations == null ? PaperEvaluationsStorageConfig.defaults() : paperEvaluations;
     }
 
     public StorageConfig(String type, String path) {
-        this(type, path, null, null);
+        this(type, path, null, null, null);
+    }
+
+    public StorageConfig(
+        String type,
+        String path,
+        Boolean cleanupMarketSnapshotsEnabled,
+        Integer marketSnapshotRetentionHours
+    ) {
+        this(type, path, cleanupMarketSnapshotsEnabled, marketSnapshotRetentionHours, null);
     }
 }

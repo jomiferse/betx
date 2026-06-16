@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.betx.domain.order.BetIntent;
 import com.betx.domain.order.BetIntentSource;
 import com.betx.domain.order.BetIntentStage;
+import com.betx.domain.order.BetSettlementResult;
+import com.betx.domain.signal.BetSide;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.sql.DriverManager;
@@ -50,6 +52,7 @@ class JdbcBetIntentRepositoryTest {
                 assertThat(intent.resultMessage()).isEqualTo("accepted");
                 assertThat(intent.externalOrderId()).isEqualTo("bet-123");
                 assertThat(intent.source()).isEqualTo(BetIntentSource.AUTOMATIC);
+                assertThat(intent.side()).isEqualTo(BetSide.BACK);
             });
         assertThat(repository.listRecent(databasePath, 10))
             .extracting(BetIntent::id)
@@ -73,6 +76,79 @@ class JdbcBetIntentRepositoryTest {
             42L,
             Instant.parse("2026-06-05T08:00:00Z")
         )).hasValueSatisfying(intent -> assertThat(intent.id()).isEqualTo("first"));
+    }
+
+    @Test
+    void persistsSettlementFieldsForExecutedOrders() {
+        JdbcBetIntentRepository repository = new JdbcBetIntentRepository(tempDir.resolve("settlement.db").toString());
+        String databasePath = tempDir.resolve("settlement.db").toString();
+        BetIntent settled = intent(
+            "settled",
+            BetIntentSource.AUTOMATIC,
+            "1.1",
+            42L,
+            BetIntentStage.EXECUTED,
+            "accepted",
+            "bet-123",
+            "2026-06-05T09:00:00Z"
+        ).withSettlement(
+            BetIntentStage.SETTLED,
+            BetSettlementResult.WIN,
+            new BigDecimal("13.50"),
+            Instant.parse("2026-06-05T18:30:00Z"),
+            "Settled on exchange."
+        );
+
+        repository.save(databasePath, settled);
+
+        assertThat(repository.findById(databasePath, "settled"))
+            .hasValueSatisfying(intent -> {
+                assertThat(intent.side()).isEqualTo(BetSide.BACK);
+                assertThat(intent.stage()).isEqualTo(BetIntentStage.SETTLED);
+                assertThat(intent.settlementResult()).isEqualTo(BetSettlementResult.WIN);
+                assertThat(intent.realizedProfitLoss()).isEqualByComparingTo("13.50");
+                assertThat(intent.settledAt()).isEqualTo(Instant.parse("2026-06-05T18:30:00Z"));
+            });
+    }
+
+    @Test
+    void persistsExecutionBalanceAuditFields() {
+        JdbcBetIntentRepository repository = new JdbcBetIntentRepository(tempDir.resolve("execution-audit.db").toString());
+        String databasePath = tempDir.resolve("execution-audit.db").toString();
+        Instant snapshotAt = Instant.parse("2026-06-05T09:00:01Z");
+        BetIntent intent = new BetIntent(
+            "queued-1",
+            BetIntentSource.AUTOMATIC,
+            "betfair",
+            "1.1",
+            42L,
+            "Team A v Team B",
+            "Match Odds",
+            "Team A",
+            "liquidity_ok",
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            new BigDecimal("17.70"),
+            new BigDecimal("16.70"),
+            BigDecimal.ONE,
+            snapshotAt,
+            BigDecimal.ONE,
+            "accepted",
+            "bet-123",
+            BetIntentStage.EXECUTED,
+            Instant.parse("2026-06-05T09:00:00Z"),
+            Instant.parse("2026-06-05T09:00:02Z")
+        );
+
+        repository.save(databasePath, intent);
+
+        assertThat(repository.findById(databasePath, "queued-1"))
+            .hasValueSatisfying(saved -> {
+                assertThat(saved.availableBalance()).isEqualByComparingTo("17.70");
+                assertThat(saved.effectiveAvailableBalance()).isEqualByComparingTo("16.70");
+                assertThat(saved.reservedBalance()).isEqualByComparingTo("1");
+                assertThat(saved.balanceSnapshotAt()).isEqualTo(snapshotAt);
+            });
     }
 
     @Test
@@ -119,6 +195,10 @@ class JdbcBetIntentRepositoryTest {
                 assertThat(intent.resultMessage()).isEqualTo("blocked");
                 assertThat(intent.externalOrderId()).isEqualTo("bet-123");
                 assertThat(intent.source()).isEqualTo(BetIntentSource.AUTOMATIC);
+                assertThat(intent.side()).isEqualTo(BetSide.BACK);
+                assertThat(intent.settlementResult()).isNull();
+                assertThat(intent.realizedProfitLoss()).isNull();
+                assertThat(intent.settledAt()).isNull();
             });
     }
 

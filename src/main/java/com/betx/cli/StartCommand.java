@@ -101,7 +101,7 @@ public class StartCommand implements Runnable {
             DryRunSignalsResult result = dryRunSignalsService.run(config, sendTelegramAlerts, !requestConfirmation, System.out::println);
             boolean startupAutoBettingCycle = status.autoBettingEnabled() && !requestConfirmation && !once && firstCycle;
             if (status.autoBettingEnabled() && !startupAutoBettingCycle) {
-                telegramBetConfirmationService.sync(config, result, System.out::println);
+                safeSyncBetConfirmations(config, result);
             } else if (startupAutoBettingCycle && !result.signals().isEmpty()) {
                 System.out.println("AUTO BET STARTUP CYCLE SKIPPED | signals=" + result.signals().size());
             }
@@ -137,6 +137,7 @@ public class StartCommand implements Runnable {
             + " | ignoredMarkets=" + result.ignoredMarkets()
             + " | runnersAnalyzed=" + result.runnerAnalyses().size()
             + " | signals=" + result.signals().size()
+            + " | signalHistory=" + result.signalHistoryEntries().size()
             + " | failures=" + result.failures().size());
         result.failures().forEach(System.out::println);
         printSnapshotChanges(result);
@@ -158,6 +159,14 @@ public class StartCommand implements Runnable {
         }
 
         result.signals().forEach(signal -> System.out.println(signalFormatter.format(signal)));
+    }
+
+    private void safeSyncBetConfirmations(ConfigPath config, DryRunSignalsResult result) {
+        try {
+            telegramBetConfirmationService.sync(config, result, System.out::println);
+        } catch (RuntimeException exc) {
+            System.out.println("TELEGRAM BET SYNC WARNING | message=" + nullSafe(exc.getMessage()));
+        }
     }
 
     private void printIntelligence(DryRunSignalsResult result) {
@@ -232,10 +241,14 @@ public class StartCommand implements Runnable {
             }
             remainingMillis -= pauseMillis;
             if (liveMode) {
-                telegramBetConfirmationService.sync(config, new DryRunSignalsResult(List.of(), List.of(), false), System.out::println);
+                safeSyncBetConfirmations(config, new DryRunSignalsResult(List.of(), List.of(), false));
             }
         }
         return true;
+    }
+
+    private String nullSafe(String value) {
+        return value == null || value.isBlank() ? "Unknown error." : value;
     }
 
     private boolean sleep(long millis) {

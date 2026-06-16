@@ -7,6 +7,7 @@ import com.betx.application.SignalHistoryEntry;
 import com.betx.domain.signal.RecommendationType;
 import com.betx.domain.order.BetIntent;
 import com.betx.domain.order.BetIntentStage;
+import com.betx.domain.order.BetSettlementResult;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.sql.DriverManager;
@@ -53,17 +54,24 @@ class JdbcSignalHistoryRepositoryTest {
 
         BetIntent awaiting = intent("intent-1", BetIntentStage.AWAITING_CONFIRMATION, null, null, "Stake pending.");
         repository.linkIntent(databasePath, decision.key(), awaiting);
-        BetIntent executed = intent("intent-1", BetIntentStage.EXECUTED, BigDecimal.valueOf(5), "bet-123", "accepted");
+        BetIntent executed = intent("intent-1", BetIntentStage.EXECUTED, BigDecimal.valueOf(5), "bet-123", "accepted")
+            .withSettlement(
+                BetIntentStage.SETTLED,
+                BetSettlementResult.WIN,
+                new BigDecimal("13.50"),
+                Instant.parse("2026-05-31T18:30:00Z"),
+                "Settled on exchange."
+            );
         repository.updateOrderState(databasePath, executed);
 
         assertThat(repository.findLatest(databasePath, "betfair", "1.1", 42L))
             .hasValueSatisfying(saved -> {
                 assertThat(saved.betIntentId()).isEqualTo("intent-1");
-                assertThat(saved.orderStage()).isEqualTo("EXECUTED");
+                assertThat(saved.orderStage()).isEqualTo("SETTLED");
                 assertThat(saved.selectedStake()).isEqualByComparingTo("5");
                 assertThat(saved.externalOrderId()).isEqualTo("bet-123");
-                assertThat(saved.resultMessage()).isEqualTo("accepted");
-                assertThat(saved.realizedProfitLoss()).isNull();
+                assertThat(saved.resultMessage()).isEqualTo("Settled on exchange.");
+                assertThat(saved.realizedProfitLoss()).isEqualByComparingTo("13.50");
             });
     }
 

@@ -18,6 +18,31 @@ public final class DefaultConfigTemplates {
               username:
               first_name:
               pending_link_code:
+              alerts:
+                # key_events sends real order, settlement, and critical risk events by default.
+                # Use all_signals only while diagnosing strategy behavior.
+                mode: key_events
+                signal_dedupe_ttl: 30m
+
+            resilience:
+              betfair:
+                failure_threshold: 3
+                cooldown: 5m
+              telegram:
+                failure_threshold: 3
+                cooldown: 5m
+              openrouter:
+                failure_threshold: 3
+                cooldown: 5m
+
+            execution:
+              queue:
+                enabled: true
+                max_pending_per_exchange: 20
+                order_ttl: 10s
+                stale_balance_ttl: 5s
+                revalidate_odds_after: 3s
+                min_effective_balance: 0.01
 
             exchanges:
               - name: betfair
@@ -42,6 +67,9 @@ public final class DefaultConfigTemplates {
               path: ./data/betx.db
               cleanup_market_snapshots_enabled: true
               market_snapshot_retention_hours: 48
+              paper_evaluations:
+                detail_retention_days: 7
+                rejection_sample_rate: 0.0
 
             paper:
               continuous: false

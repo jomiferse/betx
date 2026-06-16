@@ -77,4 +77,16 @@ class BetxConfigTest {
         assertThat(config.paper().closingCaptureMinutesBeforeStart()).isEqualTo(2);
         assertThat(config.paper().settlementPollInterval()).isEqualTo(java.time.Duration.ofMinutes(5));
     }
+
+    @Test
+    void providesDefaultOrderExecutionQueueConfiguration() {
+        BetxConfig config = BetxConfig.defaults();
+
+        assertThat(config.execution().queue().enabled()).isTrue();
+        assertThat(config.execution().queue().maxPendingPerExchange()).isEqualTo(20);
+        assertThat(config.execution().queue().orderTtl()).isEqualTo(java.time.Duration.ofSeconds(10));
+        assertThat(config.execution().queue().staleBalanceTtl()).isEqualTo(java.time.Duration.ofSeconds(5));
+        assertThat(config.execution().queue().revalidateOddsAfter()).isEqualTo(java.time.Duration.ofSeconds(3));
+        assertThat(config.execution().queue().minEffectiveBalance()).isEqualByComparingTo("0.01");
+    }
 }

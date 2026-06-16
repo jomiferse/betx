@@ -103,6 +103,24 @@ class TelegramConnectionServiceTest {
     }
 
     @Test
+    void opensTelegramCircuitAfterRepeatedSendFailures() {
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        gateway.failSends = true;
+        TelegramConnectionService service = service(
+            configWithTelegram(new TelegramConfig(true, "token", null, null, null, "12345", "2026-05-31T12:00:00Z", null, null, null)),
+            Map.of(),
+            gateway
+        );
+
+        assertThat(service.sendMessageIfConnected(CONFIG_PATH, "one")).isFalse();
+        assertThat(service.sendMessageIfConnected(CONFIG_PATH, "two")).isFalse();
+        assertThat(service.sendMessageIfConnected(CONFIG_PATH, "three")).isFalse();
+        assertThat(service.sendMessageIfConnected(CONFIG_PATH, "four")).isFalse();
+
+        assertThat(gateway.sendAttempts()).isEqualTo(3);
+    }
+
+    @Test
     void sendTestMessageFailsWhenTelegramIsNotConnected() {
         TelegramConnectionService service = service(configWithTelegram(new TelegramConfig(true, "token", null, null, null, null, null, null, null, null)));
 
@@ -266,6 +284,8 @@ class TelegramConnectionServiceTest {
         private final List<Long> requestedOffsets = new ArrayList<>();
         private String botUsername = "bot";
         private List<TelegramUpdate> updates = List.of();
+        private boolean failSends;
+        private int sendAttempts;
 
         @Override
         public String getBotUsername(String token) {
@@ -280,6 +300,10 @@ class TelegramConnectionServiceTest {
 
         @Override
         public void sendMessage(String token, String chatId, String text) {
+            sendAttempts++;
+            if (failSends) {
+                throw new IllegalStateException("Telegram API request failed.");
+            }
             sentMessages.add(new SentMessage(token, chatId, text));
         }
 
@@ -289,6 +313,10 @@ class TelegramConnectionServiceTest {
 
         private List<Long> requestedOffsets() {
             return requestedOffsets;
+        }
+
+        private int sendAttempts() {
+            return sendAttempts;
         }
     }
 

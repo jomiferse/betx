@@ -10,9 +10,13 @@ import com.betx.application.BacktestPaperTrade;
 import com.betx.application.BacktestSlippageModel;
 import com.betx.application.PaperTradeHistoryDiagnostics;
 import com.betx.application.PaperTradeRunnerClassificationDiagnostic;
+import com.betx.application.PaperSignalEvaluation;
 import com.betx.application.PaperTradingResult;
+import com.betx.application.PaperTradeAnalyzerRejectionReason;
 import com.betx.application.RunPaperTradingService;
 import com.betx.domain.config.ConfigPath;
+import com.betx.domain.signal.RecommendationType;
+import com.betx.domain.signal.BetSide;
 import com.betx.domain.signal.RunnerType;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -148,6 +152,42 @@ class PaperTradeCommandTest {
     }
 
     @Test
+    void printsPaperSignalEvaluationSummaries() {
+        RunPaperTradingService service = org.mockito.Mockito.mock(RunPaperTradingService.class);
+        when(service.run(any(ConfigPath.class), any(BigDecimal.class), any(BacktestSlippageModel.class), any(BigDecimal.class)))
+            .thenReturn(new PaperTradingResult(
+                List.of(),
+                List.of(),
+                2,
+                2,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                PaperTradeHistoryDiagnostics.empty(),
+                List.of(
+                    evaluation("SP1", RunnerType.DRAW, RecommendationType.BET, PaperTradeAnalyzerRejectionReason.ACCEPTED, "3.70"),
+                    evaluation("SP1", RunnerType.HOME, RecommendationType.NO_BET, PaperTradeAnalyzerRejectionReason.NOT_DRAW, "2.10")
+                )
+            ));
+        PaperTradeCommand command = new PaperTradeCommand(service);
+        command.configPath = Path.of("betx.yml");
+
+        String output = captureOutput(command::run);
+
+        assertThat(output)
+            .contains("PAPER_EVALUATIONS | total=2 | accepted=1 | rejected=1 | structuralRejections=1 | strategicRejections=0")
+            .contains("PAPER_EVALUATION_REASON | reason=ACCEPTED | count=1")
+            .contains("PAPER_EVALUATION_REASON | reason=NOT_DRAW | count=1")
+            .contains("PAPER_EVALUATION_SEGMENT | kind=league | name=SP1 | total=2 | accepted=1")
+            .contains("PAPER_EVALUATION_SEGMENT | kind=odds_band | name=3.01-6.00 | total=1 | accepted=1")
+            .contains("PAPER_EVALUATION_SEGMENT | kind=runner_type | name=DRAW | total=1 | accepted=1");
+    }
+
+    @Test
     void rejectsInvalidCommissionRate() {
         PaperTradeCommand command = new PaperTradeCommand(org.mockito.Mockito.mock(RunPaperTradingService.class));
         command.configPath = Path.of("betx.yml");
@@ -267,6 +307,7 @@ class PaperTradeCommandTest {
             "prospective",
             "Team A v Team B",
             "Draw",
+            BetSide.BACK,
             Instant.parse("2026-06-15T10:00:00Z"),
             Instant.parse("2026-06-15T10:00:01Z"),
             Instant.parse("2026-06-15T17:50:00Z"),
@@ -281,6 +322,40 @@ class PaperTradeCommandTest {
             new BigDecimal("0.05714286"),
             new BigDecimal("-0.01544402"),
             "settled"
+        );
+    }
+
+    private static PaperSignalEvaluation evaluation(
+        String league,
+        RunnerType runnerType,
+        RecommendationType recommendation,
+        PaperTradeAnalyzerRejectionReason analyzerReason,
+        String bestBackPrice
+    ) {
+        BigDecimal price = new BigDecimal(bestBackPrice);
+        return new PaperSignalEvaluation(
+            Instant.parse("2026-06-15T10:00:00Z"),
+            "betfair",
+            "market-1",
+            "Match Odds",
+            "Team A v Team B",
+            league,
+            Instant.parse("2026-06-15T18:00:00Z"),
+            runnerType == RunnerType.DRAW ? 2L : 1L,
+            runnerType == RunnerType.DRAW ? "Draw" : "Team A",
+            runnerType,
+            recommendation,
+            recommendation == RecommendationType.BET ? 80 : 0,
+            recommendation == RecommendationType.BET ? "High confidence" : "No bet",
+            recommendation == RecommendationType.BET ? "dry_run_only" : "not_draw",
+            price,
+            price.add(new BigDecimal("0.10")),
+            new BigDecimal("0.04"),
+            new BigDecimal("1200"),
+            null,
+            null,
+            null,
+            analyzerReason
         );
     }
 

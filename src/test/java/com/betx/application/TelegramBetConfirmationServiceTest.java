@@ -17,6 +17,7 @@ import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.ExchangeConfig;
 import com.betx.domain.exposure.ExchangeExposure;
+import com.betx.domain.exposure.ExchangeSettledOrder;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.BetSignal;
 import com.betx.domain.signal.BetSide;
@@ -27,6 +28,7 @@ import com.betx.domain.signal.SignalScore;
 import com.betx.domain.order.BetIntent;
 import com.betx.domain.order.BetIntentSource;
 import com.betx.domain.order.BetIntentStage;
+import com.betx.domain.order.BetSettlementResult;
 import com.betx.domain.telegram.TelegramConnectionContext;
 import com.betx.domain.telegram.TelegramUpdate;
 import java.math.BigDecimal;
@@ -395,10 +397,12 @@ class TelegramBetConfirmationServiceTest {
         });
         assertThat(intents.saved()).singleElement().satisfies(intent -> {
             assertThat(intent.stage()).isEqualTo(BetIntentStage.EXECUTED);
+            assertThat(intent.availableBalance()).isEqualByComparingTo("12.5");
             assertThat(intent.selectedStake()).isEqualByComparingTo("3");
             assertThat(intent.resultMessage()).isEqualTo("accepted");
         });
-        assertThat(telegram.sentMessages()).isEmpty();
+        assertThat(telegram.sentMessages()).singleElement()
+            .satisfies(message -> assertThat(message.text()).contains("REAL BET PLACED"));
     }
 
     @Test
@@ -437,6 +441,75 @@ class TelegramBetConfirmationServiceTest {
         assertThat(intents.saved()).hasSize(5);
         assertThat(exposureGateway.calls()).isEqualTo(1);
         assertThat(accountGateway.calls()).isEqualTo(1);
+    }
+
+    @Test
+    void automaticBettingReservesBalanceBetweenOrdersInSameExchangeCycle() {
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(1), BigDecimal.valueOf(25), 3, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(17.7)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            executionGateway
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            List.of(
+                signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.ONE),
+                signal("betfair", "1.2", 43L, BigDecimal.valueOf(2.7), BigDecimal.ONE)
+            ),
+            List.of(analysis("Team A"), analysis("Team C", "1.2", 43L))
+        ));
+
+        assertThat(executionGateway.orders()).hasSize(2);
+        assertThat(intents.saved()).hasSize(2);
+        assertThat(intents.saved().get(0)).satisfies(intent -> {
+            assertThat(intent.availableBalance()).isEqualByComparingTo("17.7");
+            assertThat(intent.effectiveAvailableBalance()).isEqualByComparingTo("17.7");
+            assertThat(intent.reservedBalance()).isEqualByComparingTo("0");
+        });
+        assertThat(intents.saved().get(1)).satisfies(intent -> {
+            assertThat(intent.availableBalance()).isEqualByComparingTo("17.7");
+            assertThat(intent.effectiveAvailableBalance()).isEqualByComparingTo("16.7");
+            assertThat(intent.reservedBalance()).isEqualByComparingTo("1");
+        });
+    }
+
+    @Test
+    void automaticBettingBlocksOrderWhenReservedBalanceLeavesInsufficientEffectiveBalance() {
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(1), BigDecimal.valueOf(25), 3, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(1.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            executionGateway
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            List.of(
+                signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.ONE),
+                signal("betfair", "1.2", 43L, BigDecimal.valueOf(2.7), BigDecimal.ONE)
+            ),
+            List.of(analysis("Team A"), analysis("Team C", "1.2", 43L))
+        ));
+
+        assertThat(executionGateway.orders()).hasSize(1);
+        assertThat(intents.saved()).hasSize(2);
+        assertThat(intents.saved().get(0).stage()).isEqualTo(BetIntentStage.EXECUTED);
+        assertThat(intents.saved().get(1)).satisfies(intent -> {
+            assertThat(intent.stage()).isEqualTo(BetIntentStage.FAILED);
+            assertThat(intent.resultMessage()).isEqualTo("Effective balance unavailable. Bet blocked for safety.");
+            assertThat(intent.effectiveAvailableBalance()).isEqualByComparingTo("0.5");
+            assertThat(intent.reservedBalance()).isEqualByComparingTo("1");
+        });
     }
 
     @Test
@@ -720,6 +793,33 @@ class TelegramBetConfirmationServiceTest {
     }
 
     @Test
+    void maxOpenPositionsCreatesSingleBlockedIntentForExchangeCycle() {
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(3), BigDecimal.valueOf(25), 1, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(1, BigDecimal.ZERO),
+            executionGateway
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            List.of(
+                signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5)),
+                signal("betfair", "1.2", 43L, BigDecimal.valueOf(2.7), BigDecimal.valueOf(5))
+            ),
+            List.of(analysis("Team A"), analysis("Team C", "1.2", 43L))
+        ));
+
+        assertThat(executionGateway.orders()).isEmpty();
+        assertThat(intents.saved()).singleElement()
+            .satisfies(intent -> assertThat(intent.resultMessage()).isEqualTo("Open position limit reached."));
+    }
+
+    @Test
     void blocksAutomaticBetWhenRealizedDailyLossReachesLimit() {
         RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
         RecordingIntentRepository intents = new RecordingIntentRepository();
@@ -747,9 +847,10 @@ class TelegramBetConfirmationServiceTest {
     void savesExternalOrderIdAfterAutomaticBetExecution() {
         RecordingExecutionGateway executionGateway = new RecordingExecutionGateway("bet-123");
         RecordingIntentRepository intents = new RecordingIntentRepository();
+        RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
         TelegramBetConfirmationService service = service(
             configWithAutoBetting(BigDecimal.valueOf(3), BigDecimal.valueOf(25), 3, true, false),
-            new RecordingTelegramConnectionService(),
+            telegram,
             new RecordingTelegramGateway(),
             intents,
             new StaticAccountGateway(BigDecimal.valueOf(12.5)),
@@ -766,6 +867,41 @@ class TelegramBetConfirmationServiceTest {
             .satisfies(intent -> {
                 assertThat(intent.source()).isEqualTo(BetIntentSource.AUTOMATIC);
                 assertThat(intent.externalOrderId()).isEqualTo("bet-123");
+                assertThat(intent.availableBalance()).isEqualByComparingTo("12.5");
+            });
+        assertThat(telegram.sentMessages()).singleElement()
+            .satisfies(message -> assertThat(message.text())
+                .contains("REAL BET PLACED")
+                .contains("Team A v Team B")
+                .contains("Stake: 3")
+                .contains("Betfair bet id: bet-123")
+                .contains("Balance available: 12.5"));
+    }
+
+    @Test
+    void blocksAutomaticBetWhenBalanceIsUnavailable() {
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(3), BigDecimal.valueOf(25), 3, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            (config, exchange) -> Optional.empty(),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            executionGateway
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5)),
+            analysis("Team A")
+        ));
+
+        assertThat(executionGateway.orders()).isEmpty();
+        assertThat(intents.saved()).singleElement()
+            .satisfies(intent -> {
+                assertThat(intent.stage()).isEqualTo(BetIntentStage.FAILED);
+                assertThat(intent.resultMessage()).isEqualTo("Balance unavailable. Bet blocked for safety.");
             });
     }
 
@@ -797,7 +933,14 @@ class TelegramBetConfirmationServiceTest {
             new RecordingTelegramGateway(),
             intents,
             new StaticAccountGateway(BigDecimal.valueOf(12.5)),
-            StaticExposureGateway.available(0, BigDecimal.ZERO, Set.of("bet-123")),
+            StaticExposureGateway.availableSettled(new ExchangeSettledOrder(
+                "bet-123",
+                "1.1",
+                42L,
+                BetSide.BACK,
+                new BigDecimal("13.50"),
+                Instant.parse("2026-06-01T18:30:00Z")
+            )),
             snapshots,
             new RecordingExecutionGateway()
         );
@@ -809,8 +952,55 @@ class TelegramBetConfirmationServiceTest {
             assertThat(intent.stage()).isEqualTo(BetIntentStage.SETTLED);
             assertThat(intent.externalOrderId()).isEqualTo("bet-123");
             assertThat(intent.resultMessage()).isEqualTo("Settled on exchange.");
+            assertThat(intent.settlementResult()).isEqualTo(BetSettlementResult.WIN);
+            assertThat(intent.realizedProfitLoss()).isEqualByComparingTo("13.50");
+            assertThat(intent.settledAt()).isEqualTo(Instant.parse("2026-06-01T18:30:00Z"));
         });
         assertThat(snapshots.deletedMarkets()).containsExactly("./data/betx.db|betfair|1.1");
+    }
+
+    @Test
+    void leavesExecutedIntentOpenWhenBetfairDoesNotReportItsSettlement() {
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        intents.save("data.db", new BetIntent(
+            "executed-1",
+            "betfair",
+            "1.1",
+            42L,
+            "Team A v Team B",
+            "Match Odds",
+            "Team A",
+            "liquidity_ok",
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            null,
+            BigDecimal.valueOf(5),
+            "accepted",
+            "bet-123",
+            BetIntentStage.EXECUTED,
+            Instant.parse("2026-06-01T10:00:00Z"),
+            Instant.parse("2026-06-01T10:01:00Z")
+        ));
+        TelegramBetConfirmationService service = service(
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.availableSettled(new ExchangeSettledOrder(
+                "different-bet",
+                "1.1",
+                42L,
+                BetSide.BACK,
+                new BigDecimal("13.50"),
+                Instant.parse("2026-06-01T18:30:00Z")
+            )),
+            new RecordingMarketSnapshotRepository(),
+            new RecordingExecutionGateway()
+        );
+
+        service.sync(CONFIG_PATH, resultOf());
+
+        assertThat(intents.updated()).isEmpty();
     }
 
     @Test
@@ -925,7 +1115,14 @@ class TelegramBetConfirmationServiceTest {
             new RecordingTelegramGateway(),
             intents,
             new StaticAccountGateway(BigDecimal.valueOf(12.5)),
-            StaticExposureGateway.available(0, BigDecimal.ZERO, Set.of("bet-456")),
+            StaticExposureGateway.availableSettled(new ExchangeSettledOrder(
+                "bet-456",
+                "1.2",
+                43L,
+                BetSide.BACK,
+                new BigDecimal("-5.00"),
+                Instant.parse("2026-06-01T18:30:00Z")
+            )),
             new RecordingMarketSnapshotRepository(),
             history,
             new RecordingExecutionGateway()
@@ -938,6 +1135,8 @@ class TelegramBetConfirmationServiceTest {
                 assertThat(intent.id()).isEqualTo("executed-1");
                 assertThat(intent.stage()).isEqualTo(BetIntentStage.SETTLED);
                 assertThat(intent.resultMessage()).isEqualTo("Settled on exchange.");
+                assertThat(intent.settlementResult()).isEqualTo(BetSettlementResult.LOSE);
+                assertThat(intent.realizedProfitLoss()).isEqualByComparingTo("-5.00");
             });
     }
 
@@ -1732,6 +1931,22 @@ class TelegramBetConfirmationServiceTest {
                 realizedProfitLoss,
                 List.of(),
                 settledExternalOrderIds,
+                null
+            ));
+        }
+
+        static StaticExposureGateway availableSettled(ExchangeSettledOrder... settledOrders) {
+            List<ExchangeSettledOrder> orders = List.of(settledOrders);
+            BigDecimal realizedProfitLoss = orders.stream()
+                .map(ExchangeSettledOrder::realizedProfitLoss)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+            return new StaticExposureGateway(new ExchangeExposure(
+                true,
+                0,
+                BigDecimal.ZERO,
+                realizedProfitLoss,
+                List.of(),
+                orders,
                 null
             ));
         }

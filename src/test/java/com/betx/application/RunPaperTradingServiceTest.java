@@ -5,12 +5,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.ExchangeMarketDataGateway;
 import com.betx.application.port.out.MarketSnapshotRepository;
+import com.betx.application.port.out.PaperSignalEvaluationRepository;
 import com.betx.application.port.out.PaperTradeRepository;
 import com.betx.application.port.out.PaperTradeSettlementGateway;
 import com.betx.domain.betfair.BetfairConfig;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.ExchangeConfig;
+import com.betx.domain.signal.BetSide;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.ObservedMarketSnapshot;
 import com.betx.domain.signal.RunnerType;
@@ -32,6 +34,7 @@ class RunPaperTradingServiceTest {
         Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
         MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
         PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        PaperSignalEvaluationRepositoryStub evaluations = new PaperSignalEvaluationRepositoryStub();
         repository.recent.add(new ObservedMarketSnapshot(
             observedAt.minusSeconds(3600),
             snapshot(2L, "Draw", "3.70")
@@ -41,6 +44,7 @@ class RunPaperTradingServiceTest {
             List.of(new StaticGateway(List.of(snapshot(2L, "Draw", "3.70"), snapshot(1L, "Home", "2.10")))),
             repository,
             paperTrades,
+            evaluations,
             List.of(),
             Clock.fixed(observedAt, ZoneOffset.UTC)
         );
@@ -54,6 +58,7 @@ class RunPaperTradingServiceTest {
         assertThat(result.paperTrades()).singleElement().satisfies(trade -> {
             assertThat(trade.marketId()).isEqualTo("market-1");
             assertThat(trade.runner()).isEqualTo("Draw");
+            assertThat(trade.side()).isEqualTo(BetSide.BACK);
             assertThat(trade.recommendationTimestamp()).isEqualTo(observedAt);
             assertThat(trade.executionTimestamp()).isEqualTo(observedAt);
             assertThat(trade.closingTimestamp()).isNull();
@@ -68,12 +73,50 @@ class RunPaperTradingServiceTest {
             assertThat(trade.status()).isEqualTo(PaperTradeStatus.EXECUTED);
             assertThat(trade.matched()).isTrue();
             assertThat(trade.paperMode()).isTrue();
+            assertThat(trade.side()).isEqualTo(BetSide.BACK);
         });
         assertThat(result.marketsScanned()).isEqualTo(1);
         assertThat(result.recommendationsGenerated()).isEqualTo(1);
         assertThat(result.executionFailures()).isZero();
         assertThat(result.runnersAnalyzed()).isEqualTo(2);
         assertThat(repository.saved).hasSize(2);
+        assertThat(evaluations.saved).hasSize(1);
+        assertThat(result.paperSignalEvaluations()).hasSize(1);
+        assertThat(evaluations.saved)
+            .extracting(PaperSignalEvaluation::analyzerReason)
+            .containsExactly(PaperTradeAnalyzerRejectionReason.ACCEPTED);
+    }
+
+    @Test
+    void skipsTestMarketsBeforeSavingSnapshotsOrEvaluations() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        PaperSignalEvaluationRepositoryStub evaluations = new PaperSignalEvaluationRepositoryStub();
+        MarketSnapshot testHome = testSnapshot(1L, "Test Home", RunnerType.HOME, "2.10");
+        MarketSnapshot testDraw = testSnapshot(2L, "The Draw", RunnerType.DRAW, "3.70");
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(testHome, testDraw))),
+            repository,
+            paperTrades,
+            evaluations,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC)
+        );
+
+        PaperTradingResult result = service.run(new ConfigPath(Path.of("betx.yml")), BigDecimal.ZERO, BacktestSlippageModel.PROFIT_HAIRCUT);
+
+        assertThat(result.marketsScanned()).isEqualTo(1);
+        assertThat(result.runnersAnalyzed()).isZero();
+        assertThat(result.snapshotsSaved()).isZero();
+        assertThat(result.recommendationsGenerated()).isZero();
+        assertThat(result.paperSignalEvaluations()).isEmpty();
+        assertThat(evaluations.saved).isEmpty();
+        assertThat(repository.saved).isEmpty();
+        assertThat(result.historyDiagnostics().runnerClassificationSample()).isEmpty();
+        assertThat(result.historyDiagnostics().analyzerRejectionCounts())
+            .containsEntry(PaperTradeAnalyzerRejectionReason.TEST_MARKET, 2);
     }
 
     @Test
@@ -442,6 +485,25 @@ class RunPaperTradingServiceTest {
         );
     }
 
+    private static MarketSnapshot testSnapshot(long selectionId, String runnerName, RunnerType runnerType, String odds) {
+        BigDecimal price = new BigDecimal(odds);
+        return new MarketSnapshot(
+            "betfair",
+            "test-market-1",
+            "Match Odds",
+            "Test A v Test B",
+            "SP1",
+            Instant.parse("2026-06-15T18:00:00Z"),
+            selectionId,
+            runnerName,
+            runnerType,
+            price,
+            price.add(new BigDecimal("0.10")),
+            new BigDecimal("0.04"),
+            new BigDecimal("1200")
+        );
+    }
+
     private static MarketSnapshot snapshot(long selectionId, String runnerName, String odds, BigDecimal layPrice, String liquidity) {
         BigDecimal price = new BigDecimal(odds);
         return new MarketSnapshot(
@@ -564,6 +626,20 @@ class RunPaperTradingServiceTest {
 
         @Override
         public List<PaperTrade> listAll(String databasePath) {
+            return List.copyOf(saved);
+        }
+    }
+
+    private static final class PaperSignalEvaluationRepositoryStub implements PaperSignalEvaluationRepository {
+        private final List<PaperSignalEvaluation> saved = new ArrayList<>();
+
+        @Override
+        public void save(String databasePath, PaperSignalEvaluation evaluation) {
+            saved.add(evaluation);
+        }
+
+        @Override
+        public List<PaperSignalEvaluation> listLatest(String databasePath, int limit) {
             return List.copyOf(saved);
         }
     }

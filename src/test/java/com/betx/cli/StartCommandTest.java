@@ -125,6 +125,29 @@ class StartCommandTest {
     }
 
     @Test
+    void automaticBettingSyncFailureDoesNotStopStartLoop() {
+        BetxConfig config = configWithAutoBetting(2, true, false);
+        FailingOnceTelegramBetConfirmationService confirmations = new FailingOnceTelegramBetConfirmationService();
+        SequencedDryRunSignalsService dryRunSignalsService = new SequencedDryRunSignalsService(
+            config,
+            new DryRunSignalsResult(
+                List.of(new BetSignal("betfair", "m-1", 42L, BetSide.BACK, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "test", "live")),
+                List.of(),
+                false
+            ),
+            new DryRunSignalsResult(List.of(), List.of(), true)
+        );
+        StartCommand command = command(config, dryRunSignalsService, confirmations);
+        command.once = false;
+
+        String output = captureOutput(command::run);
+
+        assertThat(output).contains("TELEGRAM BET SYNC WARNING | message=Telegram API request failed.");
+        assertThat(dryRunSignalsService.runs()).isEqualTo(2);
+        assertThat(confirmations.calls()).isEqualTo(1);
+    }
+
+    @Test
     void continuousAutoBettingWithoutConfirmationSkipsStartupCycleExecution() {
         BetxConfig config = configWithAutoBetting(2, true, false);
         RecordingTelegramBetConfirmationService confirmations = new RecordingTelegramBetConfirmationService();
@@ -540,6 +563,28 @@ class StartCommandTest {
         }
     }
 
+    private static final class FailingOnceTelegramBetConfirmationService extends TelegramBetConfirmationService {
+        private int calls;
+
+        private FailingOnceTelegramBetConfirmationService() {
+            super(null, null, null, null, null, null);
+        }
+
+        @Override
+        public void sync(
+            ConfigPath configPath,
+            DryRunSignalsResult result,
+            java.util.function.Consumer<String> outputConsumer
+        ) {
+            calls++;
+            throw new IllegalStateException("Telegram API request failed.");
+        }
+
+        private int calls() {
+            return calls;
+        }
+    }
+
     private static final class SequencedDryRunSignalsService extends RunDryRunSignalsService {
         private final List<DryRunSignalsResult> results;
         private int index;
@@ -557,6 +602,10 @@ class StartCommandTest {
             DryRunSignalsResult result = results.get(Math.min(index, results.size() - 1));
             index++;
             return result;
+        }
+
+        private int runs() {
+            return index;
         }
 
         @Override
