@@ -12,6 +12,7 @@ import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.StorageConfig;
 import com.betx.domain.order.BetIntent;
 import com.betx.domain.order.BetIntentStage;
+import com.betx.domain.order.BetSettlementResult;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.math.BigDecimal;
@@ -66,6 +67,28 @@ class TelegramCommandTest {
         assertThat(output).contains("event=Team A v Team B");
         assertThat(output).contains("runner=Team A");
         assertThat(output).contains("stake=n/a");
+    }
+
+    @Test
+    void betsCommandShowsSettlementResultAndPnl() {
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        intents.save("data.db", intent("intent-1", BetIntentStage.EXECUTED)
+            .withSettlement(
+                BetIntentStage.SETTLED,
+                BetSettlementResult.WIN,
+                new BigDecimal("13.50"),
+                Instant.parse("2026-06-05T18:30:00Z"),
+                "Settled on exchange."
+            ));
+        TelegramBetsCommand command = new TelegramBetsCommand(new BetIntentService(new StaticConfigRepository(), intents));
+        command.configPath = Path.of("custom.yml");
+        command.limit = 20;
+
+        String output = captureOutput(command::run);
+
+        assertThat(output).contains("side=BACK");
+        assertThat(output).contains("settlement=WIN");
+        assertThat(output).contains("pnl=13.50");
     }
 
     @Test

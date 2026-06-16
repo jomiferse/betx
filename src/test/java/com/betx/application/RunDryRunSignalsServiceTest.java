@@ -16,6 +16,8 @@ import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.ExchangeConfig;
 import com.betx.domain.config.IntelligenceAutoBettingPolicy;
 import com.betx.domain.config.StorageConfig;
+import com.betx.domain.config.TelegramAlertsConfig;
+import com.betx.domain.config.TelegramConfig;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.ObservedMarketSnapshot;
 import java.io.ByteArrayOutputStream;
@@ -72,7 +74,7 @@ class RunDryRunSignalsServiceTest {
     @Test
     void skipsTestMarketsBeforeSavingOrAnalyzing() {
         RecordingSnapshotRepository repository = new RecordingSnapshotRepository();
-        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        BetxConfig config = withAllTelegramSignals(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true))));
         RunDryRunSignalsService service = new RunDryRunSignalsService(
             new StaticConfigRepository(config),
             List.of(gateway("betfair", List.of(testSnapshot()), null)),
@@ -94,7 +96,7 @@ class RunDryRunSignalsServiceTest {
 
     @Test
     void includesEventDiscoveryCountersFromExchangeGateway() {
-        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        BetxConfig config = withAllTelegramSignals(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true))));
         RunDryRunSignalsService service = service(config, List.of(gateway(
             "betfair",
             new ExchangeMarketDataResult(List.of(snapshot("betfair", "1.1")), 192, 2),
@@ -189,7 +191,7 @@ class RunDryRunSignalsServiceTest {
             )
         ));
         RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
-        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        BetxConfig config = withAllTelegramSignals(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true))));
         RunDryRunSignalsService service = new RunDryRunSignalsService(
             new StaticConfigRepository(config),
             List.of(gateway("betfair", List.of(snapshot("betfair", "1.1")), null)),
@@ -231,7 +233,7 @@ class RunDryRunSignalsServiceTest {
             observed("betfair", "1.1", 42L, "2026-05-31T10:02:00Z", BigDecimal.valueOf(2.48), BigDecimal.valueOf(1_220)),
             observed("betfair", "1.1", 42L, "2026-05-31T10:01:00Z", BigDecimal.valueOf(2.50), BigDecimal.valueOf(1_200))
         );
-        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        BetxConfig config = withAllTelegramSignals(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true))));
         RunDryRunSignalsService service = new RunDryRunSignalsService(
             new StaticConfigRepository(config),
             List.of(gateway("betfair", List.of(new MarketSnapshot(
@@ -344,7 +346,7 @@ class RunDryRunSignalsServiceTest {
             )
         ));
         RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
-        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        BetxConfig config = withAllTelegramSignals(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true))));
         RunDryRunSignalsService service = new RunDryRunSignalsService(
             new StaticConfigRepository(config),
             List.of(gateway(
@@ -880,6 +882,36 @@ class RunDryRunSignalsServiceTest {
         BetExecutionGateway executionGateway
     ) {
         return new RunDryRunSignalsService(new StaticConfigRepository(config), gateways, new NoopTelegramConnectionService(), executionGateway);
+    }
+
+    private BetxConfig withAllTelegramSignals(BetxConfig config) {
+        TelegramConfig telegram = config.telegram();
+        return new BetxConfig(
+            config.app(),
+            new TelegramConfig(
+                telegram.enabled(),
+                telegram.botToken(),
+                telegram.botTokenEnv(),
+                telegram.chatIdEnv(),
+                telegram.botUsername(),
+                telegram.chatId(),
+                telegram.connectedAt(),
+                telegram.username(),
+                telegram.firstName(),
+                telegram.pendingLinkCode(),
+                new TelegramAlertsConfig("all_signals", "30m")
+            ),
+            config.betfair(),
+            config.exchanges(),
+            config.marketData(),
+            config.storage(),
+            config.paper(),
+            config.risk(),
+            config.strategies(),
+            config.ml(),
+            config.intelligence(),
+            config.resilience()
+        );
     }
 
     private RunDryRunSignalsService service(

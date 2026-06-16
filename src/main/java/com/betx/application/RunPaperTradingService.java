@@ -3,6 +3,7 @@ package com.betx.application;
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.ExchangeMarketDataGateway;
 import com.betx.application.port.out.MarketSnapshotRepository;
+import com.betx.application.port.out.PaperSignalEvaluationRepository;
 import com.betx.application.port.out.PaperTradeRepository;
 import com.betx.application.port.out.PaperTradeSettlementGateway;
 import com.betx.domain.config.BetxConfig;
@@ -18,6 +19,7 @@ import com.betx.domain.signal.RunnerType;
 import com.betx.domain.signal.RunnerAnalysis;
 import com.betx.domain.signal.ValueFootballSignalStrategy;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -45,6 +47,7 @@ public class RunPaperTradingService {
     private final Map<String, ExchangeMarketDataGateway> marketDataGateways;
     private final MarketSnapshotRepository snapshotRepository;
     private final PaperTradeRepository paperTradeRepository;
+    private final PaperSignalEvaluationRepository paperSignalEvaluationRepository;
     private final Map<String, PaperTradeSettlementGateway> settlementGateways;
     private final Clock clock;
     private final EventMarketAnalyzer analyzer;
@@ -55,9 +58,18 @@ public class RunPaperTradingService {
         List<ExchangeMarketDataGateway> marketDataGateways,
         MarketSnapshotRepository snapshotRepository,
         PaperTradeRepository paperTradeRepository,
+        PaperSignalEvaluationRepository paperSignalEvaluationRepository,
         List<PaperTradeSettlementGateway> settlementGateways
     ) {
-        this(configRepository, marketDataGateways, snapshotRepository, paperTradeRepository, settlementGateways, Clock.systemUTC());
+        this(
+            configRepository,
+            marketDataGateways,
+            snapshotRepository,
+            paperTradeRepository,
+            paperSignalEvaluationRepository,
+            settlementGateways,
+            Clock.systemUTC()
+        );
     }
 
     RunPaperTradingService(
@@ -68,11 +80,34 @@ public class RunPaperTradingService {
         List<PaperTradeSettlementGateway> settlementGateways,
         Clock clock
     ) {
+        this(
+            configRepository,
+            marketDataGateways,
+            snapshotRepository,
+            paperTradeRepository,
+            new NoopPaperSignalEvaluationRepository(),
+            settlementGateways,
+            clock
+        );
+    }
+
+    RunPaperTradingService(
+        BetxConfigRepository configRepository,
+        List<ExchangeMarketDataGateway> marketDataGateways,
+        MarketSnapshotRepository snapshotRepository,
+        PaperTradeRepository paperTradeRepository,
+        PaperSignalEvaluationRepository paperSignalEvaluationRepository,
+        List<PaperTradeSettlementGateway> settlementGateways,
+        Clock clock
+    ) {
         this.configRepository = configRepository;
         this.marketDataGateways = marketDataGateways.stream()
             .collect(Collectors.toMap(ExchangeMarketDataGateway::exchangeName, Function.identity(), (left, right) -> left));
         this.snapshotRepository = snapshotRepository;
         this.paperTradeRepository = paperTradeRepository == null ? new NoopPaperTradeRepository() : paperTradeRepository;
+        this.paperSignalEvaluationRepository = paperSignalEvaluationRepository == null
+            ? new NoopPaperSignalEvaluationRepository()
+            : paperSignalEvaluationRepository;
         this.settlementGateways = (settlementGateways == null ? List.<PaperTradeSettlementGateway>of() : settlementGateways).stream()
             .collect(Collectors.toMap(PaperTradeSettlementGateway::exchangeName, Function.identity(), (left, right) -> left));
         this.clock = clock;
@@ -85,7 +120,15 @@ public class RunPaperTradingService {
         MarketSnapshotRepository snapshotRepository,
         Clock clock
     ) {
-        this(configRepository, marketDataGateways, snapshotRepository, new NoopPaperTradeRepository(), List.of(), clock);
+        this(
+            configRepository,
+            marketDataGateways,
+            snapshotRepository,
+            new NoopPaperTradeRepository(),
+            new NoopPaperSignalEvaluationRepository(),
+            List.of(),
+            clock
+        );
     }
 
     public PaperTradingResult run(
@@ -200,6 +243,7 @@ public class RunPaperTradingService {
         int unsettledMarkets = 0;
         int settledTrades = 0;
         Set<String> marketsScanned = new HashSet<>();
+        List<PaperSignalEvaluation> signalEvaluations = new ArrayList<>();
         for (ExchangeConfig exchange : config.enabledExchanges().stream().sorted(Comparator.comparing(ExchangeConfig::name)).toList()) {
             ExchangeMarketDataGateway gateway = marketDataGateways.get(exchange.name());
             if (gateway == null) {
@@ -211,6 +255,10 @@ public class RunPaperTradingService {
                 diagnostics.recordMarketInvariants(snapshots);
                 for (MarketSnapshot snapshot : snapshots) {
                     marketsScanned.add(snapshot.exchange() + "|" + snapshot.marketId());
+                    if (analyzer.isTestMarket(snapshot)) {
+                        diagnostics.recordAnalyzerOutcome(PaperTradeAnalyzerRejectionReason.TEST_MARKET);
+                        continue;
+                    }
                     Optional<PaperTrade> existingPaperTrade = paperTradeRepository.findByMarketSelection(
                         config.storage().path(),
                         snapshot.exchange(),
@@ -259,9 +307,11 @@ public class RunPaperTradingService {
                     diagnostics.recordRunnerClassification(snapshot);
                     runnersAnalyzed++;
                     RunnerAnalysis analysis = analyzer.analyze(snapshot, recent, strategyConfig.get(), config.risk());
+                    PaperTradeAnalyzerRejectionReason analyzerOutcome;
                     if (analysis.recommendation() == RecommendationType.BET
                         && runnerType(snapshot) == RunnerType.DRAW) {
-                        diagnostics.recordAnalyzerOutcome(PaperTradeAnalyzerRejectionReason.ACCEPTED);
+                        analyzerOutcome = PaperTradeAnalyzerRejectionReason.ACCEPTED;
+                        diagnostics.recordAnalyzerOutcome(analyzerOutcome);
                         PaperTrade paperTrade = PaperTrade.recommended(snapshot, observedAt, config.risk().maxStake());
                         PaperTrade executed = executePaperTrade(observedAt, paperTrade, snapshot, oddsSlippageRate, slippageModel);
                         if (executed.status() == PaperTradeStatus.EXECUTION_FAILED) {
@@ -271,7 +321,13 @@ public class RunPaperTradingService {
                         }
                         paperTradeRepository.upsert(config.storage().path(), executed);
                     } else {
-                        diagnostics.recordAnalyzerOutcome(classifyAnalyzerOutcome(snapshot, recent, analysis));
+                        analyzerOutcome = classifyAnalyzerOutcome(snapshot, recent, analysis);
+                        diagnostics.recordAnalyzerOutcome(analyzerOutcome);
+                    }
+                    PaperSignalEvaluation evaluation = toSignalEvaluation(observedAt, snapshot, recent, analysis, analyzerOutcome);
+                    if (shouldPersistSignalEvaluation(evaluation)) {
+                        signalEvaluations.add(evaluation);
+                        safeSaveSignalEvaluation(config, evaluation, failures);
                     }
                     snapshotRepository.save(config.storage().path(), new ObservedMarketSnapshot(observedAt, snapshot));
                     snapshotsSaved++;
@@ -297,8 +353,67 @@ public class RunPaperTradingService {
             missingClosingPrices,
             unsettledMarkets,
             settledTrades,
-            diagnostics.toDiagnostics()
+            diagnostics.toDiagnostics(),
+            signalEvaluations
         );
+    }
+
+    private PaperSignalEvaluation toSignalEvaluation(
+        Instant observedAt,
+        MarketSnapshot snapshot,
+        List<ObservedMarketSnapshot> recent,
+        RunnerAnalysis analysis,
+        PaperTradeAnalyzerRejectionReason analyzerReason
+    ) {
+        MarketSnapshot previous = recent == null || recent.isEmpty() ? null : recent.getFirst().snapshot();
+        return new PaperSignalEvaluation(
+            observedAt,
+            snapshot.exchange(),
+            snapshot.marketId(),
+            snapshot.marketName(),
+            snapshot.eventName(),
+            snapshot.competitionName(),
+            snapshot.marketStartTime(),
+            snapshot.selectionId(),
+            snapshot.runnerName(),
+            runnerType(snapshot),
+            analysis.recommendation(),
+            analysis.score().value(),
+            analysis.score().confidenceLabel(),
+            analysis.reason(),
+            snapshot.bestBackPrice(),
+            snapshot.bestLayPrice(),
+            snapshot.spread(),
+            snapshot.liquidity(),
+            previous == null ? null : percentageDelta(previous.bestBackPrice(), snapshot.bestBackPrice()),
+            previous == null ? null : percentageDelta(previous.bestLayPrice(), snapshot.bestLayPrice()),
+            previous == null ? null : percentageDelta(previous.liquidity(), snapshot.liquidity()),
+            analyzerReason
+        );
+    }
+
+    private void safeSaveSignalEvaluation(
+        BetxConfig config,
+        PaperSignalEvaluation evaluation,
+        List<String> failures
+    ) {
+        try {
+            paperSignalEvaluationRepository.save(config.storage().path(), evaluation);
+        } catch (RuntimeException exc) {
+            failures.add("Paper signal evaluation history failed: " + exc.getMessage());
+        }
+    }
+
+    private boolean shouldPersistSignalEvaluation(PaperSignalEvaluation evaluation) {
+        if (evaluation.analyzerReason() == PaperTradeAnalyzerRejectionReason.ACCEPTED) {
+            return true;
+        }
+        if (evaluation.analyzerReason() == PaperTradeAnalyzerRejectionReason.NOT_DRAW) {
+            return false;
+        }
+        return evaluation.runnerType() == RunnerType.DRAW
+            || evaluation.recommendation() == RecommendationType.BET
+            || evaluation.recommendation() == RecommendationType.WATCH;
     }
 
     private PaperTradeAnalyzerRejectionReason classifyAnalyzerOutcome(
@@ -355,6 +470,16 @@ public class RunPaperTradingService {
         return left.compareTo(right) == 0;
     }
 
+    private BigDecimal percentageDelta(BigDecimal previous, BigDecimal current) {
+        if (previous == null || current == null || previous.compareTo(BigDecimal.ZERO) == 0) {
+            return null;
+        }
+        return current.subtract(previous)
+            .divide(previous, 10, RoundingMode.HALF_UP)
+            .multiply(BigDecimal.valueOf(100))
+            .setScale(8, RoundingMode.HALF_UP);
+    }
+
     private int settlePersistedTrades(BetxConfig config, Instant observedAt, BigDecimal commissionRate) {
         int settled = 0;
         for (PaperTrade trade : paperTradeRepository.listAll(config.storage().path())) {
@@ -365,7 +490,7 @@ public class RunPaperTradingService {
             if (settlementGateway == null) {
                 continue;
             }
-            Optional<BacktestOutcome> outcome = settlementGateway.outcome(config, trade);
+            Optional<BacktestOutcome> outcome = safeSettlementOutcome(config, settlementGateway, trade);
             if (outcome.isEmpty()) {
                 continue;
             }
@@ -416,7 +541,7 @@ public class RunPaperTradingService {
             && updated.matched()) {
             PaperTradeSettlementGateway settlementGateway = settlementGateways.get(updated.exchange());
             if (settlementGateway != null) {
-                Optional<BacktestOutcome> outcome = settlementGateway.outcome(config, updated);
+                Optional<BacktestOutcome> outcome = safeSettlementOutcome(config, settlementGateway, updated);
                 if (outcome.isPresent()) {
                     updated = updated.withSettled(observedAt, outcome.get(), commissionRate);
                     paperTradeRepository.upsert(config.storage().path(), updated);
@@ -424,6 +549,18 @@ public class RunPaperTradingService {
             }
         }
         return updated;
+    }
+
+    private Optional<BacktestOutcome> safeSettlementOutcome(
+        BetxConfig config,
+        PaperTradeSettlementGateway settlementGateway,
+        PaperTrade trade
+    ) {
+        try {
+            return settlementGateway.outcome(config, trade);
+        } catch (RuntimeException exc) {
+            return Optional.empty();
+        }
     }
 
     private boolean shouldCaptureClosingPrice(Instant observedAt, MarketSnapshot snapshot, int closingCaptureMinutesBeforeStart) {
@@ -446,6 +583,17 @@ public class RunPaperTradingService {
 
         @Override
         public List<PaperTrade> listAll(String databasePath) {
+            return List.of();
+        }
+    }
+
+    private static final class NoopPaperSignalEvaluationRepository implements PaperSignalEvaluationRepository {
+        @Override
+        public void save(String databasePath, PaperSignalEvaluation evaluation) {
+        }
+
+        @Override
+        public List<PaperSignalEvaluation> listLatest(String databasePath, int limit) {
             return List.of();
         }
     }

@@ -105,7 +105,7 @@ class BacktestCommandTest {
         assertThat(Files.readAllLines(command.exportEquityCsvPath).getFirst())
             .isEqualTo("observedAt,league,season,event,odds,result,pnl,cumulativePnl,drawdown");
         assertThat(Files.readAllLines(command.exportPaperCsvPath).getFirst())
-            .isEqualTo("event_id,market_id,league,season,event,runner,recommendation_timestamp,execution_timestamp,closing_timestamp,available_back_odds,requested_odds,execution_odds,closing_odds,result,gross_pnl,commission,net_pnl,decimal_clv_ratio,implied_probability_change,movement_bucket,slippage_model");
+            .isEqualTo("event_id,market_id,league,season,event,runner,side,recommendation_timestamp,execution_timestamp,closing_timestamp,available_back_odds,requested_odds,execution_odds,closing_odds,result,gross_pnl,commission,net_pnl,decimal_clv_ratio,implied_probability_change,movement_bucket,slippage_model");
     }
 
     @Test

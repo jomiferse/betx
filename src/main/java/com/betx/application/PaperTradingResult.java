@@ -15,12 +15,45 @@ public record PaperTradingResult(
     int missingClosingPrices,
     int unsettledMarkets,
     int settledTrades,
-    PaperTradeHistoryDiagnostics historyDiagnostics
+    PaperTradeHistoryDiagnostics historyDiagnostics,
+    List<PaperSignalEvaluation> paperSignalEvaluations
 ) {
     public PaperTradingResult {
         paperTrades = paperTrades == null ? List.of() : List.copyOf(paperTrades);
         failures = failures == null ? List.of() : List.copyOf(failures);
         historyDiagnostics = historyDiagnostics == null ? PaperTradeHistoryDiagnostics.empty() : historyDiagnostics;
+        paperSignalEvaluations = paperSignalEvaluations == null ? List.of() : List.copyOf(paperSignalEvaluations);
+    }
+
+    public PaperTradingResult(
+        List<BacktestPaperTrade> paperTrades,
+        List<String> failures,
+        int runnersAnalyzed,
+        int snapshotsSaved,
+        int marketsScanned,
+        int recommendationsGenerated,
+        int duplicatesSkipped,
+        int executionFailures,
+        int missingClosingPrices,
+        int unsettledMarkets,
+        int settledTrades,
+        PaperTradeHistoryDiagnostics historyDiagnostics
+    ) {
+        this(
+            paperTrades,
+            failures,
+            runnersAnalyzed,
+            snapshotsSaved,
+            marketsScanned,
+            recommendationsGenerated,
+            duplicatesSkipped,
+            executionFailures,
+            missingClosingPrices,
+            unsettledMarkets,
+            settledTrades,
+            historyDiagnostics,
+            List.of()
+        );
     }
 
     public PaperTradingResult(
@@ -48,7 +81,8 @@ public record PaperTradingResult(
             missingClosingPrices,
             unsettledMarkets,
             settledTrades,
-            PaperTradeHistoryDiagnostics.empty()
+            PaperTradeHistoryDiagnostics.empty(),
+            List.of()
         );
     }
 

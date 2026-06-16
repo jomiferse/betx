@@ -44,9 +44,12 @@ public class TelegramBetsCommand implements Runnable {
             + " | stage=" + intent.stage()
             + " | event=" + value(intent.eventName())
             + " | runner=" + value(intent.displayRunner())
+            + " | side=" + intent.side()
             + " | marketId=" + value(intent.marketId())
             + " | selectionId=" + intent.selectionId()
             + " | stake=" + money(intent.selectedStake())
+            + " | settlement=" + value(intent.settlementResult() == null ? null : intent.settlementResult().name())
+            + " | pnl=" + money(intent.realizedProfitLoss())
             + " | updated=" + intent.updatedAt();
     }
 

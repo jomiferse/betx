@@ -4,6 +4,7 @@ import com.betx.application.BacktestOutcome;
 import com.betx.application.PaperTrade;
 import com.betx.application.PaperTradeStatus;
 import com.betx.application.port.out.PaperTradeRepository;
+import com.betx.domain.signal.BetSide;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -66,17 +67,18 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
              PreparedStatement statement = connection.prepareStatement("""
                  INSERT INTO paper_trades (
                      id, exchange, market_id, selection_id, event_name, market_name, league, market_start_time,
-                     runner_name, status, recommendation_timestamp, available_back_odds, requested_odds,
+                     runner_name, side, status, recommendation_timestamp, available_back_odds, requested_odds,
                      execution_timestamp, execution_odds, matched, closing_timestamp, closing_odds,
                      settlement_timestamp, result, stake, gross_pnl, commission, net_pnl,
                      decimal_clv_ratio, implied_probability_change, paper_mode
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(id) DO UPDATE SET
                      event_name = excluded.event_name,
                      market_name = excluded.market_name,
                      league = excluded.league,
                      market_start_time = excluded.market_start_time,
                      runner_name = excluded.runner_name,
+                     side = excluded.side,
                      status = excluded.status,
                      recommendation_timestamp = excluded.recommendation_timestamp,
                      available_back_odds = excluded.available_back_odds,
@@ -174,6 +176,7 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
                     league TEXT,
                     market_start_time TEXT,
                     runner_name TEXT,
+                    side TEXT NOT NULL DEFAULT 'BACK',
                     status TEXT NOT NULL,
                     recommendation_timestamp TEXT NOT NULL,
                     available_back_odds TEXT,
@@ -195,10 +198,32 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
                     UNIQUE(exchange, market_id, selection_id)
                 )
                 """);
+            ensureSideColumn(connection);
             statement.executeUpdate("""
                 CREATE INDEX IF NOT EXISTS idx_paper_trades_status
                 ON paper_trades(status, market_start_time)
                 """);
+        }
+    }
+
+    private void ensureSideColumn(Connection connection) throws SQLException {
+        if (hasColumn(connection, "paper_trades", "side")) {
+            return;
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("ALTER TABLE paper_trades ADD COLUMN side TEXT NOT NULL DEFAULT 'BACK'");
+        }
+    }
+
+    private boolean hasColumn(Connection connection, String tableName, String columnName) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("PRAGMA table_info(" + tableName + ")");
+             ResultSet resultSet = statement.executeQuery()) {
+            while (resultSet.next()) {
+                if (columnName.equalsIgnoreCase(resultSet.getString("name"))) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
@@ -212,24 +237,25 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
         statement.setString(7, trade.league());
         setInstant(statement, 8, trade.marketStartTime());
         statement.setString(9, trade.runnerName());
-        statement.setString(10, trade.status().name());
-        setInstant(statement, 11, trade.recommendationTimestamp());
-        setDecimal(statement, 12, trade.availableBackOdds());
-        setDecimal(statement, 13, trade.requestedOdds());
-        setInstant(statement, 14, trade.executionTimestamp());
-        setDecimal(statement, 15, trade.executionOdds());
-        statement.setInt(16, trade.matched() ? 1 : 0);
-        setInstant(statement, 17, trade.closingTimestamp());
-        setDecimal(statement, 18, trade.closingOdds());
-        setInstant(statement, 19, trade.settlementTimestamp());
-        statement.setString(20, trade.result() == null ? null : trade.result().name());
-        setDecimal(statement, 21, trade.stake());
-        setDecimal(statement, 22, trade.grossPnl());
-        setDecimal(statement, 23, trade.commission());
-        setDecimal(statement, 24, trade.netPnl());
-        setDecimal(statement, 25, trade.decimalClvRatio());
-        setDecimal(statement, 26, trade.impliedProbabilityChange());
-        statement.setInt(27, trade.paperMode() ? 1 : 0);
+        statement.setString(10, trade.side().name());
+        statement.setString(11, trade.status().name());
+        setInstant(statement, 12, trade.recommendationTimestamp());
+        setDecimal(statement, 13, trade.availableBackOdds());
+        setDecimal(statement, 14, trade.requestedOdds());
+        setInstant(statement, 15, trade.executionTimestamp());
+        setDecimal(statement, 16, trade.executionOdds());
+        statement.setInt(17, trade.matched() ? 1 : 0);
+        setInstant(statement, 18, trade.closingTimestamp());
+        setDecimal(statement, 19, trade.closingOdds());
+        setInstant(statement, 20, trade.settlementTimestamp());
+        statement.setString(21, trade.result() == null ? null : trade.result().name());
+        setDecimal(statement, 22, trade.stake());
+        setDecimal(statement, 23, trade.grossPnl());
+        setDecimal(statement, 24, trade.commission());
+        setDecimal(statement, 25, trade.netPnl());
+        setDecimal(statement, 26, trade.decimalClvRatio());
+        setDecimal(statement, 27, trade.impliedProbabilityChange());
+        statement.setInt(28, trade.paperMode() ? 1 : 0);
     }
 
     private PaperTrade map(ResultSet resultSet) throws SQLException {
@@ -243,6 +269,7 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
             resultSet.getString("league"),
             instant(resultSet, "market_start_time"),
             resultSet.getString("runner_name"),
+            side(resultSet.getString("side")),
             PaperTradeStatus.valueOf(resultSet.getString("status")),
             instant(resultSet, "recommendation_timestamp"),
             decimal(resultSet, "available_back_odds"),
@@ -284,5 +311,9 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
 
     private BacktestOutcome outcome(String value) {
         return value == null || value.isBlank() ? null : BacktestOutcome.valueOf(value);
+    }
+
+    private BetSide side(String value) {
+        return value == null || value.isBlank() ? BetSide.BACK : BetSide.valueOf(value);
     }
 }

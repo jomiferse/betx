@@ -34,6 +34,7 @@ public class TelegramConnectionService {
     private final Clock clock;
     private final Supplier<String> linkCodeFactory;
     private final TelegramMessageLogWriter messageLogWriter;
+    private final CircuitState telegramCircuit = new CircuitState();
 
     @Autowired
     public TelegramConnectionService(
@@ -225,21 +226,34 @@ public class TelegramConnectionService {
         Map<String, Object> replyMarkup
     ) {
         BetxConfig config = configRepository.load(configPath);
+        if (telegramCircuit.isOpen(clock.instant())) {
+            return false;
+        }
         return connectionContext(config)
             .map(context -> {
-                if (parseMode == null) {
-                    if (replyMarkup == null) {
-                        telegramGateway.sendMessage(context.token(), context.chatId(), text);
+                try {
+                    if (parseMode == null) {
+                        if (replyMarkup == null) {
+                            telegramGateway.sendMessage(context.token(), context.chatId(), text);
+                        } else {
+                            telegramGateway.sendMessage(context.token(), context.chatId(), text, null, replyMarkup);
+                        }
+                    } else if (replyMarkup == null) {
+                        telegramGateway.sendMessage(context.token(), context.chatId(), text, parseMode);
                     } else {
-                        telegramGateway.sendMessage(context.token(), context.chatId(), text, null, replyMarkup);
+                        telegramGateway.sendMessage(context.token(), context.chatId(), text, parseMode, replyMarkup);
                     }
-                } else if (replyMarkup == null) {
-                    telegramGateway.sendMessage(context.token(), context.chatId(), text, parseMode);
-                } else {
-                    telegramGateway.sendMessage(context.token(), context.chatId(), text, parseMode, replyMarkup);
+                    telegramCircuit.recordSuccess();
+                    messageLogWriter.recordSentMessage(config, text);
+                    return true;
+                } catch (RuntimeException exc) {
+                    telegramCircuit.recordFailure(
+                        config.resilience().telegram().failureThreshold(),
+                        config.resilience().telegram().cooldownDuration(),
+                        clock.instant()
+                    );
+                    return false;
                 }
-                messageLogWriter.recordSentMessage(config, text);
-                return true;
             })
             .orElse(false);
     }
@@ -370,6 +384,35 @@ public class TelegramConnectionService {
 
         @Override
         public void saveLastProcessedUpdateId(String databasePath, long updateId) {
+        }
+    }
+
+    private static final class CircuitState {
+        private int consecutiveFailures;
+        private Instant openUntil;
+
+        private boolean isOpen(Instant now) {
+            if (openUntil == null) {
+                return false;
+            }
+            if (now.isBefore(openUntil)) {
+                return true;
+            }
+            openUntil = null;
+            consecutiveFailures = 0;
+            return false;
+        }
+
+        private void recordSuccess() {
+            consecutiveFailures = 0;
+            openUntil = null;
+        }
+
+        private void recordFailure(int threshold, java.time.Duration cooldown, Instant now) {
+            consecutiveFailures++;
+            if (consecutiveFailures >= threshold) {
+                openUntil = now.plus(cooldown);
+            }
         }
     }
 }

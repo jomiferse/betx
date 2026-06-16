@@ -65,7 +65,8 @@ public class RunDryRunSignalsService {
         BetExecutionGateway executionGateway,
         MarketSnapshotRepository snapshotRepository,
         MarketSnapshotChangeDetector changeDetector,
-        ExternalMatchIntelligenceGateway intelligenceGateway
+        ExternalMatchIntelligenceGateway intelligenceGateway,
+        SignalHistoryRepository signalHistoryRepository
     ) {
         this(
             configRepository,
@@ -75,7 +76,7 @@ public class RunDryRunSignalsService {
             snapshotRepository,
             changeDetector,
             intelligenceGateway,
-            new NoopSignalHistoryRepository(),
+            signalHistoryRepository,
             Clock.systemUTC()
         );
     }
@@ -318,12 +319,19 @@ public class RunDryRunSignalsService {
         }
 
         TelegramBetAlertSelection telegramAlertSelection = telegramBetAlertPolicy.select(telegramAlerts);
-        if (sendTelegramAlerts) {
+        if (sendTelegramAlerts && "all_signals".equals(config.telegram().alerts().mode())) {
             telegramAlertSelection.alertsToSend().forEach(alert -> {
                 logTelegramAlertSend(alert);
-                telegramService.sendMessageIfConnected(configPath, telegramBetAlertFormatter.format(alert), TelegramParseMode.HTML);
+                safeSendTelegramAlert(configPath, telegramBetAlertFormatter.format(alert));
             });
             telegramAlertSelection.skippedAlerts().forEach(this::logTelegramAlertSkip);
+        } else if (sendTelegramAlerts
+            && (!telegramAlertSelection.alertsToSend().isEmpty() || !telegramAlertSelection.skippedAlerts().isEmpty())) {
+            emit(
+                "TELEGRAM ALERTS SUPPRESSED | reason=mode_" + config.telegram().alerts().mode()
+                    + " | alerts=" + telegramAlertSelection.alertsToSend().size()
+                    + " | skipped=" + telegramAlertSelection.skippedAlerts().size()
+            );
         } else if (logSuppressedTelegramAlerts
             && (!telegramAlertSelection.alertsToSend().isEmpty() || !telegramAlertSelection.skippedAlerts().isEmpty())) {
             emit(
@@ -348,6 +356,14 @@ public class RunDryRunSignalsService {
             eventsRead,
             ignoredEvents
         );
+    }
+
+    private void safeSendTelegramAlert(ConfigPath configPath, String text) {
+        try {
+            telegramService.sendMessageIfConnected(configPath, text, TelegramParseMode.HTML);
+        } catch (RuntimeException exc) {
+            emit("TELEGRAM ALERT WARNING | action=send_message | message=" + nullSafe(exc.getMessage()));
+        }
     }
 
     private Optional<StrategyConfig> valueFootballStrategy(BetxConfig config) {

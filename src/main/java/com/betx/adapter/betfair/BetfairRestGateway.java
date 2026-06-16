@@ -10,6 +10,7 @@ import com.betx.domain.betfair.BetfairRunnerPrice;
 import com.betx.domain.betfair.BetfairSession;
 import com.betx.domain.exposure.ExchangeExposure;
 import com.betx.domain.exposure.ExchangeExposurePosition;
+import com.betx.domain.exposure.ExchangeSettledOrder;
 import com.betx.domain.order.BetExecutionResult;
 import com.betx.domain.order.BetOrder;
 import com.betx.domain.signal.BetSide;
@@ -25,8 +26,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -264,9 +263,13 @@ public class BetfairRestGateway implements BetfairGateway {
             .map(ExchangeExposurePosition::risk)
             .reduce(BigDecimal.ZERO, BigDecimal::add)
             .setScale(2, RoundingMode.HALF_UP);
-        BigDecimal realizedProfitLoss = sumProfit(clearedOrders).setScale(2, RoundingMode.HALF_UP);
+        List<ExchangeSettledOrder> settledOrders = parseSettledOrders(clearedOrders);
+        BigDecimal realizedProfitLoss = settledOrders.stream()
+            .map(ExchangeSettledOrder::realizedProfitLoss)
+            .reduce(BigDecimal.ZERO, BigDecimal::add)
+            .setScale(2, RoundingMode.HALF_UP);
 
-        return new ExchangeExposure(true, positions.size(), currentExposure, realizedProfitLoss, positions, settledBetIds(clearedOrders), null);
+        return new ExchangeExposure(true, positions.size(), currentExposure, realizedProfitLoss, positions, settledOrders, null);
     }
 
     private Map<Long, String> parseRunnerNames(JsonNode runnersNode) {
@@ -371,29 +374,27 @@ public class BetfairRestGateway implements BetfairGateway {
         return positions;
     }
 
-    private BigDecimal sumProfit(JsonNode ordersNode) {
-        BigDecimal total = BigDecimal.ZERO;
+    private List<ExchangeSettledOrder> parseSettledOrders(JsonNode ordersNode) {
         if (ordersNode == null || !ordersNode.isArray()) {
-            return total;
+            return List.of();
         }
-        for (JsonNode order : ordersNode) {
-            total = total.add(decimalOrZero(order, "profit"));
-        }
-        return total;
-    }
-
-    private Set<String> settledBetIds(JsonNode ordersNode) {
-        if (ordersNode == null || !ordersNode.isArray()) {
-            return Set.of();
-        }
-        List<String> ids = new ArrayList<>();
+        List<ExchangeSettledOrder> orders = new ArrayList<>();
         for (JsonNode order : ordersNode) {
             String betId = text(order, "betId");
-            if (!betId.isBlank()) {
-                ids.add(betId);
+            if (betId.isBlank()) {
+                continue;
             }
+            BetSide side = "LAY".equalsIgnoreCase(text(order, "side")) ? BetSide.LAY : BetSide.BACK;
+            orders.add(new ExchangeSettledOrder(
+                betId,
+                text(order, "marketId"),
+                order.path("selectionId").asLong(),
+                side,
+                decimalOrZero(order, "profit").setScale(2, RoundingMode.HALF_UP),
+                parseInstant(order, "settledDate")
+            ));
         }
-        return ids.stream().collect(Collectors.toSet());
+        return orders;
     }
 
     private BigDecimal bestPrice(JsonNode prices) {

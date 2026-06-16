@@ -4,7 +4,7 @@ BetX is a terminal-first betting signals engine for football markets.
 
 It reads exchange market data, stores snapshots locally, detects useful price and liquidity movement, and sends actionable Telegram alerts. It is safe by default: auto-betting is disabled unless explicitly configured per exchange.
 
-Current version: `0.5.0`
+Current version: `0.6.0`
 
 ## What It Does
 
@@ -88,6 +88,15 @@ storage:
   path: ./data/betx.db
   cleanup_market_snapshots_enabled: true
   market_snapshot_retention_hours: 48
+
+execution:
+  queue:
+    enabled: true
+    max_pending_per_exchange: 20
+    order_ttl: 10s
+    stale_balance_ttl: 5s
+    revalidate_odds_after: 3s
+    min_effective_balance: 0.01
 ```
 
 Telegram credentials can be stored in `betx.yml` or supplied with environment variables:
@@ -132,11 +141,52 @@ When Betfair `auto_betting.enabled` and `request_confirmation` are both true, `B
 3. Selecting a stake sends the live order to the exchange.
 4. `No` or `Cancel` closes the pending intent.
 
-When `auto_betting.enabled` is true and `request_confirmation` is false, BetX sends orders automatically, capped by the Betfair auto-betting limits.
+When `auto_betting.enabled` is true and `request_confirmation` is false, BetX sends orders automatically, capped by the Betfair auto-betting limits. Accepted real orders send a Telegram order message with event, selection, odds, stake, balance when available, and Betfair bet id.
 
 For unattended continuous mode, the first `start` cycle is treated as a warmup and skips automatic orders. This avoids executing stale startup signals while still allowing subsequent cycles to trade normally under the configured limits.
 
-Before any live order is sent, BetX checks Betfair for real exposure. `max_open_positions` counts open Betfair positions, including manual bets placed outside BetX. `max_daily_loss` is the realized/liquidated loss for the current UTC day from Betfair settlements. If Betfair exposure cannot be read, BetX blocks the live order for safety. BetX reuses per-cycle exposure reads and stops creating new intents once the configured open-position capacity is full, reducing unnecessary Betfair login/request pressure.
+Before any live order is sent, BetX checks Betfair for real exposure and available balance. `max_open_positions` counts open Betfair positions, including manual bets placed outside BetX. `max_daily_loss` is the realized/liquidated loss for the current UTC day from Betfair settlements. If Betfair exposure or balance cannot be read, BetX blocks the live order for safety. BetX reuses per-cycle exposure reads and stores at most one blocked intent when the configured open-position capacity is full, reducing database noise and unnecessary Betfair login/request pressure.
+
+Automatic real orders use a fast in-memory execution queue per exchange. Signal analysis remains immediate, but live order placement is serialized for each exchange so multiple bets in the same cycle do not all decide against the same balance snapshot. `bet_intents.available_balance` is the exchange balance snapshot before local reservations; `effective_available_balance` subtracts already reserved stakes in that cycle, and `reserved_balance` records the amount reserved before the current order. If effective balance cannot cover the next stake, BetX stores a blocked intent and does not call the exchange.
+
+Telegram defaults to product-oriented key events rather than a raw stream of every signal:
+
+```yaml
+telegram:
+  alerts:
+    mode: key_events
+    signal_dedupe_ttl: 30m
+```
+
+Use `all_signals` only while diagnosing strategy behavior. Runtime API failures are reported as warnings and should not stop the main polling loop.
+
+Transient API failures use conservative resilience defaults:
+
+```yaml
+resilience:
+  betfair:
+    failure_threshold: 3
+    cooldown: 5m
+  telegram:
+    failure_threshold: 3
+    cooldown: 5m
+  openrouter:
+    failure_threshold: 3
+    cooldown: 5m
+```
+
+Real order execution queue defaults are conservative:
+
+```yaml
+execution:
+  queue:
+    enabled: true
+    max_pending_per_exchange: 20
+    order_ttl: 10s
+    stale_balance_ttl: 5s
+    revalidate_odds_after: 3s
+    min_effective_balance: 0.01
+```
 
 ## Local Logs
 
@@ -312,7 +362,14 @@ Paper records move through `RECOMMENDED`, `EXECUTED`, `CLOSED`, `SETTLED`, or `E
 java -jar target/betx.jar paper-trade --config betx.yml --output data/paper-trades.csv
 ```
 
-Paper mode prints operational diagnostics: markets scanned, recommendations generated, duplicates skipped, execution failures, missing closing prices, unsettled markets, settled trades, CLV count, validation status, league breakdown, and rolling 100/250/500 trade windows. Prospective CLV gates use only settled trades with independently captured closing odds. Fewer than 300 settled trades reports `INSUFFICIENT_SAMPLE`; otherwise non-positive median CLV reports `WEAK_EVIDENCE`, positive theoretical ROI with non-positive executable ROI reports `EXECUTION_FAILURE`, and positive median CLV plus positive executable ROI reports `CANDIDATE_EDGE`.
+Paper mode prints operational diagnostics: markets scanned, recommendations generated, duplicates skipped, execution failures, missing closing prices, unsettled markets, settled trades, CLV count, validation status, league breakdown, and rolling 100/250/500 trade windows. Detailed `paper_signal_evaluations` rows are compact by default: accepted paper entries and strategically relevant draw evaluations are stored, while structural rejections such as non-draw runners are summarized in diagnostics instead of filling the database. Prospective CLV gates use only settled trades with independently captured closing odds. Fewer than 300 settled trades reports `INSUFFICIENT_SAMPLE`; otherwise non-positive median CLV reports `WEAK_EVIDENCE`, positive theoretical ROI with non-positive executable ROI reports `EXECUTION_FAILURE`, and positive median CLV plus positive executable ROI reports `CANDIDATE_EDGE`.
+
+```yaml
+storage:
+  paper_evaluations:
+    detail_retention_days: 7
+    rejection_sample_rate: 0.0
+```
 
 Bookmaker reports default to zero commission. Exchange snapshot reports default to a conservative Betfair-style commission baseline of `0.05`. Override either assumption when needed:
 

@@ -5,16 +5,20 @@ import com.betx.application.BacktestSlippageModel;
 import com.betx.application.BacktestValidationException;
 import com.betx.application.PaperTradeAnalyzerRejectionReason;
 import com.betx.application.PaperTradeHistoryDiagnostics;
+import com.betx.application.PaperSignalEvaluation;
 import com.betx.application.PaperTradingResult;
 import com.betx.application.RunPaperTradingService;
 import com.betx.domain.config.PaperConfig;
 import com.betx.domain.config.ConfigPath;
+import com.betx.domain.signal.RecommendationType;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -123,6 +127,7 @@ public class PaperTradeCommand implements Runnable {
             + " | slippageModel=" + selectedModel
             + (outputPath == null ? "" : " | output=" + outputPath));
         printHistoryDiagnostics(result.historyDiagnostics());
+        printSignalEvaluationSummary(result.paperSignalEvaluations());
         printPaperMetrics(report);
         result.failures().forEach(System.out::println);
     }
@@ -156,6 +161,95 @@ public class PaperTradeCommand implements Runnable {
                 + " | isDraw=" + diagnostic.draw()
         ));
         safeDiagnostics.warnings().forEach(System.out::println);
+    }
+
+    private void printSignalEvaluationSummary(List<PaperSignalEvaluation> evaluations) {
+        List<PaperSignalEvaluation> safeEvaluations = evaluations == null ? List.of() : evaluations;
+        long accepted = safeEvaluations.stream()
+            .filter(evaluation -> evaluation.analyzerReason() == PaperTradeAnalyzerRejectionReason.ACCEPTED)
+            .count();
+        long structural = safeEvaluations.stream()
+            .filter(evaluation -> structuralReason(evaluation.analyzerReason()))
+            .count();
+        long strategic = safeEvaluations.stream()
+            .filter(evaluation -> strategicReason(evaluation.analyzerReason()))
+            .count();
+        System.out.println("PAPER_EVALUATIONS | total=" + safeEvaluations.size()
+            + " | accepted=" + accepted
+            + " | rejected=" + (safeEvaluations.size() - accepted)
+            + " | structuralRejections=" + structural
+            + " | strategicRejections=" + strategic);
+        Map<PaperTradeAnalyzerRejectionReason, Long> byReason = safeEvaluations.stream()
+            .collect(Collectors.groupingBy(
+                PaperSignalEvaluation::analyzerReason,
+                () -> new EnumMap<>(PaperTradeAnalyzerRejectionReason.class),
+                Collectors.counting()
+            ));
+        for (PaperTradeAnalyzerRejectionReason reason : PaperTradeAnalyzerRejectionReason.values()) {
+            long count = byReason.getOrDefault(reason, 0L);
+            if (count > 0) {
+                System.out.println("PAPER_EVALUATION_REASON | reason=" + reason + " | count=" + count);
+            }
+        }
+        printEvaluationSegments("league", safeEvaluations, evaluation -> label(evaluation.competitionName()));
+        printEvaluationSegments("odds_band", safeEvaluations, evaluation -> oddsBand(evaluation.bestBackPrice()));
+        printEvaluationSegments("runner_type", safeEvaluations, evaluation -> String.valueOf(evaluation.runnerType()));
+    }
+
+    private void printEvaluationSegments(
+        String kind,
+        List<PaperSignalEvaluation> evaluations,
+        java.util.function.Function<PaperSignalEvaluation, String> classifier
+    ) {
+        evaluations.stream()
+            .collect(Collectors.groupingBy(classifier, java.util.TreeMap::new, Collectors.toList()))
+            .entrySet()
+            .stream()
+            .limit(10)
+            .map(entry -> "PAPER_EVALUATION_SEGMENT | kind=" + kind
+                + " | name=" + entry.getKey()
+                + " | total=" + entry.getValue().size()
+                + " | accepted=" + acceptedEvaluations(entry.getValue()))
+            .forEach(System.out::println);
+    }
+
+    private long acceptedEvaluations(List<PaperSignalEvaluation> evaluations) {
+        return evaluations.stream()
+            .filter(evaluation -> evaluation.recommendation() == RecommendationType.BET)
+            .count();
+    }
+
+    private boolean structuralReason(PaperTradeAnalyzerRejectionReason reason) {
+        return reason == PaperTradeAnalyzerRejectionReason.TEST_MARKET
+            || reason == PaperTradeAnalyzerRejectionReason.NOT_DRAW
+            || reason == PaperTradeAnalyzerRejectionReason.INSUFFICIENT_HISTORY;
+    }
+
+    private boolean strategicReason(PaperTradeAnalyzerRejectionReason reason) {
+        return reason != PaperTradeAnalyzerRejectionReason.ACCEPTED && !structuralReason(reason);
+    }
+
+    private String oddsBand(BigDecimal odds) {
+        if (odds == null) {
+            return "unknown";
+        }
+        if (odds.compareTo(new BigDecimal("1.50")) < 0) {
+            return "<1.50";
+        }
+        if (odds.compareTo(new BigDecimal("2.00")) <= 0) {
+            return "1.50-2.00";
+        }
+        if (odds.compareTo(new BigDecimal("3.00")) <= 0) {
+            return "2.01-3.00";
+        }
+        if (odds.compareTo(new BigDecimal("6.00")) <= 0) {
+            return "3.01-6.00";
+        }
+        return ">6.00";
+    }
+
+    private String label(String value) {
+        return value == null || value.isBlank() ? "unknown" : value;
     }
 
     private com.betx.application.BacktestComparisonReport report(PaperTradingResult result, BacktestSlippageModel selectedModel) {

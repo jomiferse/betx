@@ -434,6 +434,15 @@ class BetfairRestGatewayTest {
         assertThat(exposure.currentExposure()).isEqualByComparingTo("9.00");
         assertThat(exposure.realizedProfitLoss()).isEqualByComparingTo("-2.25");
         assertThat(exposure.settledExternalOrderIds()).containsExactlyInAnyOrder("settled-1", "settled-2");
+        assertThat(exposure.settledOrders())
+            .extracting(
+                com.betx.domain.exposure.ExchangeSettledOrder::externalOrderId,
+                com.betx.domain.exposure.ExchangeSettledOrder::realizedProfitLoss
+            )
+            .containsExactlyInAnyOrder(
+                org.assertj.core.groups.Tuple.tuple("settled-1", new BigDecimal("-3.50")),
+                org.assertj.core.groups.Tuple.tuple("settled-2", new BigDecimal("1.25"))
+            );
         assertThat(exposure.positions()).hasSize(2);
         server.verify();
     }

@@ -4,6 +4,8 @@ import com.betx.application.port.out.BetIntentRepository;
 import com.betx.domain.order.BetIntent;
 import com.betx.domain.order.BetIntentSource;
 import com.betx.domain.order.BetIntentStage;
+import com.betx.domain.order.BetSettlementResult;
+import com.betx.domain.signal.BetSide;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.file.Files;
@@ -237,16 +239,19 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
         try (Connection connection = connection(databasePath)) {
             String sql = update ? """
                 UPDATE bet_intents
-                SET source = ?, exchange = ?, market_id = ?, selection_id = ?, event_name = ?, market_name = ?, runner_name = ?,
-                    reason = ?, odds = ?, max_stake = ?, available_balance = ?, selected_stake = ?, stage = ?,
-                    result_message = ?, external_order_id = ?, created_at = ?, updated_at = ?
+                SET source = ?, exchange = ?, market_id = ?, selection_id = ?, event_name = ?, market_name = ?, runner_name = ?, side = ?,
+                    reason = ?, odds = ?, max_stake = ?, available_balance = ?, effective_available_balance = ?,
+                    reserved_balance = ?, balance_snapshot_at = ?, selected_stake = ?, stage = ?,
+                    result_message = ?, external_order_id = ?, settled_at = ?, settlement_result = ?, realized_profit_loss = ?,
+                    created_at = ?, updated_at = ?
                 WHERE id = ?
                 """ : """
                 INSERT INTO bet_intents (
-                    id, source, exchange, market_id, selection_id, event_name, market_name, runner_name,
-                    reason, odds, max_stake, available_balance, selected_stake, stage, result_message,
-                    external_order_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, source, exchange, market_id, selection_id, event_name, market_name, runner_name, side,
+                    reason, odds, max_stake, available_balance, effective_available_balance, reserved_balance,
+                    balance_snapshot_at, selected_stake, stage, result_message,
+                    external_order_id, settled_at, settlement_result, realized_profit_loss, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 if (update) {
@@ -270,16 +275,23 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
         statement.setString(6, intent.eventName());
         statement.setString(7, intent.marketName());
         statement.setString(8, intent.runnerName());
-        statement.setString(9, intent.reason());
-        setDecimal(statement, 10, intent.odds());
-        setDecimal(statement, 11, intent.maxStake());
-        setDecimal(statement, 12, intent.availableBalance());
-        setDecimal(statement, 13, intent.selectedStake());
-        statement.setString(14, intent.stage().name());
-        statement.setString(15, intent.resultMessage());
-        statement.setString(16, intent.externalOrderId());
-        statement.setString(17, intent.createdAt().toString());
-        statement.setString(18, intent.updatedAt().toString());
+        statement.setString(9, intent.side().name());
+        statement.setString(10, intent.reason());
+        setDecimal(statement, 11, intent.odds());
+        setDecimal(statement, 12, intent.maxStake());
+        setDecimal(statement, 13, intent.availableBalance());
+        setDecimal(statement, 14, intent.effectiveAvailableBalance());
+        setDecimal(statement, 15, intent.reservedBalance());
+        setInstant(statement, 16, intent.balanceSnapshotAt());
+        setDecimal(statement, 17, intent.selectedStake());
+        statement.setString(18, intent.stage().name());
+        statement.setString(19, intent.resultMessage());
+        statement.setString(20, intent.externalOrderId());
+        setInstant(statement, 21, intent.settledAt());
+        statement.setString(22, intent.settlementResult() == null ? null : intent.settlementResult().name());
+        setDecimal(statement, 23, intent.realizedProfitLoss());
+        statement.setString(24, intent.createdAt().toString());
+        statement.setString(25, intent.updatedAt().toString());
     }
 
     private void bindIntentUpdate(PreparedStatement statement, BetIntent intent) throws SQLException {
@@ -290,17 +302,24 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
         statement.setString(5, intent.eventName());
         statement.setString(6, intent.marketName());
         statement.setString(7, intent.runnerName());
-        statement.setString(8, intent.reason());
-        setDecimal(statement, 9, intent.odds());
-        setDecimal(statement, 10, intent.maxStake());
-        setDecimal(statement, 11, intent.availableBalance());
-        setDecimal(statement, 12, intent.selectedStake());
-        statement.setString(13, intent.stage().name());
-        statement.setString(14, intent.resultMessage());
-        statement.setString(15, intent.externalOrderId());
-        statement.setString(16, intent.createdAt().toString());
-        statement.setString(17, intent.updatedAt().toString());
-        statement.setString(18, intent.id());
+        statement.setString(8, intent.side().name());
+        statement.setString(9, intent.reason());
+        setDecimal(statement, 10, intent.odds());
+        setDecimal(statement, 11, intent.maxStake());
+        setDecimal(statement, 12, intent.availableBalance());
+        setDecimal(statement, 13, intent.effectiveAvailableBalance());
+        setDecimal(statement, 14, intent.reservedBalance());
+        setInstant(statement, 15, intent.balanceSnapshotAt());
+        setDecimal(statement, 16, intent.selectedStake());
+        statement.setString(17, intent.stage().name());
+        statement.setString(18, intent.resultMessage());
+        statement.setString(19, intent.externalOrderId());
+        setInstant(statement, 20, intent.settledAt());
+        statement.setString(21, intent.settlementResult() == null ? null : intent.settlementResult().name());
+        setDecimal(statement, 22, intent.realizedProfitLoss());
+        statement.setString(23, intent.createdAt().toString());
+        statement.setString(24, intent.updatedAt().toString());
+        statement.setString(25, intent.id());
     }
 
     private void ensureSchemaInitialized(String path) {
@@ -353,21 +372,35 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
                     event_name TEXT,
                     market_name TEXT,
                     runner_name TEXT,
+                    side TEXT NOT NULL DEFAULT 'BACK',
                     reason TEXT,
                     odds TEXT NOT NULL,
                     max_stake TEXT NOT NULL,
                     available_balance TEXT,
+                    effective_available_balance TEXT,
+                    reserved_balance TEXT,
+                    balance_snapshot_at TEXT,
                     selected_stake TEXT,
                     stage TEXT NOT NULL,
                     result_message TEXT,
                     external_order_id TEXT,
+                    settled_at TEXT,
+                    settlement_result TEXT,
+                    realized_profit_loss TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """);
             addColumnIfMissing(connection, "bet_intents", "source", "TEXT NOT NULL DEFAULT 'TELEGRAM_CONFIRMATION'");
+            addColumnIfMissing(connection, "bet_intents", "side", "TEXT NOT NULL DEFAULT 'BACK'");
             addColumnIfMissing(connection, "bet_intents", "result_message", "TEXT");
             addColumnIfMissing(connection, "bet_intents", "external_order_id", "TEXT");
+            addColumnIfMissing(connection, "bet_intents", "effective_available_balance", "TEXT");
+            addColumnIfMissing(connection, "bet_intents", "reserved_balance", "TEXT");
+            addColumnIfMissing(connection, "bet_intents", "balance_snapshot_at", "TEXT");
+            addColumnIfMissing(connection, "bet_intents", "settled_at", "TEXT");
+            addColumnIfMissing(connection, "bet_intents", "settlement_result", "TEXT");
+            addColumnIfMissing(connection, "bet_intents", "realized_profit_loss", "TEXT");
             statement.executeUpdate("""
                 CREATE INDEX IF NOT EXISTS idx_bet_intents_active
                 ON bet_intents(exchange, market_id, selection_id, stage, created_at DESC)
@@ -385,13 +418,20 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
             resultSet.getString("event_name"),
             resultSet.getString("market_name"),
             resultSet.getString("runner_name"),
+            side(resultSet.getString("side")),
             resultSet.getString("reason"),
             decimal(resultSet, "odds"),
             decimal(resultSet, "max_stake"),
             decimal(resultSet, "available_balance"),
+            decimal(resultSet, "effective_available_balance"),
+            decimal(resultSet, "reserved_balance"),
+            instant(resultSet, "balance_snapshot_at"),
             decimal(resultSet, "selected_stake"),
             resultSet.getString("result_message"),
             resultSet.getString("external_order_id"),
+            instant(resultSet, "settled_at"),
+            settlementResult(resultSet.getString("settlement_result")),
+            decimal(resultSet, "realized_profit_loss"),
             BetIntentStage.valueOf(resultSet.getString("stage")),
             Instant.parse(resultSet.getString("created_at")),
             Instant.parse(resultSet.getString("updated_at"))
@@ -423,8 +463,25 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
         }
     }
 
+    private void setInstant(PreparedStatement statement, int index, Instant value) throws SQLException {
+        statement.setString(index, value == null ? null : value.toString());
+    }
+
+    private Instant instant(ResultSet resultSet, String field) throws SQLException {
+        String value = resultSet.getString(field);
+        return value == null ? null : Instant.parse(value);
+    }
+
     private BigDecimal decimal(ResultSet resultSet, String field) throws SQLException {
         String value = resultSet.getString(field);
         return value == null ? null : new BigDecimal(value);
+    }
+
+    private BetSide side(String value) {
+        return value == null || value.isBlank() ? BetSide.BACK : BetSide.valueOf(value);
+    }
+
+    private BetSettlementResult settlementResult(String value) {
+        return value == null || value.isBlank() ? null : BetSettlementResult.valueOf(value);
     }
 }

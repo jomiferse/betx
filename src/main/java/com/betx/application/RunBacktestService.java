@@ -1104,6 +1104,7 @@ public class RunBacktestService {
             trade.season(),
             trade.eventName(),
             trade.runnerName(),
+            trade.side(),
             trade.observedAt(),
             trade.observedAt(),
             trade.observedAt(),

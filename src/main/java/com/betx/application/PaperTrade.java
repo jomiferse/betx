@@ -1,6 +1,7 @@
 package com.betx.application;
 
 import com.betx.domain.signal.MarketSnapshot;
+import com.betx.domain.signal.BetSide;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
@@ -16,6 +17,7 @@ public record PaperTrade(
     String league,
     Instant marketStartTime,
     String runnerName,
+    BetSide side,
     PaperTradeStatus status,
     Instant recommendationTimestamp,
     BigDecimal availableBackOdds,
@@ -48,6 +50,7 @@ public record PaperTrade(
         id = id == null || id.isBlank() ? key(exchange, marketId, selectionId) : id;
         league = league == null || league.isBlank() ? "unknown" : league;
         runnerName = runnerName == null || runnerName.isBlank() ? "unknown" : runnerName;
+        side = side == null ? BetSide.BACK : side;
         status = status == null ? PaperTradeStatus.RECOMMENDED : status;
         stake = stake == null ? BigDecimal.valueOf(5) : stake;
         grossPnl = grossPnl == null ? BigDecimal.ZERO : grossPnl;
@@ -66,6 +69,7 @@ public record PaperTrade(
             snapshot.competitionName(),
             snapshot.marketStartTime(),
             snapshot.runnerName(),
+            BetSide.BACK,
             PaperTradeStatus.RECOMMENDED,
             observedAt,
             snapshot.bestBackPrice(),
@@ -98,6 +102,7 @@ public record PaperTrade(
             league,
             marketStartTime,
             runnerName,
+            side,
             matched ? PaperTradeStatus.EXECUTED : PaperTradeStatus.EXECUTION_FAILED,
             recommendationTimestamp,
             availableBackOdds,
@@ -132,6 +137,7 @@ public record PaperTrade(
             league,
             marketStartTime,
             runnerName,
+            side,
             PaperTradeStatus.CLOSED,
             recommendationTimestamp,
             availableBackOdds,
@@ -170,6 +176,7 @@ public record PaperTrade(
             league,
             marketStartTime,
             runnerName,
+            side,
             PaperTradeStatus.SETTLED,
             recommendationTimestamp,
             availableBackOdds,
@@ -199,6 +206,7 @@ public record PaperTrade(
             "prospective",
             eventName,
             runnerName,
+            side,
             recommendationTimestamp,
             executionTimestamp,
             closingTimestamp,

@@ -144,6 +144,30 @@ class BetxConfigValidatorTest {
     }
 
     @Test
+    void rejectsInvalidExecutionQueueConfiguration() {
+        BetxConfig defaults = BetxConfig.defaults();
+        BetxConfig config = new BetxConfig(
+            defaults.app(),
+            defaults.telegram(),
+            defaults.betfair(),
+            defaults.exchanges(),
+            defaults.marketData(),
+            defaults.storage(),
+            defaults.paper(),
+            defaults.risk(),
+            defaults.strategies(),
+            defaults.ml(),
+            defaults.intelligence(),
+            defaults.resilience(),
+            new ExecutionConfig(new ExecutionQueueConfig(true, 0, "10s", "5s", "3s", new BigDecimal("0.01")))
+        );
+
+        assertThatThrownBy(() -> validator.validate(config))
+            .isInstanceOf(ConfigException.class)
+            .hasMessage("execution.queue.max_pending_per_exchange must be greater than zero.");
+    }
+
+    @Test
     void rejectsNegativeMaxMarkets() {
         BetxConfig defaults = BetxConfig.defaults();
         BetxConfig config = new BetxConfig(

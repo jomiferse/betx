@@ -88,11 +88,12 @@ public class JdbcSignalHistoryRepository implements SignalHistoryRepository {
         try (Connection connection = connection(databasePath)) {
             try (PreparedStatement statement = connection.prepareStatement("""
                 UPDATE signal_history
-                SET bet_intent_id = ?, external_order_id = ?, order_stage = ?, selected_stake = ?, result_message = ?
+                SET bet_intent_id = ?, external_order_id = ?, order_stage = ?, selected_stake = ?, result_message = ?,
+                    realized_profit_loss = ?
                 WHERE exchange = ? AND market_id = ? AND selection_id = ? AND observed_at = ?
                 """)) {
                 bindIntentFields(statement, intent, 1);
-                bindKey(statement, key, 6);
+                bindKey(statement, key, 7);
                 statement.executeUpdate();
             }
         } catch (SQLException exc) {
@@ -106,11 +107,12 @@ public class JdbcSignalHistoryRepository implements SignalHistoryRepository {
         try (Connection connection = connection(databasePath)) {
             try (PreparedStatement statement = connection.prepareStatement("""
                 UPDATE signal_history
-                SET bet_intent_id = ?, external_order_id = ?, order_stage = ?, selected_stake = ?, result_message = ?
+                SET bet_intent_id = ?, external_order_id = ?, order_stage = ?, selected_stake = ?, result_message = ?,
+                    realized_profit_loss = ?
                 WHERE bet_intent_id = ?
                 """)) {
                 bindIntentFields(statement, intent, 1);
-                statement.setString(6, intent.id());
+                statement.setString(7, intent.id());
                 statement.executeUpdate();
             }
         } catch (SQLException exc) {
@@ -329,6 +331,7 @@ public class JdbcSignalHistoryRepository implements SignalHistoryRepository {
         statement.setString(startIndex + 2, intent.stage().name());
         setDecimal(statement, startIndex + 3, intent.selectedStake());
         statement.setString(startIndex + 4, intent.resultMessage());
+        setDecimal(statement, startIndex + 5, intent.realizedProfitLoss());
     }
 
     private void bindKey(PreparedStatement statement, SignalHistoryKey key, int startIndex) throws SQLException {

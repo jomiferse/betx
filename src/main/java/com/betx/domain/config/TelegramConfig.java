@@ -12,7 +12,8 @@ public record TelegramConfig(
     @JsonProperty("connected_at") String connectedAt,
     String username,
     @JsonProperty("first_name") String firstName,
-    @JsonProperty("pending_link_code") String pendingLinkCode
+    @JsonProperty("pending_link_code") String pendingLinkCode,
+    TelegramAlertsConfig alerts
 ) {
     public TelegramConfig {
         enabled = enabled == null || enabled;
@@ -25,6 +26,22 @@ public record TelegramConfig(
         username = blankToNull(username);
         firstName = blankToNull(firstName);
         pendingLinkCode = blankToNull(pendingLinkCode);
+        alerts = alerts == null ? TelegramAlertsConfig.defaults() : alerts;
+    }
+
+    public TelegramConfig(
+        Boolean enabled,
+        String botToken,
+        String botTokenEnv,
+        String chatIdEnv,
+        String botUsername,
+        String chatId,
+        String connectedAt,
+        String username,
+        String firstName,
+        String pendingLinkCode
+    ) {
+        this(enabled, botToken, botTokenEnv, chatIdEnv, botUsername, chatId, connectedAt, username, firstName, pendingLinkCode, null);
     }
 
     private static String blankToNull(String value) {

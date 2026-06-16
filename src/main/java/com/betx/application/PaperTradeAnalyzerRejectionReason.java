@@ -2,6 +2,7 @@ package com.betx.application;
 
 /** Aggregate analyzer outcomes for prospective draw-only paper trading. */
 public enum PaperTradeAnalyzerRejectionReason {
+    TEST_MARKET,
     INSUFFICIENT_HISTORY,
     NOT_DRAW,
     ODDS_UNCHANGED,
