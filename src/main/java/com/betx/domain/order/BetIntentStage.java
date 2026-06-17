@@ -10,6 +10,6 @@ public enum BetIntentStage {
     FAILED;
 
     public boolean isActive() {
-        return this == AWAITING_CONFIRMATION || this == AWAITING_STAKE;
+        return this == AWAITING_CONFIRMATION || this == AWAITING_STAKE || this == EXECUTED;
     }
 }

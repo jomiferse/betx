@@ -458,6 +458,43 @@ class RunPaperTradingServiceTest {
         assertThat(paperTrades.saved).hasSize(1);
     }
 
+    @Test
+    void continuousModeReportsFailedCycleAndRetriesNextCycle() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        ThrowingOncePaperTradeRepository paperTrades = new ThrowingOncePaperTradeRepository(
+            "Betfair API request failed."
+        );
+        repository.recent.add(new ObservedMarketSnapshot(
+            observedAt.minusSeconds(3600),
+            snapshot(2L, "Draw", "3.70")
+        ));
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(snapshot(2L, "Draw", "3.70")))),
+            repository,
+            paperTrades,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC)
+        );
+
+        List<PaperTradingResult> results = service.runContinuous(
+            new ConfigPath(Path.of("betx.yml")),
+            BigDecimal.ZERO,
+            BacktestSlippageModel.PROFIT_HAIRCUT,
+            BigDecimal.ZERO,
+            Duration.ofSeconds(60),
+            PaperTradingLoopControl.fixedCycles(2)
+        );
+
+        assertThat(results).hasSize(2);
+        assertThat(results.get(0).failures())
+            .containsExactly("Paper trading cycle failed: Betfair API request failed.");
+        assertThat(results.get(1).failures()).isEmpty();
+        assertThat(results.get(1).duplicatesSkipped()).isEqualTo(1);
+        assertThat(paperTrades.saved()).hasSize(1);
+    }
+
     private static ExchangeConfig exchange(String name, boolean enabled) {
         return new ExchangeConfig(name, enabled, new BetfairConfig("user", "password", "app-key"));
     }
@@ -626,6 +663,45 @@ class RunPaperTradingServiceTest {
 
         @Override
         public List<PaperTrade> listAll(String databasePath) {
+            return List.copyOf(saved);
+        }
+    }
+
+    private static final class ThrowingOncePaperTradeRepository implements PaperTradeRepository {
+        private final List<PaperTrade> saved = new ArrayList<>();
+        private final String message;
+        private boolean thrown;
+
+        private ThrowingOncePaperTradeRepository(String message) {
+            this.message = message;
+        }
+
+        @Override
+        public Optional<PaperTrade> findByMarketSelection(String databasePath, String exchange, String marketId, long selectionId) {
+            return saved.stream()
+                .filter(trade -> trade.exchange().equals(exchange))
+                .filter(trade -> trade.marketId().equals(marketId))
+                .filter(trade -> trade.selectionId() == selectionId)
+                .findFirst();
+        }
+
+        @Override
+        public void upsert(String databasePath, PaperTrade trade) {
+            findByMarketSelection(databasePath, trade.exchange(), trade.marketId(), trade.selectionId())
+                .ifPresent(saved::remove);
+            saved.add(trade);
+        }
+
+        @Override
+        public List<PaperTrade> listAll(String databasePath) {
+            if (!thrown) {
+                thrown = true;
+                throw new IllegalStateException(message);
+            }
+            return List.copyOf(saved);
+        }
+
+        private List<PaperTrade> saved() {
             return List.copyOf(saved);
         }
     }
