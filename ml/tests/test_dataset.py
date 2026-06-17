@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from betx_ml.dataset import load_markets, normalize_result
 
@@ -120,3 +121,52 @@ def test_excludes_incomplete_duplicate_ambiguous_and_invalid_markets(tmp_path: P
         "invalid_odds": 1,
     }
 
+
+def test_strict_raw_join_enriches_markets(tmp_path: Path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "Div": "E0",
+                "Date": "10/08/2024",
+                "Time": "15:00",
+                "HomeTeam": "Alpha",
+                "AwayTeam": "Beta",
+                "FTHG": 1,
+                "FTAG": 1,
+                "FTR": "D",
+            }
+        ]
+    ).to_csv(raw_dir / "2425-E0.csv", index=False, encoding="utf-8-sig")
+
+    result = load_markets(write_history(tmp_path, valid_market()), raw_dir=raw_dir)
+
+    market = result.markets.iloc[0]
+    assert market["raw_join_status"] == "MATCHED"
+    assert market["fthg"] == 1
+    assert market["ftag"] == 1
+    assert market["ftr"] == "D"
+    assert result.quality.raw_rows_matched == 1
+    assert result.quality.raw_rows_unmatched == 0
+
+
+def test_strict_raw_join_fails_for_unmatched_markets(tmp_path: Path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "Div": "E0",
+                "Date": "11/08/2024",
+                "HomeTeam": "Other",
+                "AwayTeam": "Beta",
+                "FTHG": 1,
+                "FTAG": 1,
+                "FTR": "D",
+            }
+        ]
+    ).to_csv(raw_dir / "2425-E0.csv", index=False, encoding="utf-8-sig")
+
+    with pytest.raises(ValueError, match="Raw Football-Data join failed"):
+        load_markets(write_history(tmp_path, valid_market()), raw_dir=raw_dir)

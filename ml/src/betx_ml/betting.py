@@ -64,7 +64,12 @@ def settle_bets(bets: pd.DataFrame, commission_rate: float = 0.05) -> pd.DataFra
     )
     settled["commission"] = settled["gross_pnl"].apply(lambda pnl: max(float(pnl), 0.0) * commission_rate)
     settled["net_pnl"] = settled["gross_pnl"] - settled["commission"]
-    settled["decimal_clv_ratio"] = settled.apply(
+    settled["back_clv_ratio"] = settled.apply(
+        lambda row: row["execution_odds"] / row["closing_odds"] if pd.notna(row["closing_odds"]) else math.nan,
+        axis=1,
+    )
+    settled["back_clv_pct"] = (settled["back_clv_ratio"] - 1.0) * 100.0
+    settled["closing_to_execution_odds_ratio"] = settled.apply(
         lambda row: row["closing_odds"] / row["execution_odds"] if pd.notna(row["closing_odds"]) else math.nan,
         axis=1,
     )
@@ -89,12 +94,13 @@ def summarize_bets(bets: pd.DataFrame) -> dict[str, object]:
             "max_drawdown": 0.0,
             "average_odds": None,
             "average_edge": None,
-            "median_clv": None,
-            "positive_clv_rate": None,
+            "median_back_clv_ratio": None,
+            "median_back_clv_pct": None,
+            "positive_back_clv_rate": None,
         }
     total_staked = float(bets["stake"].sum())
     wins = int(bets["won"].sum())
-    clv = bets["decimal_clv_ratio"].dropna()
+    clv = bets["back_clv_ratio"].dropna()
     return {
         "trades": int(len(bets)),
         "wins": wins,
@@ -107,10 +113,12 @@ def summarize_bets(bets: pd.DataFrame) -> dict[str, object]:
         "max_drawdown": _max_drawdown(bets["net_pnl"].tolist()),
         "average_odds": float(bets["execution_odds"].mean()),
         "average_edge": float(bets["expected_value"].mean()),
-        "median_clv": float(clv.median()) if not clv.empty else None,
-        "positive_clv_rate": float((clv > 1.0).mean()) if not clv.empty else None,
+        "median_back_clv_ratio": float(clv.median()) if not clv.empty else None,
+        "median_back_clv_pct": float((clv.median() - 1.0) * 100.0) if not clv.empty else None,
+        "positive_back_clv_rate": float((clv > 1.0).mean()) if not clv.empty else None,
         "by_selection": _group_summary(bets, "selection"),
         "by_league": _group_summary(bets, "league"),
+        "by_season": _group_summary(bets, "season"),
         "by_period": _group_summary(
             bets.assign(period=pd.to_datetime(bets["date"], utc=True).dt.tz_localize(None).dt.to_period("M").astype(str)),
             "period",

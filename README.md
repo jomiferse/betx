@@ -54,10 +54,10 @@ java -jar target/betx.jar start --config betx.yml
 # Replay historical normalized CSV data
 java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv
 
-# Train the offline ML probability baseline
+# Inspect the paused offline ML laboratory
 cd ml
 uv sync
-uv run python -m betx_ml train --input ../backtest/football-data/normalized/opening-closing.csv --output-dir ../data/ml/runs
+uv run pytest
 cd ..
 
 # Convert Football-Data CSV to BetX history format
@@ -73,7 +73,7 @@ java -jar target/betx.jar betfair test --config betx.yml
 java -jar target/betx.jar betfair markets --config betx.yml
 ```
 
-The offline ML baseline lives under `ml/`. It exports HOME/DRAW/AWAY probabilities to `predictions.csv` for future Java backtest integration and does not affect live betting, paper trading, Telegram, or readiness gates. See `ml/README.md` for the CSV contract, leakage controls, value-betting assumptions, and CLV formula.
+The offline ML laboratory lives under `ml/` and is currently paused. Its outputs are retained for research diagnostics only and must not affect live betting, paper trading, Telegram, readiness gates, or Java runtime decisions. See `ml/README.md` and `docs/decisions/ADR-ML-PAUSED.md` for the paused status and reopening criteria.
 
 ## Configuration
 

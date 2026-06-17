@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from betx_ml.football_data_raw import load_raw_matches, raw_join_key, slug_team
+
 
 RUNNER_BY_SELECTION = {1: "HOME", 2: "DRAW", 3: "AWAY"}
 SELECTION_BY_RESULT = {"HOME": 1, "DRAW": 2, "AWAY": 3}
@@ -20,6 +22,9 @@ class DatasetQuality:
     date_max: str | None
     leagues: list[str]
     seasons: list[str]
+    raw_rows_read: int | None = None
+    raw_rows_matched: int | None = None
+    raw_rows_unmatched: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -42,6 +47,8 @@ def load_markets(
     input_path: str | Path,
     predictive_odds_source: str = "opening-bookmaker",
     closing_odds_source: str = "closing-average",
+    raw_dir: str | Path | None = None,
+    strict_raw_join: bool = True,
 ) -> MarketDataset:
     rows = pd.read_csv(input_path)
     required = {
@@ -112,6 +119,18 @@ def load_markets(
         )
 
     market_frame = pd.DataFrame(markets).sort_values("date").reset_index(drop=True)
+    raw_rows_read = None
+    raw_rows_matched = None
+    raw_rows_unmatched = None
+    if raw_dir is not None and not market_frame.empty:
+        raw_dataset = load_raw_matches(raw_dir)
+        market_frame = _join_raw_matches(market_frame, raw_dataset.matches)
+        raw_rows_read = raw_dataset.quality.rows_read
+        raw_rows_matched = int((market_frame["raw_join_status"] == "MATCHED").sum())
+        raw_rows_unmatched = int((market_frame["raw_join_status"] != "MATCHED").sum())
+        if strict_raw_join and raw_rows_unmatched:
+            sample = ", ".join(market_frame.loc[market_frame["raw_join_status"] != "MATCHED", "market_key"].head(5).astype(str))
+            raise ValueError(f"Raw Football-Data join failed for {raw_rows_unmatched} markets: {sample}")
     quality = DatasetQuality(
         markets_read=markets_read,
         valid_markets=len(market_frame),
@@ -121,8 +140,26 @@ def load_markets(
         date_max=_date_string(market_frame["date"].max()) if not market_frame.empty else None,
         leagues=sorted(market_frame["league"].dropna().astype(str).unique().tolist()) if not market_frame.empty else [],
         seasons=sorted(market_frame["season"].dropna().astype(str).unique().tolist()) if not market_frame.empty else [],
+        raw_rows_read=raw_rows_read,
+        raw_rows_matched=raw_rows_matched,
+        raw_rows_unmatched=raw_rows_unmatched,
     )
     return MarketDataset(market_frame, quality)
+
+
+def _join_raw_matches(markets: pd.DataFrame, raw_matches: pd.DataFrame) -> pd.DataFrame:
+    frame = markets.copy()
+    frame["match_date"] = pd.to_datetime(frame["date"], utc=True).dt.date
+    frame["home_team_key"] = frame["home_team"].map(slug_team)
+    frame["away_team_key"] = frame["away_team"].map(slug_team)
+    frame["raw_join_key"] = frame.apply(
+        lambda row: raw_join_key(row["league"], row["season"], row["match_date"], row["home_team"], row["away_team"]),
+        axis=1,
+    )
+    raw = raw_matches[["raw_join_key", "fthg", "ftag", "ftr", "source_file"]].copy()
+    joined = frame.merge(raw, on="raw_join_key", how="left")
+    joined["raw_join_status"] = joined["ftr"].notna().map(lambda matched: "MATCHED" if matched else "UNMATCHED")
+    return joined
 
 
 def _discard_reason(group: pd.DataFrame) -> str | None:
@@ -160,4 +197,3 @@ def _date_string(value: object) -> str | None:
     if pd.isna(value):
         return None
     return pd.Timestamp(value).isoformat()
-
