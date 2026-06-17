@@ -19,6 +19,8 @@ Tests mirror the same package layout in `src/test/java`. Runtime assets are loca
 - `java -jar target/betx.jar init`: creates starter `betx.yml`, `data/`, and `models/`.
 - `java -jar target/betx.jar start --config betx.yml`: starts BetX using the configured exchanges and auto-betting settings.
 - `java -jar target/betx.jar start --config betx.yml --once`: runs one polling cycle and exits.
+- `java -jar target/betx.jar paper-trade --config betx.yml`: records read-only prospective paper recommendations.
+- `java -jar target/betx.jar paper-readiness --config betx.yml`: inspects persisted paper evidence before unattended real betting.
 - `java -jar target/betx.jar betfair test --config betx.yml`: validates Betfair credentials.
 - `java -jar target/betx.jar telegram status --config betx.yml`: checks Telegram connection state.
 
@@ -73,6 +75,7 @@ Current runtime configuration conventions:
 - External match intelligence is configured under `intelligence`. OpenRouter is the supported provider and may use Grok models.
 - If OpenRouter is enabled and reachable, its assessment is advisory when `request_confirmation` is enabled.
 - If `request_confirmation` is disabled, OpenRouter approval is mandatory before any automatic bet. Missing, failed, `WATCH`, or `REJECT` intelligence must block automatic betting without breaking the rest of the BetX polling process.
+- If `paper.readiness_gate.enabled` is true and `request_confirmation` is disabled, persisted paper evidence must be `READY` before any automatic real bet. Telegram-confirmed betting may still show readiness as advisory.
 
 ## CLI User Experience
 
@@ -97,6 +100,7 @@ Any real betting path must include risk limits, validation, logging, explicit co
 - Do not enable auto-betting by default in generated templates.
 - Do not place a real bet unless the configured exchange auto-betting rules allow it.
 - Respect `request_confirmation`; when enabled, no bet should be placed until the user confirms.
+- Respect the paper readiness gate for unattended automatic betting; a non-`READY` enabled gate must block automatic execution without blocking Telegram confirmation.
 - Respect stake, odds, and expiry limits before creating or executing an order.
 - Do not store Betfair session tokens in logs or generated files.
 - OpenRouter or any external intelligence provider must never stop the normal BetX polling process; failures should degrade to `UNAVAILABLE`/non-approval behavior according to confirmation settings.

@@ -12,6 +12,7 @@ import picocli.CommandLine.Command;
         InitCommand.class,
         StartCommand.class,
         PaperTradeCommand.class,
+        PaperReadinessCommand.class,
         BacktestCommand.class,
         TelegramCommand.class,
         BetfairCommand.class,

@@ -13,7 +13,7 @@
 
     <groupId>com.betx</groupId>
     <artifactId>betx</artifactId>
-    <version>0.6.2</version>
+    <version>0.7.0</version>
     <name>BetX</name>
     <description>Terminal-first betting signals engine with dry-run safety controls</description>
 

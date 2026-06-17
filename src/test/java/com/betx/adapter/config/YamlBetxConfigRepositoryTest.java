@@ -158,12 +158,29 @@ class YamlBetxConfigRepositoryTest {
               poll_interval: 60s
               closing_capture_minutes_before_start: 2
               settlement_poll_interval: 5m
+              readiness_gate:
+                enabled: true
+                minimum_settled_trades: 100
+                required_evidence_status: CANDIDATE_EDGE
+                minimum_executable_roi: 0.01
+                minimum_median_clv: 0.00
+                rolling_window_size: 100
+                minimum_rolling_roi: 0.00
+                block_on_execution_failure: true
             """, BetxConfig.class);
 
         assertThat(config.paper().continuous()).isTrue();
         assertThat(config.paper().pollInterval()).isEqualTo(java.time.Duration.ofSeconds(60));
         assertThat(config.paper().closingCaptureMinutesBeforeStart()).isEqualTo(2);
         assertThat(config.paper().settlementPollInterval()).isEqualTo(java.time.Duration.ofMinutes(5));
+        assertThat(config.paper().readinessGate().enabled()).isTrue();
+        assertThat(config.paper().readinessGate().minimumSettledTrades()).isEqualTo(100);
+        assertThat(config.paper().readinessGate().requiredEvidenceStatus()).isEqualTo("CANDIDATE_EDGE");
+        assertThat(config.paper().readinessGate().minimumExecutableRoi()).isEqualByComparingTo("0.01");
+        assertThat(config.paper().readinessGate().minimumMedianClv()).isEqualByComparingTo("0.00");
+        assertThat(config.paper().readinessGate().rollingWindowSize()).isEqualTo(100);
+        assertThat(config.paper().readinessGate().minimumRollingRoi()).isEqualByComparingTo("0.00");
+        assertThat(config.paper().readinessGate().blockOnExecutionFailure()).isTrue();
     }
 
     @Test

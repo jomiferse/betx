@@ -1,5 +1,6 @@
 package com.betx.domain.config;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Duration;
 import java.util.Locale;
@@ -14,12 +15,24 @@ public final class PaperConfig {
     private final Duration pollInterval;
     private final int closingCaptureMinutesBeforeStart;
     private final Duration settlementPollInterval;
+    private final PaperReadinessGateConfig readinessGate;
 
+    public PaperConfig(
+        Boolean continuous,
+        String pollInterval,
+        Integer closingCaptureMinutesBeforeStart,
+        String settlementPollInterval
+    ) {
+        this(continuous, pollInterval, closingCaptureMinutesBeforeStart, settlementPollInterval, null);
+    }
+
+    @JsonCreator
     public PaperConfig(
         @JsonProperty("continuous") Boolean continuous,
         @JsonProperty("poll_interval") String pollInterval,
         @JsonProperty("closing_capture_minutes_before_start") Integer closingCaptureMinutesBeforeStart,
-        @JsonProperty("settlement_poll_interval") String settlementPollInterval
+        @JsonProperty("settlement_poll_interval") String settlementPollInterval,
+        @JsonProperty("readiness_gate") PaperReadinessGateConfig readinessGate
     ) {
         this.continuous = continuous != null && continuous;
         this.pollInterval = parseDuration(pollInterval, DEFAULT_POLL_INTERVAL);
@@ -27,6 +40,7 @@ public final class PaperConfig {
             ? DEFAULT_CLOSING_CAPTURE_MINUTES_BEFORE_START
             : closingCaptureMinutesBeforeStart;
         this.settlementPollInterval = parseDuration(settlementPollInterval, DEFAULT_SETTLEMENT_POLL_INTERVAL);
+        this.readinessGate = readinessGate == null ? PaperReadinessGateConfig.defaults() : readinessGate;
     }
 
     public static PaperConfig defaults() {
@@ -47,6 +61,10 @@ public final class PaperConfig {
 
     public Duration settlementPollInterval() {
         return settlementPollInterval;
+    }
+
+    public PaperReadinessGateConfig readinessGate() {
+        return readinessGate;
     }
 
     public static Duration parseDuration(String value, Duration defaultValue) {

@@ -249,6 +249,72 @@ class BetxConfigValidatorTest {
         assertThatCode(() -> validator.validate(config)).doesNotThrowAnyException();
     }
 
+    @Test
+    void rejectsInvalidPaperReadinessGateConfiguration() {
+        BetxConfig defaults = BetxConfig.defaults();
+        BetxConfig config = new BetxConfig(
+            defaults.app(),
+            defaults.telegram(),
+            defaults.betfair(),
+            defaults.exchanges(),
+            defaults.marketData(),
+            defaults.storage(),
+            new PaperConfig(false, null, null, null, new PaperReadinessGateConfig(
+                true,
+                0,
+                "CANDIDATE_EDGE",
+                new BigDecimal("0.01"),
+                BigDecimal.ZERO,
+                100,
+                BigDecimal.ZERO,
+                true
+            )),
+            defaults.risk(),
+            defaults.strategies(),
+            defaults.ml(),
+            defaults.intelligence(),
+            defaults.resilience(),
+            defaults.execution()
+        );
+
+        assertThatThrownBy(() -> validator.validate(config))
+            .isInstanceOf(ConfigException.class)
+            .hasMessage("paper.readiness_gate.minimum_settled_trades must be greater than zero.");
+    }
+
+    @Test
+    void rejectsUnknownPaperReadinessEvidenceStatus() {
+        BetxConfig defaults = BetxConfig.defaults();
+        BetxConfig config = new BetxConfig(
+            defaults.app(),
+            defaults.telegram(),
+            defaults.betfair(),
+            defaults.exchanges(),
+            defaults.marketData(),
+            defaults.storage(),
+            new PaperConfig(false, null, null, null, new PaperReadinessGateConfig(
+                true,
+                100,
+                "MAYBE",
+                new BigDecimal("0.01"),
+                BigDecimal.ZERO,
+                100,
+                BigDecimal.ZERO,
+                true
+            )),
+            defaults.risk(),
+            defaults.strategies(),
+            defaults.ml(),
+            defaults.intelligence(),
+            defaults.resilience(),
+            defaults.execution()
+        );
+
+        assertThatThrownBy(() -> validator.validate(config))
+            .isInstanceOf(ConfigException.class)
+            .hasMessage("paper.readiness_gate.required_evidence_status must be one of: INSUFFICIENT_DATA, INSUFFICIENT_SAMPLE, NEGATIVE_EXECUTABLE_ROI, FRAGILE_EDGE, HISTORICAL_CANDIDATE, WEAK_EVIDENCE, EXECUTION_FAILURE, CANDIDATE_EDGE.");
+    }
+
     private BetxConfig configWithRisk(RiskConfig risk) {
         BetxConfig defaults = BetxConfig.defaults();
         return new BetxConfig(
