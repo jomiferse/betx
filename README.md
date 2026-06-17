@@ -14,7 +14,7 @@ Current version: `0.7.0`
 - Scores each runner from `0-100` using recent odds, liquidity, persistence, and volatility.
 - Sends filtered Telegram alerts for actionable `BET` signals.
 - Supports Betfair auto-betting with optional Telegram confirmation.
-- Blocks unattended real betting with a paper readiness gate until persisted paper evidence is strong enough.
+- Provides paper readiness checks for internal strategy and release validation.
 - Runs restart-safe prospective paper trading for `value-football-draw-only`.
 - Writes separated local audit logs for CLI, paper-trade, and Telegram messages.
 
@@ -54,6 +54,12 @@ java -jar target/betx.jar start --config betx.yml
 # Replay historical normalized CSV data
 java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv
 
+# Train the offline ML probability baseline
+cd ml
+uv sync
+uv run python -m betx_ml train --input ../backtest/football-data/normalized/opening-closing.csv --output-dir ../data/ml/runs
+cd ..
+
 # Convert Football-Data CSV to BetX history format
 java -jar target/betx.jar backtest convert-football-data --input backtest/SP1.csv --output backtest/history.csv
 
@@ -66,6 +72,8 @@ java -jar target/betx.jar telegram test --config betx.yml
 java -jar target/betx.jar betfair test --config betx.yml
 java -jar target/betx.jar betfair markets --config betx.yml
 ```
+
+The offline ML baseline lives under `ml/`. It exports HOME/DRAW/AWAY probabilities to `predictions.csv` for future Java backtest integration and does not affect live betting, paper trading, Telegram, or readiness gates. See `ml/README.md` for the CSV contract, leakage controls, value-betting assumptions, and CLV formula.
 
 ## Configuration
 
@@ -374,13 +382,13 @@ java -jar target/betx.jar paper-trade --config betx.yml --output data/paper-trad
 
 Paper mode prints operational diagnostics: markets scanned, recommendations generated, duplicates skipped, execution failures, missing closing prices, unsettled markets, settled trades, CLV count, validation status, league breakdown, and rolling 100/250/500 trade windows. Detailed `paper_signal_evaluations` rows are compact by default: accepted paper entries and strategically relevant draw evaluations are stored, while structural rejections such as non-draw runners are summarized in diagnostics instead of filling the database. Prospective CLV gates use only settled trades with independently captured closing odds. Fewer than 300 settled trades reports `INSUFFICIENT_SAMPLE`; otherwise non-positive median CLV reports `WEAK_EVIDENCE`, positive theoretical ROI with non-positive executable ROI reports `EXECUTION_FAILURE`, and positive median CLV plus positive executable ROI reports `CANDIDATE_EDGE`.
 
-Paper readiness can be inspected separately before allowing unattended real orders:
+Paper readiness can be inspected separately for internal strategy and release validation:
 
 ```bash
 java -jar target/betx.jar paper-readiness --config betx.yml
 ```
 
-When `paper.readiness_gate.enabled` is true, BetX blocks fully automatic real betting (`auto_betting.enabled: true` and `request_confirmation: false`) unless persisted paper evidence is ready. Telegram-confirmed bets still show the readiness status as advisory and remain manually confirmable. Existing configs without `paper.readiness_gate` keep the gate disabled for backwards compatibility.
+`paper-readiness` is not part of the normal `start` runtime path. End users do not need to run paper validation before using `start`, and paper readiness status is not shown in Telegram alerts. Automatic betting during `start` is controlled by the exchange auto-betting configuration and the normal runtime safety checks, including stake limits, daily loss limits, available balance, execution queue reservations, and open position limits.
 
 ```yaml
 storage:
