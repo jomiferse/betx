@@ -11,6 +11,10 @@ import java.util.Optional;
 public interface BetIntentRepository {
     Optional<BetIntent> findActiveByKey(String databasePath, String exchange, String marketId, long selectionId);
 
+    default Optional<BetIntent> findActiveByMarket(String databasePath, String exchange, String marketId) {
+        return Optional.empty();
+    }
+
     Optional<BetIntent> findLatestByKeySince(
         String databasePath,
         String exchange,
@@ -18,6 +22,15 @@ public interface BetIntentRepository {
         long selectionId,
         Instant since
     );
+
+    default Optional<BetIntent> findLatestByMarketSince(
+        String databasePath,
+        String exchange,
+        String marketId,
+        Instant since
+    ) {
+        return Optional.empty();
+    }
 
     default Optional<BetIntent> findLatestByExchangeResultSince(
         String databasePath,

@@ -444,6 +444,78 @@ class TelegramBetConfirmationServiceTest {
     }
 
     @Test
+    void automaticBettingExecutesAtMostOneSelectionPerMarket() {
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(1), BigDecimal.valueOf(25), 3, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            executionGateway
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            List.of(
+                signal("betfair", "1.1", 47966L, BigDecimal.valueOf(1.84), BigDecimal.ONE),
+                signal("betfair", "1.1", 58805L, BigDecimal.valueOf(3.70), BigDecimal.ONE)
+            ),
+            List.of(analysis("Iran", "1.1", 47966L), analysis("The Draw", "1.1", 58805L))
+        ));
+
+        assertThat(executionGateway.orders()).singleElement()
+            .satisfies(order -> assertThat(order.marketId()).isEqualTo("1.1"));
+        assertThat(intents.saved()).singleElement()
+            .satisfies(intent -> assertThat(intent.marketId()).isEqualTo("1.1"));
+    }
+
+    @Test
+    void automaticBettingSkipsSelectionWithExistingExecutedIntent() {
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        Instant previousBetAt = Instant.parse("2026-06-16T12:54:09Z");
+        intents.save("data.db", new BetIntent(
+            "executed-argentina-draw",
+            BetIntentSource.AUTOMATIC,
+            "betfair",
+            "1.251397469",
+            58805L,
+            "Argentina v Algeria",
+            "Match Odds",
+            "The Draw",
+            "liquidity_ok",
+            BigDecimal.valueOf(4.8),
+            BigDecimal.ONE,
+            BigDecimal.valueOf(12.5),
+            BigDecimal.ONE,
+            "accepted",
+            "bet-123",
+            BetIntentStage.EXECUTED,
+            previousBetAt,
+            previousBetAt
+        ));
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(1), BigDecimal.valueOf(25), 3, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            executionGateway
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signal("betfair", "1.251397469", 58805L, BigDecimal.valueOf(4.7), BigDecimal.ONE),
+            analysis("The Draw", "1.251397469", 58805L)
+        ));
+
+        assertThat(executionGateway.orders()).isEmpty();
+        assertThat(intents.saved()).hasSize(1);
+    }
+
+    @Test
     void automaticBettingReservesBalanceBetweenOrdersInSameExchangeCycle() {
         RecordingIntentRepository intents = new RecordingIntentRepository();
         RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
@@ -1785,6 +1857,15 @@ class TelegramBetConfirmationServiceTest {
         }
 
         @Override
+        public Optional<BetIntent> findActiveByMarket(String databasePath, String exchange, String marketId) {
+            return saved.stream()
+                .filter(intent -> intent.exchange().equals(exchange)
+                    && intent.marketId().equals(marketId)
+                    && intent.stage().isActive())
+                .findFirst();
+        }
+
+        @Override
         public Optional<BetIntent> findLatestByKeySince(
             String databasePath,
             String exchange,
@@ -1796,6 +1877,20 @@ class TelegramBetConfirmationServiceTest {
                 .filter(intent -> intent.exchange().equals(exchange)
                     && intent.marketId().equals(marketId)
                     && intent.selectionId() == selectionId
+                    && !intent.updatedAt().isBefore(since))
+                .findFirst();
+        }
+
+        @Override
+        public Optional<BetIntent> findLatestByMarketSince(
+            String databasePath,
+            String exchange,
+            String marketId,
+            Instant since
+        ) {
+            return saved.stream()
+                .filter(intent -> intent.exchange().equals(exchange)
+                    && intent.marketId().equals(marketId)
                     && !intent.updatedAt().isBefore(since))
                 .findFirst();
         }

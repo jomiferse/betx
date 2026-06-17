@@ -199,7 +199,12 @@ public class RunPaperTradingService {
         try {
             int cycle = 1;
             while (effectiveControl.shouldRunNextCycle()) {
-                PaperTradingResult result = run(configPath, oddsSlippageRate, slippageModel, commissionRate);
+                PaperTradingResult result;
+                try {
+                    result = run(configPath, oddsSlippageRate, slippageModel, commissionRate);
+                } catch (RuntimeException exc) {
+                    result = failedCycleResult(exc);
+                }
                 results.add(result);
                 effectiveReporter.accept(cycle, result);
                 cycle++;
@@ -215,6 +220,25 @@ public class RunPaperTradingService {
                 // JVM shutdown is already in progress.
             }
         }
+    }
+
+    private PaperTradingResult failedCycleResult(RuntimeException exc) {
+        String message = exc.getMessage() == null || exc.getMessage().isBlank()
+            ? exc.getClass().getSimpleName()
+            : exc.getMessage();
+        return new PaperTradingResult(
+            List.of(),
+            List.of("Paper trading cycle failed: " + message),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+        );
     }
 
     public PaperTradingResult run(

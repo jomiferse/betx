@@ -438,6 +438,7 @@ public class TelegramBetConfirmationService {
         Map<String, SignalHistoryEntry> historyByKey = historyByKey(result);
         Map<String, AutomaticBettingExchangeState> exchangeStates = new LinkedHashMap<>();
         OrderExecutionCoordinator orderExecutionCoordinator = new OrderExecutionCoordinator(clock);
+        java.util.Set<String> processedMarketKeys = new java.util.HashSet<>();
 
         for (BetSignal signal : result.signals()) {
             BetfairAutoBettingConfig autoBetting = autoBettingConfig(config, signal.exchange());
@@ -457,6 +458,24 @@ public class TelegramBetConfirmationService {
                 continue;
             }
             Instant now = Instant.now(clock);
+            String marketKey = marketKey(signal.exchange(), signal.marketId());
+            if (intentRepository.findActiveByMarket(config.storage().path(), signal.exchange(), signal.marketId()).isPresent()) {
+                auditSkipped("active_market_intent_exists", signal.exchange(), signal.marketId(), signal.selectionId());
+                continue;
+            }
+            if (intentRepository.findLatestByMarketSince(
+                config.storage().path(),
+                signal.exchange(),
+                signal.marketId(),
+                now.minus(SELECTION_COOLDOWN)
+            ).isPresent()) {
+                auditSkipped("market_cooldown", signal.exchange(), signal.marketId(), signal.selectionId());
+                continue;
+            }
+            if (!processedMarketKeys.add(marketKey)) {
+                auditSkipped("market_cycle_limit", signal.exchange(), signal.marketId(), signal.selectionId());
+                continue;
+            }
             if (intentRepository.findActiveByKey(config.storage().path(), signal.exchange(), signal.marketId(), signal.selectionId()).isPresent()) {
                 auditSkipped("active_intent_exists", signal.exchange(), signal.marketId(), signal.selectionId());
                 continue;
@@ -1212,6 +1231,10 @@ public class TelegramBetConfirmationService {
 
     private String key(String exchange, String marketId, long selectionId) {
         return exchange + "|" + marketId + "|" + selectionId;
+    }
+
+    private String marketKey(String exchange, String marketId) {
+        return exchange + "|" + marketId;
     }
 
     private String textOrDefault(String value, String fallback) {

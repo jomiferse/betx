@@ -48,7 +48,8 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
             try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT *
                 FROM bet_intents
-                WHERE exchange = ? AND market_id = ? AND selection_id = ? AND stage IN ('AWAITING_CONFIRMATION', 'AWAITING_STAKE')
+                WHERE exchange = ? AND market_id = ? AND selection_id = ?
+                    AND stage IN ('AWAITING_CONFIRMATION', 'AWAITING_STAKE', 'EXECUTED')
                 ORDER BY created_at DESC
                 LIMIT 1
                 """)) {
@@ -64,6 +65,32 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
             }
         } catch (SQLException exc) {
             throw new IllegalStateException("Could not read live bet intent.", exc);
+        }
+    }
+
+    @Override
+    public Optional<BetIntent> findActiveByMarket(String databasePath, String exchange, String marketId) {
+        ensureSchemaInitialized(databasePath);
+        try (Connection connection = connection(databasePath)) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT *
+                FROM bet_intents
+                WHERE exchange = ? AND market_id = ?
+                    AND stage IN ('AWAITING_CONFIRMATION', 'AWAITING_STAKE', 'EXECUTED')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """)) {
+                statement.setString(1, exchange);
+                statement.setString(2, marketId);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(map(resultSet));
+                }
+            }
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not read live bet intent for market.", exc);
         }
     }
 
@@ -97,6 +124,37 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
             }
         } catch (SQLException exc) {
             throw new IllegalStateException("Could not read recent live bet intent.", exc);
+        }
+    }
+
+    @Override
+    public Optional<BetIntent> findLatestByMarketSince(
+        String databasePath,
+        String exchange,
+        String marketId,
+        Instant since
+    ) {
+        ensureSchemaInitialized(databasePath);
+        try (Connection connection = connection(databasePath)) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT *
+                FROM bet_intents
+                WHERE exchange = ? AND market_id = ? AND updated_at >= ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """)) {
+                statement.setString(1, exchange);
+                statement.setString(2, marketId);
+                statement.setString(3, since.toString());
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(map(resultSet));
+                }
+            }
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not read recent live bet intent for market.", exc);
         }
     }
 
