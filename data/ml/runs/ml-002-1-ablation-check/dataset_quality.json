@@ -1,0 +1,26 @@
+{
+  "date_max": "2026-05-24T20:00:00+00:00",
+  "date_min": "2020-08-21T18:00:00+00:00",
+  "discard_reasons": {},
+  "discarded_markets": 0,
+  "leagues": [
+    "D1",
+    "E0",
+    "F1",
+    "I1",
+    "SP1"
+  ],
+  "markets_read": 10728,
+  "raw_rows_matched": 10728,
+  "raw_rows_read": 10733,
+  "raw_rows_unmatched": 0,
+  "seasons": [
+    "2020/21",
+    "2021/22",
+    "2022/23",
+    "2023/24",
+    "2024/25",
+    "2025/26"
+  ],
+  "valid_markets": 10728
+}

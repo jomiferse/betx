@@ -12,6 +12,20 @@ BetX is a Java 21, Spring Boot, Picocli CLI application. Production code lives i
 
 Tests mirror the same package layout in `src/test/java`. Runtime assets are local directories `data/` and `models/`, created by `init`. Build artifacts are generated under `target/`.
 
+## Machine Learning Status
+
+The Python module under `ml/` is retained only as an offline experimental laboratory. ML-001, ML-002, and ML-002.1 are paused after the reproducible decision:
+
+```text
+PAUSE_CURRENT_ML_FEATURES
+NO_FEATURE_FAMILY_BEATS_ODDS_ONLY
+MODEL_DOES_NOT_BEAT_MARKET_BASELINE
+```
+
+Do not integrate ML output with Java runtime decisions, paper trading, Telegram, readiness gates, or real-money betting. Do not make Maven train models or load `model.joblib`/`predictions.csv`. Python ML tests remain independent and may be run with `cd ml && uv run pytest`.
+
+ML development should resume only when materially new pre-match data is available, such as temporal odds movement, Betfair snapshots, BACK/LAY spread, liquidity, bookmaker dispersion, lineups, injuries/suspensions, xG or advanced statistics, or a new temporal period not used for the pause decision.
+
 ## Build, Test, and Development Commands
 
 - `mvn test`: runs the JUnit 5 test suite.

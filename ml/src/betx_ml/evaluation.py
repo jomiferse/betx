@@ -98,6 +98,44 @@ def walk_forward_splits(
     return folds
 
 
+def edge_sensitivity(
+    predictions: pd.DataFrame,
+    thresholds: list[float],
+    *,
+    stake: float,
+    slippage_rate: float,
+    commission_rate: float,
+) -> pd.DataFrame:
+    from betx_ml.betting import select_value_bets, settle_bets, summarize_bets
+
+    rows: list[dict[str, object]] = []
+    for threshold in thresholds:
+        bets = settle_bets(
+            select_value_bets(predictions, min_edge=threshold, stake=stake, slippage_rate=slippage_rate),
+            commission_rate=commission_rate,
+        )
+        summary = summarize_bets(bets)
+        rows.append(
+            {
+                "threshold": threshold,
+                "trades": summary["trades"],
+                "net_pnl": summary["net_pnl"],
+                "net_roi": summary["net_roi"],
+                "max_drawdown": summary["max_drawdown"],
+                "median_back_clv_ratio": summary["median_back_clv_ratio"],
+                "positive_back_clv_rate": summary["positive_back_clv_rate"],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def select_edge_threshold(validation_sensitivity: pd.DataFrame) -> float:
+    if validation_sensitivity.empty:
+        raise ValueError("Validation edge sensitivity is empty")
+    ordered = validation_sensitivity.sort_values(["net_roi", "trades", "threshold"], ascending=[False, False, True])
+    return float(ordered.iloc[0]["threshold"])
+
+
 def _advance_same_timestamp_boundary(frame: pd.DataFrame, boundary: int) -> int:
     if boundary <= 0 or boundary >= len(frame):
         return boundary

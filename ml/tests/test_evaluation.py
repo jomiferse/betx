@@ -2,7 +2,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from betx_ml.evaluation import brier_score_multiclass, calibration_table, evaluate_probabilities, walk_forward_splits
+from betx_ml.evaluation import (
+    brier_score_multiclass,
+    calibration_table,
+    edge_sensitivity,
+    evaluate_probabilities,
+    select_edge_threshold,
+    walk_forward_splits,
+)
 
 
 def test_brier_score_multiclass_matches_manual_calculation():
@@ -48,3 +55,45 @@ def test_walk_forward_splits_expand_training_and_keep_future_out():
     assert folds[0][1]["market_key"].tolist() == ["k3", "k4"]
     assert folds[1][1]["market_key"].tolist() == ["k5", "k6"]
 
+
+def test_select_edge_threshold_uses_validation_sensitivity_table():
+    sensitivity = pd.DataFrame(
+        [
+            {"threshold": 0.01, "net_roi": -0.1, "trades": 10},
+            {"threshold": 0.03, "net_roi": 0.2, "trades": 4},
+            {"threshold": 0.05, "net_roi": 0.2, "trades": 6},
+        ]
+    )
+
+    assert select_edge_threshold(sensitivity) == pytest.approx(0.05)
+
+
+def test_edge_sensitivity_reports_only_given_prediction_frame():
+    predictions = pd.DataFrame(
+        [
+            {
+                "market_key": "m1",
+                "date": "2024-08-01T15:00:00Z",
+                "league": "E0",
+                "season": "2024/25",
+                "home_team": "A",
+                "away_team": "B",
+                "actual_result": "HOME",
+                "home_odds": 2.0,
+                "draw_odds": 3.4,
+                "away_odds": 4.0,
+                "closing_home_odds": 1.9,
+                "closing_draw_odds": 3.2,
+                "closing_away_odds": 4.0,
+                "model_home_probability": 0.62,
+                "model_draw_probability": 0.25,
+                "model_away_probability": 0.13,
+            }
+        ]
+    )
+
+    table = edge_sensitivity(predictions, [0.01, 0.25], stake=5, slippage_rate=0.02, commission_rate=0.05)
+
+    assert table["threshold"].tolist() == [0.01, 0.25]
+    assert table.loc[0, "trades"] == 1
+    assert table.loc[1, "trades"] == 0

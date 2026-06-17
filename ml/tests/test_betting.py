@@ -69,7 +69,11 @@ def test_settlement_applies_commission_only_to_positive_gross_pnl_and_preserves_
     assert settled.loc[0, "net_pnl"] == pytest.approx(4.655)
     assert settled.loc[1, "gross_pnl"] == pytest.approx(19.6)
     assert settled.loc[1, "commission"] == pytest.approx(0.98)
-    assert pd.isna(settled.loc[1, "decimal_clv_ratio"])
+    assert settled.loc[0, "back_clv_ratio"] == pytest.approx(1.98 / 1.9)
+    assert settled.loc[0, "back_clv_pct"] == pytest.approx(((1.98 / 1.9) - 1.0) * 100)
+    assert settled.loc[0, "closing_to_execution_odds_ratio"] == pytest.approx(1.9 / 1.98)
+    assert pd.isna(settled.loc[1, "back_clv_ratio"])
+    assert pd.isna(settled.loc[1, "back_clv_pct"])
 
 
 def test_summarizes_bets_with_roi_and_drawdown():
@@ -84,6 +88,6 @@ def test_summarizes_bets_with_roi_and_drawdown():
     assert summary["net_pnl"] == pytest.approx(23.275)
     assert summary["net_roi"] == pytest.approx(2.3275)
     assert summary["max_drawdown"] == pytest.approx(0.0)
-    assert summary["median_clv"] == pytest.approx(1.9 / 1.98)
-    assert summary["positive_clv_rate"] == pytest.approx(0.0)
-
+    assert summary["median_back_clv_ratio"] == pytest.approx(1.98 / 1.9)
+    assert summary["median_back_clv_pct"] == pytest.approx(((1.98 / 1.9) - 1.0) * 100)
+    assert summary["positive_back_clv_rate"] == pytest.approx(1.0)

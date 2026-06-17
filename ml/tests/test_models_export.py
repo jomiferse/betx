@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 
 from betx_ml.export import create_run_dir, write_json, write_predictions
-from betx_ml.features import add_market_features, chronological_split
-from betx_ml.models import load_model, predict_probabilities, save_model, train_logistic_regression
+from betx_ml.features import add_features, add_market_features, chronological_split
+from betx_ml.models import load_model, predict_probabilities, save_model, train_logistic_regression, train_model
 
 
 def training_frame() -> pd.DataFrame:
@@ -61,6 +61,38 @@ def test_model_can_be_saved_loaded_and_reused(tmp_path: Path):
     assert np.allclose(predict_probabilities(model, frame), predict_probabilities(loaded, frame))
 
 
+def test_hist_gradient_boosting_accepts_dense_team_strength_features():
+    rows = []
+    for index in range(18):
+        rows.append(
+            {
+                "market_key": f"k{index}",
+                "date": pd.Timestamp("2024-08-01", tz="UTC") + pd.Timedelta(days=index),
+                "match_date": (pd.Timestamp("2024-08-01") + pd.Timedelta(days=index)).date(),
+                "league": "E0" if index % 2 == 0 else "SP1",
+                "season": "2024/25",
+                "home_team": f"H{index % 4}",
+                "away_team": f"A{index % 4}",
+                "home_team_key": f"h{index % 4}",
+                "away_team_key": f"a{index % 4}",
+                "actual_result": ["HOME", "DRAW", "AWAY"][index % 3],
+                "fthg": [2, 1, 0][index % 3],
+                "ftag": [0, 1, 2][index % 3],
+                "ftr": ["H", "D", "A"][index % 3],
+                "home_odds": [1.7, 3.2, 5.0][index % 3],
+                "draw_odds": [4.0, 2.8, 4.0][index % 3],
+                "away_odds": [5.0, 3.2, 1.7][index % 3],
+            }
+        )
+    frame = add_features(pd.DataFrame(rows), feature_set="odds_team_strength_all")
+
+    model = train_model(frame, model_name="hist_gradient_boosting", feature_set="odds_team_strength_all", random_seed=42)
+    probabilities = predict_probabilities(model, frame, feature_set="odds_team_strength_all")
+
+    assert probabilities.shape == (len(frame), 3)
+    assert np.allclose(probabilities.sum(axis=1), 1.0)
+
+
 def test_exports_json_and_prediction_csv_contract(tmp_path: Path):
     run_dir = create_run_dir(tmp_path, run_id="test-run")
     predictions = pd.DataFrame(
@@ -109,4 +141,3 @@ def test_exports_json_and_prediction_csv_contract(tmp_path: Path):
         "predicted_result",
         "split",
     ]
-

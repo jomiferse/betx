@@ -1,0 +1,37 @@
+{
+  "decision_date": "2026-06-18",
+  "dataset_path": "backtest/football-data/normalized/opening-closing.csv",
+  "raw_data_path": "backtest/football-data/raw",
+  "dataset_sha256": "0d6c42b5c7029fe5200712fa0de8f9f426691faacf0758162328f65b0e1ad473",
+  "run_id": "ml-002-1-ablation-check",
+  "random_seed": 42,
+  "split_policy": "chronological_no_shuffle",
+  "validation_size": 0.15,
+  "test_size": 0.20,
+  "markets": {
+    "valid": 10728,
+    "raw_unmatched": 0
+  },
+  "rows": {
+    "train": 6972,
+    "validation": 1611,
+    "test": 2145
+  },
+  "periods": {
+    "train": {
+      "start": "2020-08-21T18:00:00+00:00",
+      "end": "2024-04-21T14:30:00+00:00"
+    },
+    "validation": {
+      "start": "2024-04-21T15:00:00+00:00",
+      "end": "2025-03-30T17:30:00+00:00"
+    },
+    "test": {
+      "start": "2025-03-30T19:45:00+00:00",
+      "end": "2026-05-24T20:00:00+00:00"
+    }
+  },
+  "primary_result": "PAUSE_CURRENT_ML_FEATURES",
+  "ablation_result": "NO_FEATURE_FAMILY_BEATS_ODDS_ONLY",
+  "market_baseline_result": "MODEL_DOES_NOT_BEAT_MARKET_BASELINE"
+}

@@ -1,0 +1,50 @@
+{
+  "baseline_odds_only": {
+    "ablation_status": "NEUTRAL",
+    "average_odds": 3.788633541927409,
+    "average_predicted_edge": 0.05231115974576003,
+    "delta_vs_market_brier": 0.0016941292648606776,
+    "delta_vs_market_log_loss": 0.002713650812553925,
+    "delta_vs_odds_only_brier": 0.0,
+    "delta_vs_odds_only_log_loss": 0.0,
+    "dominant_segment_dependency": false,
+    "feature_set": "odds_only",
+    "folds_beating_market": 1,
+    "median_back_clv_pct": -0.666666666666671,
+    "median_back_clv_ratio": 0.9933333333333333,
+    "model": "logistic_regression",
+    "positive_back_clv_rate": 0.4793491864831039,
+    "selected_threshold": 0.01,
+    "test_accuracy": 0.5375291375291376,
+    "test_brier": 0.58220713090039,
+    "test_log_loss": 0.9785512964327704,
+    "test_losses": 542,
+    "test_max_drawdown": 555.6825,
+    "test_pnl": -528.99285,
+    "test_roi": -0.1324137296620776,
+    "test_strike_rate": 0.3216520650813517,
+    "test_trades": 799,
+    "test_wins": 257,
+    "validation_accuracy": 0.5400372439478585,
+    "validation_brier": 0.5705027360738513,
+    "validation_log_loss": 0.9600247854146016
+  },
+  "best_validation_feature_set": "odds_only",
+  "best_validation_model": "logistic_regression",
+  "feature_sets_by_status": {
+    "DEGRADES": [
+      "odds_elo",
+      "odds_elo_form",
+      "odds_form",
+      "odds_goals",
+      "odds_team_strength_all"
+    ],
+    "IMPROVES_OVER_ODDS_ONLY": [],
+    "NEUTRAL": [
+      "odds_only"
+    ],
+    "UNSTABLE": []
+  },
+  "feature_signal_found": false,
+  "recommendation": "PAUSE_CURRENT_ML_FEATURES"
+}
