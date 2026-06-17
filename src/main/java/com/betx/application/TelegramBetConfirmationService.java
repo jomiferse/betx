@@ -49,8 +49,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class TelegramBetConfirmationService {
     private static final Duration SELECTION_COOLDOWN = Duration.ofMinutes(30);
-    private static final Duration EXCHANGE_BLOCK_DEDUPE_WINDOW = Duration.ofMinutes(30);
-    private static final String OPEN_POSITION_LIMIT_MESSAGE = "Open position limit reached.";
     private static final int ACTIVE_INTENT_EXPIRATION_SCAN_LIMIT = 500;
     private static final int EXECUTED_INTENT_RECONCILIATION_LIMIT = 500;
     private static final List<BetIntentStage> PENDING_CONFIRMATION_STAGES = List.of(
@@ -494,8 +492,7 @@ public class TelegramBetConfirmationService {
             BigDecimal stake = maxAllowedStake(config, exchangeState.availableBalance(), autoBetting.maxStake());
             if (riskBlock.isPresent()) {
                 auditSkipped(riskBlock.get().reason(), signal.exchange(), signal.marketId(), signal.selectionId());
-                if ("max_open_positions".equals(riskBlock.get().reason())
-                    && recentExchangeBlockExists(config, signal.exchange(), OPEN_POSITION_LIMIT_MESSAGE, now)) {
+                if ("max_open_positions".equals(riskBlock.get().reason())) {
                     exchangeState.close();
                     continue;
                 }
@@ -516,22 +513,6 @@ public class TelegramBetConfirmationService {
             }
             if (exchangeState.remainingOpenPositionCapacity() <= 0) {
                 auditSkipped("max_open_positions", signal.exchange(), signal.marketId(), signal.selectionId());
-                if (recentExchangeBlockExists(config, signal.exchange(), OPEN_POSITION_LIMIT_MESSAGE, now)) {
-                    exchangeState.close();
-                    continue;
-                }
-                BetIntent intent = saveAutomaticBlockedIntent(
-                    config,
-                    signal,
-                    analysis,
-                    autoBetting,
-                    exchangeState.availableBalance(),
-                    stake,
-                    OPEN_POSITION_LIMIT_MESSAGE,
-                    now
-                );
-                linkHistoryForSignal(config, historyByKey, signal, intent);
-                safeUpdateSignalHistory(config, intent);
                 exchangeState.close();
                 continue;
             }
@@ -1013,15 +994,6 @@ public class TelegramBetConfirmationService {
         );
         intentRepository.save(config.storage().path(), intent);
         return intent;
-    }
-
-    private boolean recentExchangeBlockExists(BetxConfig config, String exchange, String resultMessage, Instant now) {
-        return intentRepository.findLatestByExchangeResultSince(
-            config.storage().path(),
-            exchange,
-            resultMessage,
-            now.minus(EXCHANGE_BLOCK_DEDUPE_WINDOW)
-        ).isPresent();
     }
 
     private Map<String, SignalHistoryEntry> historyByKey(DryRunSignalsResult result) {

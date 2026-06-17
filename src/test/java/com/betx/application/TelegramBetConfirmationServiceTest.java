@@ -841,7 +841,7 @@ class TelegramBetConfirmationServiceTest {
     }
 
     @Test
-    void blocksAutomaticBetWhenRealOpenPositionsReachLimit() {
+    void blocksAutomaticBetWhenRealOpenPositionsReachLimitWithoutPersistingIntent() {
         RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
         RecordingIntentRepository intents = new RecordingIntentRepository();
         TelegramBetConfirmationService service = service(
@@ -853,19 +853,24 @@ class TelegramBetConfirmationServiceTest {
             StaticExposureGateway.available(1, BigDecimal.ZERO),
             executionGateway
         );
+        List<String> output = new ArrayList<>();
 
         service.sync(CONFIG_PATH, resultOf(
             signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5)),
             analysis("Team A")
-        ));
+        ), output::add);
 
         assertThat(executionGateway.orders()).isEmpty();
-        assertThat(intents.saved()).singleElement()
-            .satisfies(intent -> assertThat(intent.resultMessage()).isEqualTo("Open position limit reached."));
+        assertThat(intents.saved()).isEmpty();
+        assertThat(output).anySatisfy(line -> assertThat(line)
+            .contains("BET INTENT SKIPPED")
+            .contains("reason=max_open_positions")
+            .contains("marketId=1.1")
+            .contains("selectionId=42"));
     }
 
     @Test
-    void maxOpenPositionsCreatesSingleBlockedIntentForExchangeCycle() {
+    void maxOpenPositionsClosesExchangeCycleWithoutPersistingBlockedIntent() {
         RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
         RecordingIntentRepository intents = new RecordingIntentRepository();
         TelegramBetConfirmationService service = service(
@@ -887,12 +892,11 @@ class TelegramBetConfirmationServiceTest {
         ));
 
         assertThat(executionGateway.orders()).isEmpty();
-        assertThat(intents.saved()).singleElement()
-            .satisfies(intent -> assertThat(intent.resultMessage()).isEqualTo("Open position limit reached."));
+        assertThat(intents.saved()).isEmpty();
     }
 
     @Test
-    void maxOpenPositionsDoesNotCreateRepeatedBlockedIntentWithinDedupeWindow() {
+    void maxOpenPositionsDoesNotPersistBlockedIntentAcrossRepeatedCycles() {
         RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
         RecordingIntentRepository intents = new RecordingIntentRepository();
         Clock clock = Clock.fixed(Instant.parse("2026-06-17T00:45:00Z"), ZoneOffset.UTC);
@@ -917,8 +921,7 @@ class TelegramBetConfirmationServiceTest {
         ));
 
         assertThat(executionGateway.orders()).isEmpty();
-        assertThat(intents.saved()).singleElement()
-            .satisfies(intent -> assertThat(intent.resultMessage()).isEqualTo("Open position limit reached."));
+        assertThat(intents.saved()).isEmpty();
     }
 
     @Test
