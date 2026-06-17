@@ -406,7 +406,7 @@ class TelegramBetConfirmationServiceTest {
     }
 
     @Test
-    void automaticBettingWithoutConfirmationIsBlockedWhenPaperReadinessIsNotReady() {
+    void automaticBettingWithoutConfirmationDoesNotRequirePaperReadiness() {
         RecordingIntentRepository intents = new RecordingIntentRepository();
         RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
         TelegramBetConfirmationService service = service(
@@ -419,8 +419,7 @@ class TelegramBetConfirmationServiceTest {
             new RecordingMarketSnapshotRepository(),
             new RecordingSignalHistoryRepository(),
             executionGateway,
-            Clock.systemUTC(),
-            readiness(PaperReadinessStatus.NOT_READY, "Rolling ROI is below the configured threshold.")
+            Clock.systemUTC()
         );
 
         service.sync(CONFIG_PATH, resultOf(
@@ -428,70 +427,17 @@ class TelegramBetConfirmationServiceTest {
             analysis("Team A")
         ));
 
-        assertThat(executionGateway.orders()).isEmpty();
+        assertThat(executionGateway.orders()).singleElement()
+            .satisfies(order -> assertThat(order.marketId()).isEqualTo("1.1"));
         assertThat(intents.saved()).singleElement().satisfies(intent -> {
             assertThat(intent.source()).isEqualTo(BetIntentSource.AUTOMATIC);
-            assertThat(intent.stage()).isEqualTo(BetIntentStage.FAILED);
-            assertThat(intent.resultMessage()).isEqualTo("Paper readiness gate blocked automatic betting: NOT_READY.");
+            assertThat(intent.stage()).isEqualTo(BetIntentStage.EXECUTED);
+            assertThat(intent.resultMessage()).isEqualTo("accepted");
         });
     }
 
     @Test
-    void automaticBettingWithoutConfirmationExecutesWhenPaperReadinessIsReady() {
-        RecordingIntentRepository intents = new RecordingIntentRepository();
-        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
-        TelegramBetConfirmationService service = service(
-            configWithAutoBetting(BigDecimal.valueOf(3), BigDecimal.valueOf(25), 3, true, false),
-            new RecordingTelegramConnectionService(),
-            new RecordingTelegramGateway(),
-            intents,
-            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
-            StaticExposureGateway.available(0, BigDecimal.ZERO),
-            new RecordingMarketSnapshotRepository(),
-            new RecordingSignalHistoryRepository(),
-            executionGateway,
-            Clock.systemUTC(),
-            readiness(PaperReadinessStatus.READY, "Paper readiness gate passed.")
-        );
-
-        service.sync(CONFIG_PATH, resultOf(
-            signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5)),
-            analysis("Team A")
-        ));
-
-        assertThat(executionGateway.orders()).singleElement()
-            .satisfies(order -> assertThat(order.marketId()).isEqualTo("1.1"));
-    }
-
-    @Test
-    void automaticBettingWithoutConfirmationExecutesWhenPaperReadinessIsDisabled() {
-        RecordingIntentRepository intents = new RecordingIntentRepository();
-        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
-        TelegramBetConfirmationService service = service(
-            configWithAutoBetting(BigDecimal.valueOf(3), BigDecimal.valueOf(25), 3, true, false),
-            new RecordingTelegramConnectionService(),
-            new RecordingTelegramGateway(),
-            intents,
-            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
-            StaticExposureGateway.available(0, BigDecimal.ZERO),
-            new RecordingMarketSnapshotRepository(),
-            new RecordingSignalHistoryRepository(),
-            executionGateway,
-            Clock.systemUTC(),
-            readiness(PaperReadinessStatus.DISABLED, "Paper readiness gate is disabled.")
-        );
-
-        service.sync(CONFIG_PATH, resultOf(
-            signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5)),
-            analysis("Team A")
-        ));
-
-        assertThat(executionGateway.orders()).singleElement()
-            .satisfies(order -> assertThat(order.marketId()).isEqualTo("1.1"));
-    }
-
-    @Test
-    void telegramConfirmationShowsPaperReadinessAdvisoryWithoutBlockingIntent() {
+    void telegramConfirmationDoesNotShowPaperReadiness() {
         RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
         RecordingIntentRepository intents = new RecordingIntentRepository();
         TelegramBetConfirmationService service = service(
@@ -504,8 +450,7 @@ class TelegramBetConfirmationServiceTest {
             new RecordingMarketSnapshotRepository(),
             new RecordingSignalHistoryRepository(),
             new RecordingExecutionGateway(),
-            Clock.systemUTC(),
-            readiness(PaperReadinessStatus.NOT_READY, "Rolling ROI is below the configured threshold.")
+            Clock.systemUTC()
         );
 
         service.sync(CONFIG_PATH, resultWithLiveConfirmationSignal());
@@ -514,9 +459,9 @@ class TelegramBetConfirmationServiceTest {
             .satisfies(intent -> assertThat(intent.stage()).isEqualTo(BetIntentStage.AWAITING_CONFIRMATION));
         assertThat(telegram.sentMessages()).singleElement()
             .satisfies(message -> assertThat(message.text())
-                .contains("Paper readiness: NOT_READY")
-                .contains("Rolling ROI is below the configured threshold.")
-                .contains("Manual confirmation is still available.")
+                .doesNotContain("Paper readiness")
+                .doesNotContain("readiness")
+                .doesNotContain("Manual confirmation is still available.")
                 .contains("Confirm bet?"));
     }
 
@@ -1510,51 +1455,6 @@ class TelegramBetConfirmationServiceTest {
             historyRepository,
             executionGateway,
             clock
-        );
-    }
-
-    private TelegramBetConfirmationService service(
-        BetxConfig config,
-        RecordingTelegramConnectionService telegram,
-        RecordingTelegramGateway gateway,
-        RecordingIntentRepository intents,
-        ExchangeAccountGateway accountGateway,
-        ExchangeExposureGateway exposureGateway,
-        MarketSnapshotRepository snapshotRepository,
-        SignalHistoryRepository historyRepository,
-        BetExecutionGateway executionGateway,
-        Clock clock,
-        EvaluatePaperReadinessUseCase readinessUseCase
-    ) {
-        return new TelegramBetConfirmationService(
-            new StaticConfigRepository(config),
-            telegram,
-            gateway,
-            intents,
-            accountGateway,
-            exposureGateway,
-            snapshotRepository,
-            historyRepository,
-            executionGateway,
-            readinessUseCase,
-            clock
-        );
-    }
-
-    private EvaluatePaperReadinessUseCase readiness(PaperReadinessStatus status, String reason) {
-        return (configPath, strategy) -> new PaperReadinessResult(
-            status,
-            strategy,
-            84,
-            100,
-            new BigDecimal("0.62"),
-            new BigDecimal("1.00"),
-            new BigDecimal("0.008"),
-            BigDecimal.ZERO,
-            new BigDecimal("-0.31"),
-            BigDecimal.ZERO,
-            "INSUFFICIENT_SAMPLE",
-            List.of(reason)
         );
     }
 

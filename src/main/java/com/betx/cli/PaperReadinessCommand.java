@@ -13,7 +13,7 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
 @Component
-@Command(name = "paper-readiness", description = "Inspect paper evidence before automatic real betting.")
+@Command(name = "paper-readiness", description = "Inspect paper evidence for internal strategy validation.")
 public class PaperReadinessCommand implements Runnable {
     private final EvaluatePaperReadinessUseCase readinessUseCase;
 
