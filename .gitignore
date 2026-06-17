@@ -12,19 +12,7 @@ betx.yml
 .env
 
 # Local runtime data and model artifacts
-data/*
-!data/ml/
-data/ml/*
-!data/ml/runs/
-data/ml/runs/*
-!data/ml/runs/README.md
-!data/ml/runs/ml-002-1-ablation-check/
-data/ml/runs/ml-002-1-ablation-check/*
-!data/ml/runs/ml-002-1-ablation-check/ablation_summary.json
-!data/ml/runs/ml-002-1-ablation-check/ablation_results.csv
-!data/ml/runs/ml-002-1-ablation-check/model_comparison.csv
-!data/ml/runs/ml-002-1-ablation-check/dataset_quality.json
-!data/ml/runs/ml-002-1-ablation-check/dataset_split_metadata.json
+data/
 models/
 /backtest/
 *.joblib
@@ -44,7 +32,6 @@ logs/
 # Agent files
 skills-lock.json
 .agents/
+.superpowers/
 AGENTS.md
-docs/*
-!docs/decisions/
-!docs/decisions/ADR-ML-PAUSED.md
+docs/
