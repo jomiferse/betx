@@ -6,6 +6,7 @@ import com.betx.application.MatchIntelligenceRequest;
 import com.betx.application.MatchIntelligenceSource;
 import com.betx.application.port.out.ExternalMatchIntelligenceGateway;
 import com.betx.domain.signal.RunnerAnalysis;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
@@ -49,18 +50,19 @@ public class OpenRouterMatchIntelligenceGateway implements ExternalMatchIntellig
         }
 
         try {
-            JsonNode response = builder
+            String responseBody = builder
                 .clone()
                 .build()
                 .post()
                 .uri(OPENROUTER_URL)
                 .header("Authorization", "Bearer " + apiKey)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(requestBody(request))
+                .body(mapper.writeValueAsString(requestBody(request)))
                 .retrieve()
-                .body(JsonNode.class);
+                .body(String.class);
+            JsonNode response = mapper.readTree(responseBody);
             return parseResponse(request, response);
-        } catch (RestClientException | IllegalArgumentException exc) {
+        } catch (RestClientException | IllegalArgumentException | JsonProcessingException exc) {
             return MatchIntelligenceAssessment.unavailable(
                 analysis.exchange(),
                 analysis.marketId(),

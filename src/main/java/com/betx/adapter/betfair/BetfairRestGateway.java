@@ -14,6 +14,7 @@ import com.betx.domain.exposure.ExchangeSettledOrder;
 import com.betx.domain.order.BetExecutionResult;
 import com.betx.domain.order.BetOrder;
 import com.betx.domain.signal.BetSide;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -56,7 +57,7 @@ public class BetfairRestGateway implements BetfairGateway {
     @Override
     public BetfairSession login(BetfairCredentials credentials) {
         try {
-            JsonNode payload = loginClient.post()
+            String responseBody = loginClient.post()
                 .uri(URI.create(credentials.country().loginUrl()))
                 .headers(headers -> {
                     headers.set("Accept", "application/json");
@@ -65,8 +66,9 @@ public class BetfairRestGateway implements BetfairGateway {
                 })
                 .body("username=" + encode(credentials.username()) + "&password=" + encode(credentials.password()))
                 .retrieve()
-                .body(JsonNode.class);
+                .body(String.class);
 
+            JsonNode payload = readJson(responseBody);
             if (payload == null) {
                 throw new IllegalStateException("Betfair login returned no response.");
             }
@@ -81,7 +83,7 @@ public class BetfairRestGateway implements BetfairGateway {
 
             String error = text(payload, "error");
             throw new IllegalStateException("Betfair login failed: " + (error.isBlank() ? status : error));
-        } catch (RestClientException exc) {
+        } catch (RestClientException | JsonProcessingException exc) {
             throw new IllegalStateException("Betfair login request failed.", exc);
         }
     }
@@ -302,7 +304,7 @@ public class BetfairRestGateway implements BetfairGateway {
             request.put("method", method);
             request.set("params", params);
             request.put("id", 1);
-            JsonNode payload = client.post()
+            String responseBody = client.post()
                 .uri(URI.create(url))
                 .headers(headers -> {
                     headers.set("Accept", "application/json");
@@ -310,10 +312,11 @@ public class BetfairRestGateway implements BetfairGateway {
                     headers.set("X-Authentication", session.token());
                     headers.set("Content-Type", "application/json");
                 })
-                .body(request)
+                .body(writeJson(request))
                 .retrieve()
-                .body(JsonNode.class);
+                .body(String.class);
 
+            JsonNode payload = readJson(responseBody);
             if (payload == null) {
                 throw new IllegalStateException("Betfair request returned no response.");
             }
@@ -321,9 +324,20 @@ public class BetfairRestGateway implements BetfairGateway {
                 throw new IllegalStateException("Betfair request failed: " + payload.path("error").toString());
             }
             return payload.path("result");
-        } catch (RestClientException exc) {
+        } catch (RestClientException | JsonProcessingException exc) {
             throw new IllegalStateException("Betfair API request failed.", exc);
         }
+    }
+
+    private String writeJson(JsonNode node) throws JsonProcessingException {
+        return mapper.writeValueAsString(node);
+    }
+
+    private JsonNode readJson(String body) throws JsonProcessingException {
+        if (body == null || body.isBlank()) {
+            return null;
+        }
+        return mapper.readTree(body);
     }
 
     private List<BetfairRunnerPrice> parseRunners(JsonNode runnersNode) {

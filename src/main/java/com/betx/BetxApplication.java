@@ -12,6 +12,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.env.Environment;
 import org.springframework.web.client.RestClient;
 import picocli.CommandLine;
 
@@ -20,11 +21,13 @@ import picocli.CommandLine;
 public class BetxApplication implements CommandLineRunner, ExitCodeGenerator {
     private final CommandLine.IFactory factory;
     private final BetxRootCommand rootCommand;
+    private final Environment environment;
     private int exitCode;
 
-    public BetxApplication(CommandLine.IFactory factory, BetxRootCommand rootCommand) {
+    public BetxApplication(CommandLine.IFactory factory, BetxRootCommand rootCommand, Environment environment) {
         this.factory = factory;
         this.rootCommand = rootCommand;
+        this.environment = environment;
     }
 
     public static void main(String[] args) {
@@ -62,6 +65,10 @@ public class BetxApplication implements CommandLineRunner, ExitCodeGenerator {
 
     @Override
     public void run(String... args) {
+        if (environment.getProperty("betx.interface.enabled", Boolean.class, false)) {
+            exitCode = 0;
+            return;
+        }
         exitCode = new CommandLine(rootCommand, factory)
             .setExecutionExceptionHandler((exception, commandLine, parseResult) -> {
                 commandLine.getErr().println(exception.getMessage());

@@ -1,0 +1,122 @@
+package com.betx.application;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.betx.application.port.out.BetxConfigRepository;
+import com.betx.application.port.out.ExchangeMarketDataGateway;
+import com.betx.domain.betfair.BetfairConfig;
+import com.betx.domain.config.BetxConfig;
+import com.betx.domain.config.ConfigPath;
+import com.betx.domain.config.ExchangeConfig;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Executors;
+import org.junit.jupiter.api.Test;
+
+class BetxInterfaceRuntimeServiceTest {
+    private static final ConfigPath CONFIG = new ConfigPath(Path.of("betx.yml"));
+
+    @Test
+    void startsPaused() {
+        BetxInterfaceRuntimeService service = service(BetxConfig.defaults(), new RecordingDryRunService());
+
+        assertThat(service.status()).isEqualTo(InterfaceStatus.PAUSED);
+    }
+
+    @Test
+    void activateValidatesConfigAndRunsOneCycleImmediately() {
+        RecordingDryRunService dryRun = new RecordingDryRunService();
+        BetxInterfaceRuntimeService service = service(configWithEnabledExchange(), dryRun);
+
+        BetxInterfaceRuntimeService.RuntimeState state = service.activate(CONFIG);
+
+        assertThat(state.status()).isEqualTo(InterfaceStatus.ACTIVE);
+        assertThat(dryRun.runs).isEqualTo(1);
+        assertThat(state.message()).isEqualTo("BetX esta activo.");
+    }
+
+    @Test
+    void activateReportsNeedsAttentionWhenNoExchangeIsEnabled() {
+        RecordingDryRunService dryRun = new RecordingDryRunService();
+        BetxInterfaceRuntimeService service = service(BetxConfig.defaults(), dryRun);
+
+        BetxInterfaceRuntimeService.RuntimeState state = service.activate(CONFIG);
+
+        assertThat(state.status()).isEqualTo(InterfaceStatus.NEEDS_ATTENTION);
+        assertThat(state.message()).isEqualTo("Activa al menos una conexion de apuestas antes de iniciar BetX.");
+        assertThat(dryRun.runs).isZero();
+    }
+
+    @Test
+    void pauseStopsActiveState() {
+        BetxInterfaceRuntimeService service = service(configWithEnabledExchange(), new RecordingDryRunService());
+        service.activate(CONFIG);
+
+        BetxInterfaceRuntimeService.RuntimeState state = service.pause();
+
+        assertThat(state.status()).isEqualTo(InterfaceStatus.PAUSED);
+        assertThat(state.message()).isEqualTo("BetX esta pausado.");
+    }
+
+    private BetxInterfaceRuntimeService service(BetxConfig config, RecordingDryRunService dryRun) {
+        StaticConfigRepository configRepository = new StaticConfigRepository(config);
+        return new BetxInterfaceRuntimeService(
+            new StartBetxService(configRepository),
+            configRepository,
+            dryRun,
+            Clock.fixed(Instant.parse("2026-06-18T10:00:00Z"), ZoneOffset.UTC),
+            Executors.newSingleThreadScheduledExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "test-betx-interface-runtime");
+                thread.setDaemon(true);
+                return thread;
+            })
+        );
+    }
+
+    private BetxConfig configWithEnabledExchange() {
+        return BetxConfig.defaults().withExchanges(List.of(new ExchangeConfig(
+            "betfair",
+            true,
+            new BetfairConfig("user", "password", "app-key")
+        )));
+    }
+
+    private static final class RecordingDryRunService extends RunDryRunSignalsService {
+        private int runs;
+
+        private RecordingDryRunService() {
+            super(
+                new StaticConfigRepository(BetxConfig.defaults()),
+                List.<ExchangeMarketDataGateway>of(),
+                null,
+                new NoopBetExecutionGateway()
+            );
+        }
+
+        @Override
+        public DryRunSignalsResult run(ConfigPath configPath, boolean sendTelegramAlerts, boolean logSuppressedTelegramAlerts) {
+            runs++;
+            return new DryRunSignalsResult(List.of(), List.of(), false);
+        }
+    }
+
+    private record StaticConfigRepository(BetxConfig config) implements BetxConfigRepository {
+        @Override
+        public BetxConfig load(ConfigPath path) {
+            return config;
+        }
+
+        @Override
+        public boolean writeDefault(ConfigPath path, boolean force) {
+            return false;
+        }
+
+        @Override
+        public void saveTelegramFields(ConfigPath path, Map<String, Object> fields) {
+        }
+    }
+}
