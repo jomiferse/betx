@@ -40,8 +40,9 @@ public abstract class PaperTradingLoopControl {
                 try {
                     Thread.sleep(pollInterval.toMillis());
                 } catch (InterruptedException exc) {
-                    Thread.currentThread().interrupt();
-                    requestStop();
+                    if (stopRequested()) {
+                        Thread.currentThread().interrupt();
+                    }
                 }
             }
         };
