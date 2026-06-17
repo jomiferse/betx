@@ -74,6 +74,7 @@ public class TelegramBetConfirmationService {
     private final MarketSnapshotRepository snapshotRepository;
     private final SignalHistoryRepository signalHistoryRepository;
     private final BetExecutionGateway executionGateway;
+    private final EvaluatePaperReadinessUseCase paperReadinessUseCase;
     private final TelegramBetAlertFormatter telegramBetAlertFormatter;
     private final Clock clock;
     private final ThreadLocal<Consumer<String>> output = ThreadLocal.withInitial(() -> ignored -> {
@@ -90,7 +91,8 @@ public class TelegramBetConfirmationService {
         @Qualifier("betfairExchangeExposureGateway") ExchangeExposureGateway exposureGateway,
         MarketSnapshotRepository snapshotRepository,
         SignalHistoryRepository signalHistoryRepository,
-        @Qualifier("betfairBetExecutionGateway") BetExecutionGateway executionGateway
+        @Qualifier("betfairBetExecutionGateway") BetExecutionGateway executionGateway,
+        EvaluatePaperReadinessUseCase paperReadinessUseCase
     ) {
         this(
             configRepository,
@@ -103,6 +105,7 @@ public class TelegramBetConfirmationService {
             snapshotRepository,
             signalHistoryRepository,
             executionGateway,
+            paperReadinessUseCase,
             Clock.systemUTC()
         );
     }
@@ -126,6 +129,7 @@ public class TelegramBetConfirmationService {
             new NoopMarketSnapshotRepository(),
             new NoopSignalHistoryRepository(),
             executionGateway,
+            disabledPaperReadiness(),
             Clock.systemUTC()
         );
     }
@@ -153,6 +157,7 @@ public class TelegramBetConfirmationService {
             snapshotRepository,
             new NoopSignalHistoryRepository(),
             executionGateway,
+            disabledPaperReadiness(),
             clock
         );
     }
@@ -180,6 +185,7 @@ public class TelegramBetConfirmationService {
             snapshotRepository,
             signalHistoryRepository,
             executionGateway,
+            disabledPaperReadiness(),
             clock
         );
     }
@@ -197,6 +203,65 @@ public class TelegramBetConfirmationService {
         BetExecutionGateway executionGateway,
         Clock clock
     ) {
+        this(
+            configRepository,
+            telegramConnectionService,
+            telegramGateway,
+            intentRepository,
+            telegramStateRepository,
+            accountGateway,
+            exposureGateway,
+            snapshotRepository,
+            signalHistoryRepository,
+            executionGateway,
+            disabledPaperReadiness(),
+            clock
+        );
+    }
+
+    TelegramBetConfirmationService(
+        BetxConfigRepository configRepository,
+        TelegramConnectionService telegramConnectionService,
+        TelegramBotGateway telegramGateway,
+        BetIntentRepository intentRepository,
+        ExchangeAccountGateway accountGateway,
+        ExchangeExposureGateway exposureGateway,
+        MarketSnapshotRepository snapshotRepository,
+        SignalHistoryRepository signalHistoryRepository,
+        BetExecutionGateway executionGateway,
+        EvaluatePaperReadinessUseCase paperReadinessUseCase,
+        Clock clock
+    ) {
+        this(
+            configRepository,
+            telegramConnectionService,
+            telegramGateway,
+            intentRepository,
+            new NoopTelegramStateRepository(),
+            accountGateway,
+            exposureGateway,
+            snapshotRepository,
+            signalHistoryRepository,
+            executionGateway,
+            paperReadinessUseCase,
+            clock
+        );
+    }
+
+    TelegramBetConfirmationService(
+        BetxConfigRepository configRepository,
+        TelegramConnectionService telegramConnectionService,
+        TelegramBotGateway telegramGateway,
+        BetIntentRepository intentRepository,
+        TelegramStateRepository telegramStateRepository,
+        ExchangeAccountGateway accountGateway,
+        ExchangeExposureGateway exposureGateway,
+        MarketSnapshotRepository snapshotRepository,
+        SignalHistoryRepository signalHistoryRepository,
+        BetExecutionGateway executionGateway,
+        EvaluatePaperReadinessUseCase paperReadinessUseCase,
+        Clock clock
+    ) {
         this.configRepository = configRepository;
         this.telegramConnectionService = telegramConnectionService;
         this.telegramGateway = telegramGateway;
@@ -207,6 +272,7 @@ public class TelegramBetConfirmationService {
         this.snapshotRepository = snapshotRepository == null ? new NoopMarketSnapshotRepository() : snapshotRepository;
         this.signalHistoryRepository = signalHistoryRepository == null ? new NoopSignalHistoryRepository() : signalHistoryRepository;
         this.executionGateway = executionGateway;
+        this.paperReadinessUseCase = paperReadinessUseCase == null ? disabledPaperReadiness() : paperReadinessUseCase;
         this.telegramBetAlertFormatter = new TelegramBetAlertFormatter();
         this.clock = clock;
     }
@@ -358,6 +424,9 @@ public class TelegramBetConfirmationService {
                 LinkedHashMap::new
             ));
         Map<String, SignalHistoryEntry> historyByKey = historyByKey(result);
+        Optional<PaperReadinessResult> readiness = Optional.ofNullable(
+            paperReadinessUseCase.evaluate(configPath, PaperReadinessService.STRATEGY)
+        );
 
         for (BetSignal signal : result.signals()) {
             String key = key(signal.exchange(), signal.marketId(), signal.selectionId());
@@ -406,7 +475,8 @@ public class TelegramBetConfirmationService {
                 telegramBetAlertFormatter.formatLiveConfirmation(
                     analysis,
                     Optional.ofNullable(previousSnapshotsByKey.get(key)),
-                    Optional.ofNullable(intelligenceByKey.get(key))
+                    Optional.ofNullable(intelligenceByKey.get(key)),
+                    readiness
                 ),
                 TelegramParseMode.HTML,
                 confirmationKeyboard(intent.id())
@@ -437,17 +507,11 @@ public class TelegramBetConfirmationService {
         Map<String, AutomaticBettingExchangeState> exchangeStates = new LinkedHashMap<>();
         OrderExecutionCoordinator orderExecutionCoordinator = new OrderExecutionCoordinator(clock);
         java.util.Set<String> processedMarketKeys = new java.util.HashSet<>();
+        PaperReadinessResult readiness = paperReadinessUseCase.evaluate(configPath, PaperReadinessService.STRATEGY);
 
         for (BetSignal signal : result.signals()) {
             BetfairAutoBettingConfig autoBetting = autoBettingConfig(config, signal.exchange());
             if (!autoBetting.enabled() || autoBetting.requestConfirmation()) {
-                continue;
-            }
-            AutomaticBettingExchangeState exchangeState = exchangeStates.computeIfAbsent(
-                signal.exchange(),
-                ignored -> automaticBettingExchangeState(config, signal.exchange(), autoBetting, exposureByExchange)
-            );
-            if (exchangeState.closed()) {
                 continue;
             }
             String key = key(signal.exchange(), signal.marketId(), signal.selectionId());
@@ -486,6 +550,28 @@ public class TelegramBetConfirmationService {
                 now.minus(SELECTION_COOLDOWN)
             ).isPresent()) {
                 auditSkipped("cooldown", signal.exchange(), signal.marketId(), signal.selectionId());
+                continue;
+            }
+            if (readiness != null && !readiness.allowsAutomaticBetting()) {
+                BetIntent intent = saveAutomaticBlockedIntent(
+                    config,
+                    signal,
+                    analysis,
+                    autoBetting,
+                    null,
+                    autoBetting.maxStake(),
+                    "Paper readiness gate blocked automatic betting: " + readiness.status() + ".",
+                    now
+                );
+                linkHistoryForSignal(config, historyByKey, signal, intent);
+                safeUpdateSignalHistory(config, intent);
+                return;
+            }
+            AutomaticBettingExchangeState exchangeState = exchangeStates.computeIfAbsent(
+                signal.exchange(),
+                ignored -> automaticBettingExchangeState(config, signal.exchange(), autoBetting, exposureByExchange)
+            );
+            if (exchangeState.closed()) {
                 continue;
             }
             Optional<RiskBlock> riskBlock = exchangeState.riskBlock();
@@ -1287,6 +1373,23 @@ public class TelegramBetConfirmationService {
         private void close() {
             closed = true;
         }
+    }
+
+    private static EvaluatePaperReadinessUseCase disabledPaperReadiness() {
+        return (configPath, strategy) -> new PaperReadinessResult(
+            PaperReadinessStatus.DISABLED,
+            strategy,
+            0,
+            100,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            "DISABLED",
+            List.of("Paper readiness gate is disabled.")
+        );
     }
 
     private static final class NoopMarketSnapshotRepository implements MarketSnapshotRepository {

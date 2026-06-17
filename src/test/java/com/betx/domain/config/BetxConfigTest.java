@@ -76,6 +76,14 @@ class BetxConfigTest {
         assertThat(config.paper().pollInterval()).isEqualTo(java.time.Duration.ofSeconds(60));
         assertThat(config.paper().closingCaptureMinutesBeforeStart()).isEqualTo(2);
         assertThat(config.paper().settlementPollInterval()).isEqualTo(java.time.Duration.ofMinutes(5));
+        assertThat(config.paper().readinessGate().enabled()).isFalse();
+        assertThat(config.paper().readinessGate().minimumSettledTrades()).isEqualTo(100);
+        assertThat(config.paper().readinessGate().requiredEvidenceStatus()).isEqualTo("CANDIDATE_EDGE");
+        assertThat(config.paper().readinessGate().minimumExecutableRoi()).isEqualByComparingTo("0.01");
+        assertThat(config.paper().readinessGate().minimumMedianClv()).isEqualByComparingTo("0.00");
+        assertThat(config.paper().readinessGate().rollingWindowSize()).isEqualTo(100);
+        assertThat(config.paper().readinessGate().minimumRollingRoi()).isEqualByComparingTo("0.00");
+        assertThat(config.paper().readinessGate().blockOnExecutionFailure()).isTrue();
     }
 
     @Test

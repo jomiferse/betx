@@ -33,6 +33,7 @@ public class BetxConfigValidator {
         if (config.paper().settlementPollInterval().isZero() || config.paper().settlementPollInterval().isNegative()) {
             throw new ConfigException("paper.settlement_poll_interval must be greater than zero.");
         }
+        validatePaperReadinessGate(config.paper().readinessGate());
         if (!List.of("key_events", "all_signals", "orders_only").contains(config.telegram().alerts().mode())) {
             throw new ConfigException("telegram.alerts.mode must be one of: key_events, all_signals, orders_only.");
         }
@@ -67,6 +68,41 @@ public class BetxConfigValidator {
         if (intelligence.apiKeyEnv().startsWith("sk-")) {
             throw new ConfigException("intelligence.api_key_env must be an environment variable name, not an API key.");
         }
+    }
+
+    private void validatePaperReadinessGate(PaperReadinessGateConfig gate) {
+        if (gate.minimumSettledTrades() <= 0) {
+            throw new ConfigException("paper.readiness_gate.minimum_settled_trades must be greater than zero.");
+        }
+        if (gate.rollingWindowSize() <= 0) {
+            throw new ConfigException("paper.readiness_gate.rolling_window_size must be greater than zero.");
+        }
+        if (gate.minimumExecutableRoi().compareTo(BigDecimal.ZERO) < 0) {
+            throw new ConfigException("paper.readiness_gate.minimum_executable_roi must be zero or greater.");
+        }
+        if (gate.minimumMedianClv().compareTo(BigDecimal.ZERO) < 0) {
+            throw new ConfigException("paper.readiness_gate.minimum_median_clv must be zero or greater.");
+        }
+        if (gate.minimumRollingRoi().compareTo(BigDecimal.ZERO) < 0) {
+            throw new ConfigException("paper.readiness_gate.minimum_rolling_roi must be zero or greater.");
+        }
+        if (!paperEvidenceStatuses().contains(gate.requiredEvidenceStatus())) {
+            throw new ConfigException("paper.readiness_gate.required_evidence_status must be one of: "
+                + String.join(", ", paperEvidenceStatuses()) + ".");
+        }
+    }
+
+    private List<String> paperEvidenceStatuses() {
+        return List.of(
+            "INSUFFICIENT_DATA",
+            "INSUFFICIENT_SAMPLE",
+            "NEGATIVE_EXECUTABLE_ROI",
+            "FRAGILE_EDGE",
+            "HISTORICAL_CANDIDATE",
+            "WEAK_EVIDENCE",
+            "EXECUTION_FAILURE",
+            "CANDIDATE_EDGE"
+        );
     }
 
     private void validateBetfairAutoBetting(BetfairAutoBettingConfig autoBetting) {

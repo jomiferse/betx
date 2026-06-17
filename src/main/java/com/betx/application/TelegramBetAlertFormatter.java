@@ -30,9 +30,18 @@ public class TelegramBetAlertFormatter {
         Optional<MarketSnapshot> previousSnapshot,
         Optional<MatchIntelligenceAssessment> intelligenceAssessment
     ) {
+        return formatLiveConfirmation(analysis, previousSnapshot, intelligenceAssessment, Optional.empty());
+    }
+
+    String formatLiveConfirmation(
+        RunnerAnalysis analysis,
+        Optional<MarketSnapshot> previousSnapshot,
+        Optional<MatchIntelligenceAssessment> intelligenceAssessment,
+        Optional<PaperReadinessResult> readinessResult
+    ) {
         return TelegramBetAlertCandidate.tryFrom(analysis, previousSnapshot)
-            .map(candidate -> formatLiveConfirmation(candidate, intelligenceAssessment))
-            .orElseGet(() -> legacyLiveConfirmationFormat(analysis, previousSnapshot, intelligenceAssessment));
+            .map(candidate -> formatLiveConfirmation(candidate, intelligenceAssessment, readinessResult))
+            .orElseGet(() -> legacyLiveConfirmationFormat(analysis, previousSnapshot, intelligenceAssessment, readinessResult));
     }
 
     String format(TelegramBetAlertCandidate candidate) {
@@ -63,6 +72,14 @@ public class TelegramBetAlertFormatter {
         TelegramBetAlertCandidate candidate,
         Optional<MatchIntelligenceAssessment> intelligenceAssessment
     ) {
+        return formatLiveConfirmation(candidate, intelligenceAssessment, Optional.empty());
+    }
+
+    private String formatLiveConfirmation(
+        TelegramBetAlertCandidate candidate,
+        Optional<MatchIntelligenceAssessment> intelligenceAssessment,
+        Optional<PaperReadinessResult> readinessResult
+    ) {
         if (requiresReview(intelligenceAssessment)) {
             return formatReviewRequired(candidate, intelligenceAssessment.get());
         }
@@ -82,6 +99,7 @@ public class TelegramBetAlertFormatter {
             + "Why this signal:\n"
             + scoreReasonLines(analysis) + "\n\n"
             + intelligenceSection(intelligenceAssessment)
+            + paperReadinessSection(readinessResult)
             + "Safety:\n"
             + "No bet is placed until you confirm and choose stake.\n"
             + "Betfair auto-betting is enabled. Confirmation required.\n\n"
@@ -115,6 +133,15 @@ public class TelegramBetAlertFormatter {
         Optional<MarketSnapshot> previousSnapshot,
         Optional<MatchIntelligenceAssessment> intelligenceAssessment
     ) {
+        return legacyLiveConfirmationFormat(analysis, previousSnapshot, intelligenceAssessment, Optional.empty());
+    }
+
+    private String legacyLiveConfirmationFormat(
+        RunnerAnalysis analysis,
+        Optional<MarketSnapshot> previousSnapshot,
+        Optional<MatchIntelligenceAssessment> intelligenceAssessment,
+        Optional<PaperReadinessResult> readinessResult
+    ) {
         if (requiresReview(intelligenceAssessment)) {
             return legacyReviewRequiredFormat(analysis, previousSnapshot, intelligenceAssessment.get());
         }
@@ -132,10 +159,27 @@ public class TelegramBetAlertFormatter {
             + "Why this signal:\n"
             + scoreReasonLines(analysis) + "\n\n"
             + intelligenceSection(intelligenceAssessment)
+            + paperReadinessSection(readinessResult)
             + "Safety:\n"
             + "No bet is placed until you confirm and choose stake.\n"
             + "Betfair auto-betting is enabled. Confirmation required.\n\n"
             + "Confirm bet?";
+    }
+
+    private String paperReadinessSection(Optional<PaperReadinessResult> readinessResult) {
+        if (readinessResult.isEmpty() || readinessResult.get().status() == PaperReadinessStatus.DISABLED) {
+            return "";
+        }
+        PaperReadinessResult result = readinessResult.get();
+        String reasons = result.reasons().stream()
+            .limit(2)
+            .map(reason -> "- " + escape(reason))
+            .reduce((left, right) -> left + "\n" + right)
+            .map(value -> value + "\n")
+            .orElse("");
+        return "Paper readiness: " + result.status() + "\n"
+            + reasons
+            + "Manual confirmation is still available.\n\n";
     }
 
     private String formatReviewRequired(TelegramBetAlertCandidate candidate, MatchIntelligenceAssessment assessment) {
