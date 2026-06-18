@@ -8,8 +8,11 @@ import com.betx.application.port.out.MarketSnapshotRepository;
 import com.betx.application.port.out.SignalHistoryRepository;
 import com.betx.application.port.out.TelegramBotGateway;
 import com.betx.application.port.out.BetIntentRepository;
+import com.betx.application.port.out.StructuredEventSink;
 import com.betx.application.port.out.TelegramParseMode;
 import com.betx.application.port.out.TelegramStateRepository;
+import com.betx.application.observability.BetxEventCategory;
+import com.betx.application.observability.BetxEventLogger;
 import com.betx.domain.betfair.BetfairAutoBettingConfig;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
@@ -76,6 +79,7 @@ public class TelegramBetConfirmationService {
     private final BetExecutionGateway executionGateway;
     private final TelegramBetAlertFormatter telegramBetAlertFormatter;
     private final Clock clock;
+    private final BetxEventLogger eventLogger;
     private final ThreadLocal<Consumer<String>> output = ThreadLocal.withInitial(() -> ignored -> {
     });
 
@@ -90,7 +94,8 @@ public class TelegramBetConfirmationService {
         @Qualifier("betfairExchangeExposureGateway") ExchangeExposureGateway exposureGateway,
         MarketSnapshotRepository snapshotRepository,
         SignalHistoryRepository signalHistoryRepository,
-        @Qualifier("betfairBetExecutionGateway") BetExecutionGateway executionGateway
+        @Qualifier("betfairBetExecutionGateway") BetExecutionGateway executionGateway,
+        BetxEventLogger eventLogger
     ) {
         this(
             configRepository,
@@ -103,7 +108,8 @@ public class TelegramBetConfirmationService {
             snapshotRepository,
             signalHistoryRepository,
             executionGateway,
-            Clock.systemUTC()
+            Clock.systemUTC(),
+            eventLogger
         );
     }
 
@@ -126,7 +132,8 @@ public class TelegramBetConfirmationService {
             new NoopMarketSnapshotRepository(),
             new NoopSignalHistoryRepository(),
             executionGateway,
-            Clock.systemUTC()
+            Clock.systemUTC(),
+            new BetxEventLogger(StructuredEventSink.noop())
         );
     }
 
@@ -153,7 +160,8 @@ public class TelegramBetConfirmationService {
             snapshotRepository,
             new NoopSignalHistoryRepository(),
             executionGateway,
-            clock
+            clock,
+            new BetxEventLogger(StructuredEventSink.noop(), clock)
         );
     }
 
@@ -197,6 +205,36 @@ public class TelegramBetConfirmationService {
         BetExecutionGateway executionGateway,
         Clock clock
     ) {
+        this(
+            configRepository,
+            telegramConnectionService,
+            telegramGateway,
+            intentRepository,
+            telegramStateRepository,
+            accountGateway,
+            exposureGateway,
+            snapshotRepository,
+            signalHistoryRepository,
+            executionGateway,
+            clock,
+            new BetxEventLogger(StructuredEventSink.noop(), clock)
+        );
+    }
+
+    TelegramBetConfirmationService(
+        BetxConfigRepository configRepository,
+        TelegramConnectionService telegramConnectionService,
+        TelegramBotGateway telegramGateway,
+        BetIntentRepository intentRepository,
+        TelegramStateRepository telegramStateRepository,
+        ExchangeAccountGateway accountGateway,
+        ExchangeExposureGateway exposureGateway,
+        MarketSnapshotRepository snapshotRepository,
+        SignalHistoryRepository signalHistoryRepository,
+        BetExecutionGateway executionGateway,
+        Clock clock,
+        BetxEventLogger eventLogger
+    ) {
         this.configRepository = configRepository;
         this.telegramConnectionService = telegramConnectionService;
         this.telegramGateway = telegramGateway;
@@ -209,6 +247,7 @@ public class TelegramBetConfirmationService {
         this.executionGateway = executionGateway;
         this.telegramBetAlertFormatter = new TelegramBetAlertFormatter();
         this.clock = clock;
+        this.eventLogger = eventLogger == null ? new BetxEventLogger(StructuredEventSink.noop(), clock) : eventLogger;
     }
 
     public void sync(ConfigPath configPath, DryRunSignalsResult result) {
@@ -228,6 +267,7 @@ public class TelegramBetConfirmationService {
 
     private void syncInternal(ConfigPath configPath, DryRunSignalsResult result) {
         BetxConfig config = configRepository.load(configPath);
+        eventLogger.configure(config.app());
         boolean confirmationRequired = confirmationRequired(config);
         expireStalePendingIntents(config);
         Map<String, ExchangeExposure> exposureByExchange = reconcileSettledIntents(config);
@@ -267,6 +307,9 @@ public class TelegramBetConfirmationService {
                 );
                 intentRepository.update(config.storage().path(), expired);
                 safeUpdateSignalHistory(config, expired);
+                logIntentEvent("bet_intent.expired", BetxEventCategory.AUDIT, "expired", expired)
+                    .field("reason", "confirmation_timeout")
+                    .emit();
                 emit("BET INTENT EXPIRED | id=" + expired.id()
                     + " | exchange=" + expired.exchange()
                     + " | marketId=" + expired.marketId()
@@ -317,6 +360,10 @@ public class TelegramBetConfirmationService {
                         + " | selectionId=" + settled.selectionId()
                         + " | settlement=" + settled.settlementResult()
                         + " | pnl=" + numeric(settled.realizedProfitLoss()));
+                    logIntentEvent("order.settled", BetxEventCategory.AUDIT, "settled", settled)
+                        .field("settlement", settled.settlementResult())
+                        .field("pnl", settled.realizedProfitLoss())
+                        .emit();
                     if (deletedSnapshots > 0) {
                         emit("MARKET SNAPSHOTS CLEANED | reason=settled"
                             + " | deleted=" + deletedSnapshots
@@ -381,6 +428,16 @@ public class TelegramBetConfirmationService {
             }
             BetfairAutoBettingConfig autoBetting = autoBettingConfig(config, signal.exchange());
 
+            eventLogger.info(BetxEventCategory.AUDIT, "telegram.confirmation.requested")
+                .correlationId(signalCorrelationId(signal))
+                .exchange(signal.exchange())
+                .marketId(signal.marketId())
+                .selectionId(signal.selectionId())
+                .strategy("value-football")
+                .executionMode("telegram_confirmation")
+                .result("requested")
+                .field("odds", signal.odds())
+                .emit();
             BetIntent intent = new BetIntent(
                 UUID.randomUUID().toString(),
                 BetIntentSource.TELEGRAM_CONFIRMATION,
@@ -416,6 +473,7 @@ public class TelegramBetConfirmationService {
             }
             intentRepository.save(config.storage().path(), intent);
             linkHistoryForSignal(config, historyByKey, signal, intent);
+            logIntentEvent("telegram.confirmation.sent", BetxEventCategory.AUDIT, "sent", intent).emit();
             auditCreated(intent);
         }
     }
@@ -490,6 +548,18 @@ public class TelegramBetConfirmationService {
             Optional<RiskBlock> riskBlock = exchangeState.riskBlock();
             BigDecimal stake = maxAllowedStake(config, exchangeState.availableBalance(), autoBetting.maxStake());
             if (riskBlock.isPresent()) {
+                eventLogger.warn(BetxEventCategory.AUDIT, "risk.blocked")
+                    .correlationId(signalCorrelationId(signal))
+                    .exchange(signal.exchange())
+                    .marketId(signal.marketId())
+                    .selectionId(signal.selectionId())
+                    .strategy("value-football")
+                    .executionMode("automatic")
+                    .result("blocked")
+                    .field("reason", riskBlock.get().reason())
+                    .field("availableBalance", exchangeState.availableBalance())
+                    .field("selectedStake", stake)
+                    .emit();
                 auditSkipped(riskBlock.get().reason(), signal.exchange(), signal.marketId(), signal.selectionId());
                 if ("max_open_positions".equals(riskBlock.get().reason())) {
                     exchangeState.close();
@@ -526,6 +596,21 @@ public class TelegramBetConfirmationService {
                 now
             );
             if (!reservation.allowed()) {
+                eventLogger.warn(BetxEventCategory.AUDIT, "risk.blocked")
+                    .correlationId(signalCorrelationId(signal))
+                    .exchange(signal.exchange())
+                    .marketId(signal.marketId())
+                    .selectionId(signal.selectionId())
+                    .strategy("value-football")
+                    .executionMode("automatic")
+                    .result("blocked")
+                    .field("reason", "execution_queue_block")
+                    .field("availableBalance", reservation.availableBalance())
+                    .field("effectiveAvailableBalance", reservation.effectiveAvailableBalance())
+                    .field("reservedBalance", reservation.reservedBalance())
+                    .field("selectedStake", reservation.stake())
+                    .field("message", reservation.blockMessage())
+                    .emit();
                 auditSkipped("execution_queue_block", signal.exchange(), signal.marketId(), signal.selectionId());
                 BetIntent intent = saveAutomaticBlockedIntent(
                     config,
@@ -544,6 +629,19 @@ public class TelegramBetConfirmationService {
                 }
                 continue;
             }
+            eventLogger.info(BetxEventCategory.AUDIT, "risk.approved")
+                .correlationId(signalCorrelationId(signal))
+                .exchange(signal.exchange())
+                .marketId(signal.marketId())
+                .selectionId(signal.selectionId())
+                .strategy("value-football")
+                .executionMode("automatic")
+                .result("approved")
+                .field("availableBalance", reservation.availableBalance())
+                .field("effectiveAvailableBalance", reservation.effectiveAvailableBalance())
+                .field("reservedBalance", reservation.reservedBalance())
+                .field("selectedStake", reservation.stake())
+                .emit();
             BetOrder order = new BetOrder(
                 signal.exchange(),
                 signal.marketId(),
@@ -554,9 +652,21 @@ public class TelegramBetConfirmationService {
             );
             BetExecutionResult execution;
             try {
+                eventLogger.info(BetxEventCategory.AUDIT, "order.submitted")
+                    .correlationId(signalCorrelationId(signal))
+                    .exchange(signal.exchange())
+                    .marketId(signal.marketId())
+                    .selectionId(signal.selectionId())
+                    .strategy("value-football")
+                    .executionMode("automatic")
+                    .result("submitted")
+                    .field("stake", stake)
+                    .field("odds", signal.odds())
+                    .emit();
                 execution = executionGateway.execute(configPath, order);
             } catch (RuntimeException exc) {
                 execution = BetExecutionResult.rejected("Order execution failed: " + safeMessage(exc));
+                dependencyError("betfair", "place_order", exc);
             }
             orderExecutionCoordinator.complete(reservation, execution.accepted());
             BetIntent intent = new BetIntent(
@@ -587,6 +697,10 @@ public class TelegramBetConfirmationService {
             safeUpdateSignalHistory(config, intent);
             if (execution.accepted()) {
                 exchangeState.recordAcceptedOrder();
+                logIntentEvent("order.accepted", BetxEventCategory.AUDIT, "accepted", intent)
+                    .field("stake", stake)
+                    .field("externalOrderId", execution.externalOrderId())
+                    .emit();
                 emit("AUTO BET ORDER ACCEPTED | id=" + intent.id()
                     + " | stake=" + stake
                     + " | exchange=" + intent.exchange()
@@ -602,6 +716,9 @@ public class TelegramBetConfirmationService {
                     exchangeState.close();
                 }
             } else {
+                logIntentEvent("order.rejected", BetxEventCategory.AUDIT, "rejected", intent)
+                    .field("message", execution.message())
+                    .emit();
                 emit("AUTO BET ORDER REJECTED | id=" + intent.id()
                     + " | message=" + execution.message()
                     + " | exchange=" + intent.exchange()
@@ -648,6 +765,12 @@ public class TelegramBetConfirmationService {
         for (TelegramUpdate update : updates) {
             maxUpdateId = Math.max(maxUpdateId, update.updateId());
             if (update.hasCallbackQuery()) {
+                eventLogger.info(BetxEventCategory.AUDIT, "telegram.callback.received")
+                    .correlationId("telegram-update-" + update.updateId())
+                    .executionMode("telegram_confirmation")
+                    .result("received")
+                    .field("updateId", update.updateId())
+                    .emit();
                 try {
                     handleCallback(configPath, config, update);
                 } catch (RuntimeException exc) {
@@ -703,6 +826,9 @@ public class TelegramBetConfirmationService {
         );
         intentRepository.update(config.storage().path(), updated);
         safeUpdateSignalHistory(config, updated);
+        logIntentEvent("bet_intent.stage_changed", BetxEventCategory.AUDIT, "awaiting_stake", updated)
+            .field("stage", updated.stage())
+            .emit();
         emit("TELEGRAM BET STAKE REQUESTED | id=" + updated.id()
             + " | exchange=" + updated.exchange()
             + " | marketId=" + updated.marketId()
@@ -729,6 +855,10 @@ public class TelegramBetConfirmationService {
         );
         intentRepository.update(config.storage().path(), updated);
         safeUpdateSignalHistory(config, updated);
+        logIntentEvent("telegram.confirmation.cancelled", BetxEventCategory.AUDIT, "cancelled", updated).emit();
+        logIntentEvent("bet_intent.stage_changed", BetxEventCategory.AUDIT, "cancelled", updated)
+            .field("stage", updated.stage())
+            .emit();
         emit("BET INTENT CANCELLED | id=" + updated.id()
             + " | exchange=" + updated.exchange()
             + " | marketId=" + updated.marketId()
@@ -785,6 +915,17 @@ public class TelegramBetConfirmationService {
 
         Optional<RiskBlock> riskBlock = exposureRiskBlock(config, intent.exchange());
         if (riskBlock.isPresent()) {
+            eventLogger.warn(BetxEventCategory.AUDIT, "risk.blocked")
+                .correlationId("intent-" + intent.id())
+                .exchange(intent.exchange())
+                .marketId(intent.marketId())
+                .selectionId(intent.selectionId())
+                .strategy("value-football")
+                .executionMode("telegram_confirmation")
+                .result("blocked")
+                .field("reason", riskBlock.get().reason())
+                .field("selectedStake", amount)
+                .emit();
             blockExecution(configPath, config, update, intent, amount, riskBlock.get().reason(), riskBlock.get().message());
             return;
         }
@@ -797,6 +938,17 @@ public class TelegramBetConfirmationService {
             intent.odds(),
             amount
         );
+        eventLogger.info(BetxEventCategory.AUDIT, "order.submitted")
+            .correlationId("intent-" + intent.id())
+            .exchange(intent.exchange())
+            .marketId(intent.marketId())
+            .selectionId(intent.selectionId())
+            .strategy("value-football")
+            .executionMode("telegram_confirmation")
+            .result("submitted")
+            .field("stake", amount)
+            .field("odds", intent.odds())
+            .emit();
         var result = executionGateway.execute(configPath, order);
         BetIntent updated = intent.withStageAt(
             result.accepted() ? BetIntentStage.EXECUTED : BetIntentStage.FAILED,
@@ -808,12 +960,19 @@ public class TelegramBetConfirmationService {
         intentRepository.update(config.storage().path(), updated);
         safeUpdateSignalHistory(config, updated);
         if (result.accepted()) {
+            logIntentEvent("order.accepted", BetxEventCategory.AUDIT, "accepted", updated)
+                .field("stake", amount)
+                .field("externalOrderId", result.externalOrderId())
+                .emit();
             emit("TELEGRAM BET ORDER ACCEPTED | id=" + updated.id()
                 + " | stake=" + amount
                 + " | exchange=" + updated.exchange()
                 + " | marketId=" + updated.marketId()
                 + " | selectionId=" + updated.selectionId());
         } else {
+            logIntentEvent("order.rejected", BetxEventCategory.AUDIT, "rejected", updated)
+                .field("message", result.message())
+                .emit();
             emit("TELEGRAM BET ORDER REJECTED | id=" + updated.id()
                 + " | message=" + result.message()
                 + " | exchange=" + updated.exchange()
@@ -848,6 +1007,10 @@ public class TelegramBetConfirmationService {
         );
         intentRepository.update(config.storage().path(), updated);
         safeUpdateSignalHistory(config, updated);
+        logIntentEvent("risk.blocked", BetxEventCategory.AUDIT, "blocked", updated)
+            .field("reason", reason)
+            .field("selectedStake", amount)
+            .emit();
         emit("TELEGRAM BET EXECUTION BLOCKED | reason=" + reason
             + " | id=" + updated.id()
             + " | exchange=" + updated.exchange()
@@ -1035,6 +1198,7 @@ public class TelegramBetConfirmationService {
 
     private void auditSignalHistoryFailure(String action, BetIntent intent, RuntimeException exc) {
         String message = safeMessage(exc);
+        dependencyError("sqlite", action, exc);
         emit("SIGNAL HISTORY WARNING | action=" + action
             + " | intentId=" + intent.id()
             + " | exchange=" + intent.exchange()
@@ -1221,6 +1385,9 @@ public class TelegramBetConfirmationService {
     }
 
     private void auditCreated(BetIntent intent) {
+        logIntentEvent("bet_intent.created", BetxEventCategory.AUDIT, "created", intent)
+            .field("stage", intent.stage())
+            .emit();
         emit("BET INTENT CREATED | id=" + intent.id()
             + " | exchange=" + intent.exchange()
             + " | marketId=" + intent.marketId()
@@ -1228,6 +1395,15 @@ public class TelegramBetConfirmationService {
     }
 
     private void auditSkipped(String reason, String exchange, String marketId, long selectionId) {
+        eventLogger.warn(BetxEventCategory.AUDIT, "bet_intent.skipped")
+            .correlationId("sig-" + exchange + "-" + marketId + "-" + selectionId)
+            .exchange(exchange)
+            .marketId(marketId)
+            .selectionId(selectionId)
+            .strategy("value-football")
+            .result("skipped")
+            .field("reason", reason)
+            .emit();
         emit("BET INTENT SKIPPED | reason=" + reason
             + " | exchange=" + exchange
             + " | marketId=" + marketId
@@ -1236,8 +1412,48 @@ public class TelegramBetConfirmationService {
 
     private void auditTelegramFailure(String action, RuntimeException exc) {
         String message = exc.getMessage();
+        dependencyError("telegram", action, exc);
         emit("TELEGRAM BET SYNC WARNING | action=" + action
             + " | message=" + (message == null || message.isBlank() ? exc.getClass().getSimpleName() : message));
+    }
+
+    private BetxEventLogger.EventBuilder logIntentEvent(
+        String event,
+        BetxEventCategory category,
+        String result,
+        BetIntent intent
+    ) {
+        return eventLogger.info(category, event)
+            .correlationId("intent-" + intent.id())
+            .exchange(intent.exchange())
+            .marketId(intent.marketId())
+            .selectionId(intent.selectionId())
+            .strategy("value-football")
+            .executionMode(intent.source() == BetIntentSource.AUTOMATIC ? "automatic" : "telegram_confirmation")
+            .result(result)
+            .field("betIntentId", intent.id())
+            .field("source", intent.source())
+            .field("stage", intent.stage())
+            .field("odds", intent.odds())
+            .field("selectedStake", intent.selectedStake())
+            .field("availableBalance", intent.availableBalance())
+            .field("effectiveAvailableBalance", intent.effectiveAvailableBalance())
+            .field("reservedBalance", intent.reservedBalance())
+            .field("externalOrderId", intent.externalOrderId());
+    }
+
+    private String signalCorrelationId(BetSignal signal) {
+        return "sig-" + signal.exchange() + "-" + signal.marketId() + "-" + signal.selectionId();
+    }
+
+    private void dependencyError(String dependency, String action, RuntimeException exc) {
+        eventLogger.error(BetxEventCategory.ERROR, "dependency.error")
+            .result("failed")
+            .field("dependency", dependency)
+            .field("action", action)
+            .field("errorType", exc.getClass().getSimpleName())
+            .field("message", safeMessage(exc))
+            .emit();
     }
 
     private record RiskBlock(String reason, String message) {

@@ -7,6 +7,7 @@ import java.util.List;
 
 public class BetxConfigValidator {
     public void validate(BetxConfig config) {
+        validateStructuredLogs(config.app().structuredLogs());
         requirePositive(config.risk().maxStake(), "risk.max_stake");
         requirePositive(config.risk().maxDailyLoss(), "risk.max_daily_loss");
         if (config.risk().maxOpenPositions() <= 0) {
@@ -47,6 +48,12 @@ public class BetxConfigValidator {
             .map(exchange -> exchange.betfair().autoBetting())
             .filter(BetfairAutoBettingConfig::enabled)
             .forEach(this::validateBetfairAutoBetting);
+    }
+
+    private void validateStructuredLogs(StructuredLogsConfig structuredLogs) {
+        if (structuredLogs.retentionDays() <= 0) {
+            throw new ConfigException("app.structured_logs.retention_days must be greater than zero.");
+        }
     }
 
     private void validateIntelligence(IntelligenceConfig intelligence) {

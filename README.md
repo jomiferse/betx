@@ -264,6 +264,44 @@ When `app.log_level: info`, BetX mirrors terminal and alert output into daily lo
 
 These files are runtime artifacts and are ignored by Git. They are useful for auditing exactly what BetX printed or sent without mixing paper-trade diagnostics with normal CLI output.
 
+BetX also writes structured JSONL event logs for automated analysis when `app.log_level: info` and `app.structured_logs.enabled: true`:
+
+```yaml
+app:
+  log_level: info
+  structured_logs:
+    enabled: true
+    directory: ./logs/events
+    retention_days: 30
+```
+
+Structured logs are split by purpose:
+
+- `logs/events/operational_YYYY-MM-DD.jsonl`: app lifecycle, config loading, market scans, and cycle summaries.
+- `logs/events/analytics_YYYY-MM-DD.jsonl`: signal decisions, rejection reasons, intelligence assessments, paper-trade metrics, and cycle metrics.
+- `logs/events/audit_YYYY-MM-DD.jsonl`: Telegram confirmations, bet-intent lifecycle, risk decisions, real orders, and settlements.
+- `logs/events/errors_YYYY-MM-DD.jsonl`: Betfair, Telegram, OpenRouter, SQLite, config, and other dependency failures.
+
+Each line is one JSON object with `schemaVersion: 1`, UTC `timestamp`, `level`, `category`, `event`, optional correlation fields (`correlationId`, `cycleId`, `marketId`, `selectionId`), execution context, result, and event-specific `fields`.
+
+Example:
+
+```json
+{"schemaVersion":1,"timestamp":"2026-06-18T18:20:31Z","level":"INFO","category":"OPERATIONAL","event":"cycle.completed","correlationId":"cycle-20260618T182031Z","cycleId":"cycle-20260618T182031Z","executionMode":"automatic","result":"completed","fields":{"durationMs":1842,"marketsRead":18,"runnersAnalyzed":54,"signals":3,"failures":0}}
+```
+
+Level policy:
+
+- `TRACE`: reserved for future opt-in high-volume diagnostics.
+- `DEBUG`: future developer diagnostics after sanitization.
+- `INFO`: normal lifecycle, analytics, and successful audit events.
+- `WARN`: expected degraded states such as blocked bets, unavailable dependencies, skipped confirmations, or rejected orders.
+- `ERROR`: failed cycles, persistence failures, dependency failures, config validation failures, and unexpected errors.
+
+Structured logs complement SQLite tables such as `signal_history`, `bet_intents`, and paper-trading records; they are not intended to duplicate complete persisted rows. Their main purpose is correlation and later analysis across cycles, signals, risk decisions, Telegram actions, orders, and settlements.
+
+Sensitive keys containing tokens, passwords, API keys, sessions, chat IDs, secrets, or credentials are redacted before JSONL is written.
+
 ## OpenRouter Match Intelligence
 
 BetX can use OpenRouter with a Grok model and web search to review current news and real-time match context after a technical `BET` signal is found:

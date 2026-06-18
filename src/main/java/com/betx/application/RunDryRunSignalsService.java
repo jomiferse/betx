@@ -6,7 +6,10 @@ import com.betx.application.port.out.ExchangeMarketDataGateway;
 import com.betx.application.port.out.ExternalMatchIntelligenceGateway;
 import com.betx.application.port.out.MarketSnapshotRepository;
 import com.betx.application.port.out.SignalHistoryRepository;
+import com.betx.application.port.out.StructuredEventSink;
 import com.betx.application.port.out.TelegramParseMode;
+import com.betx.application.observability.BetxEventCategory;
+import com.betx.application.observability.BetxEventLogger;
 import com.betx.domain.betfair.BetfairAutoBettingConfig;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
@@ -50,6 +53,7 @@ public class RunDryRunSignalsService {
     private final MarketSnapshotChangeDetector changeDetector;
     private final ExternalMatchIntelligenceGateway intelligenceGateway;
     private final SignalHistoryRepository signalHistoryRepository;
+    private final BetxEventLogger eventLogger;
     private final Clock clock;
     private final EventMarketAnalyzer analyzer;
     private final TelegramBetAlertFormatter telegramBetAlertFormatter;
@@ -66,7 +70,8 @@ public class RunDryRunSignalsService {
         MarketSnapshotRepository snapshotRepository,
         MarketSnapshotChangeDetector changeDetector,
         ExternalMatchIntelligenceGateway intelligenceGateway,
-        SignalHistoryRepository signalHistoryRepository
+        SignalHistoryRepository signalHistoryRepository,
+        BetxEventLogger eventLogger
     ) {
         this(
             configRepository,
@@ -77,7 +82,8 @@ public class RunDryRunSignalsService {
             changeDetector,
             intelligenceGateway,
             signalHistoryRepository,
-            Clock.systemUTC()
+            Clock.systemUTC(),
+            eventLogger
         );
     }
 
@@ -88,7 +94,7 @@ public class RunDryRunSignalsService {
         BetExecutionGateway executionGateway,
         MarketSnapshotRepository snapshotRepository,
         MarketSnapshotChangeDetector changeDetector,
-        Clock clock
+            Clock clock
     ) {
         this(
             configRepository,
@@ -99,7 +105,8 @@ public class RunDryRunSignalsService {
             changeDetector,
             new NoopExternalMatchIntelligenceGateway(),
             new NoopSignalHistoryRepository(),
-            clock
+            clock,
+            new BetxEventLogger(StructuredEventSink.noop(), clock)
         );
     }
 
@@ -110,8 +117,8 @@ public class RunDryRunSignalsService {
         BetExecutionGateway executionGateway,
         MarketSnapshotRepository snapshotRepository,
         MarketSnapshotChangeDetector changeDetector,
-        ExternalMatchIntelligenceGateway intelligenceGateway,
-        Clock clock
+            ExternalMatchIntelligenceGateway intelligenceGateway,
+            Clock clock
     ) {
         this(
             configRepository,
@@ -122,7 +129,8 @@ public class RunDryRunSignalsService {
             changeDetector,
             intelligenceGateway,
             new NoopSignalHistoryRepository(),
-            clock
+            clock,
+            new BetxEventLogger(StructuredEventSink.noop(), clock)
         );
     }
 
@@ -137,6 +145,32 @@ public class RunDryRunSignalsService {
         SignalHistoryRepository signalHistoryRepository,
         Clock clock
     ) {
+        this(
+            configRepository,
+            marketDataGateways,
+            telegramService,
+            executionGateway,
+            snapshotRepository,
+            changeDetector,
+            intelligenceGateway,
+            signalHistoryRepository,
+            clock,
+            new BetxEventLogger(StructuredEventSink.noop(), clock)
+        );
+    }
+
+    RunDryRunSignalsService(
+        BetxConfigRepository configRepository,
+        List<ExchangeMarketDataGateway> marketDataGateways,
+        TelegramConnectionService telegramService,
+        BetExecutionGateway executionGateway,
+        MarketSnapshotRepository snapshotRepository,
+        MarketSnapshotChangeDetector changeDetector,
+        ExternalMatchIntelligenceGateway intelligenceGateway,
+        SignalHistoryRepository signalHistoryRepository,
+        Clock clock,
+        BetxEventLogger eventLogger
+    ) {
         this.configRepository = configRepository;
         this.marketDataGateways = marketDataGateways.stream()
             .collect(Collectors.toMap(ExchangeMarketDataGateway::exchangeName, Function.identity(), (left, right) -> left));
@@ -147,6 +181,7 @@ public class RunDryRunSignalsService {
         this.intelligenceGateway = intelligenceGateway == null ? new NoopExternalMatchIntelligenceGateway() : intelligenceGateway;
         this.signalHistoryRepository = signalHistoryRepository == null ? new NoopSignalHistoryRepository() : signalHistoryRepository;
         this.clock = clock;
+        this.eventLogger = eventLogger == null ? new BetxEventLogger(StructuredEventSink.noop(), clock) : eventLogger;
         this.analyzer = new EventMarketAnalyzer();
         this.telegramBetAlertFormatter = new TelegramBetAlertFormatter();
         this.telegramBetAlertPolicy = new TelegramBetAlertPolicy();
@@ -167,7 +202,8 @@ public class RunDryRunSignalsService {
             new MarketSnapshotChangeDetector(),
             new NoopExternalMatchIntelligenceGateway(),
             new NoopSignalHistoryRepository(),
-            Clock.systemUTC()
+            Clock.systemUTC(),
+            new BetxEventLogger(StructuredEventSink.noop())
         );
     }
 
@@ -187,7 +223,8 @@ public class RunDryRunSignalsService {
             new MarketSnapshotChangeDetector(),
             intelligenceGateway,
             new NoopSignalHistoryRepository(),
-            Clock.systemUTC()
+            Clock.systemUTC(),
+            new BetxEventLogger(StructuredEventSink.noop())
         );
     }
 
@@ -221,7 +258,24 @@ public class RunDryRunSignalsService {
     }
 
     private DryRunSignalsResult runInternal(ConfigPath configPath, boolean sendTelegramAlerts, boolean logSuppressedTelegramAlerts) {
+        Instant cycleStarted = Instant.now(clock);
+        String cycleId = cycleId(cycleStarted);
+        long startedNanos = System.nanoTime();
+        eventLogger.info(BetxEventCategory.OPERATIONAL, "cycle.started")
+            .correlationId(cycleId)
+            .cycleId(cycleId)
+            .executionMode(executionMode(sendTelegramAlerts, logSuppressedTelegramAlerts))
+            .result("started")
+            .emit();
         BetxConfig config = configRepository.load(configPath);
+        eventLogger.configure(config.app());
+        eventLogger.info(BetxEventCategory.OPERATIONAL, "config.loaded")
+            .correlationId(cycleId)
+            .cycleId(cycleId)
+            .result("loaded")
+            .field("configPath", configPath == null ? "betx.yml" : configPath.value().toString())
+            .field("structuredLogsEnabled", config.app().structuredLogs().enabled())
+            .emit();
         cleanupExpiredMarketSnapshots(config);
 
         Optional<StrategyConfig> strategyConfig = valueFootballStrategy(config);
@@ -252,8 +306,15 @@ public class RunDryRunSignalsService {
             ExchangeMarketDataGateway gateway = marketDataGateways.get(exchange.name());
             if (gateway == null) {
                 failures.add("Exchange " + exchange.name() + " failed: no market data gateway configured");
+                dependencyError(cycleId, exchange.name(), "market_data_gateway", "IllegalStateException", "No market data gateway configured.");
                 continue;
             }
+            eventLogger.info(BetxEventCategory.OPERATIONAL, "market.scan.started")
+                .correlationId(cycleId)
+                .cycleId(cycleId)
+                .exchange(exchange.name())
+                .result("started")
+                .emit();
             try {
                 ExchangeMarketDataResult marketDataResult = gateway.listMarketData(exchange);
                 eventsRead += marketDataResult.eventsRead();
@@ -291,8 +352,19 @@ public class RunDryRunSignalsService {
                         config.risk()
                     );
                     runnerAnalyses.add(analysis);
+                    logSignalDecision(cycleId, observedAt, analysis);
                     Optional<MatchIntelligenceAssessment> assessment = Optional.empty();
                     if (analysis.recommendation() == RecommendationType.BET) {
+                        eventLogger.info(BetxEventCategory.ANALYTICS, "intelligence.requested")
+                            .correlationId(signalCorrelationId(observedAt, analysis.exchange(), analysis.marketId(), analysis.selectionId()))
+                            .cycleId(cycleId)
+                            .exchange(analysis.exchange())
+                            .marketId(analysis.marketId())
+                            .selectionId(analysis.selectionId())
+                            .strategy(ValueFootballSignalStrategy.STRATEGY_NAME)
+                            .executionMode(executionMode(sendTelegramAlerts, logSuppressedTelegramAlerts))
+                            .result(config.intelligence().enabled() ? "requested" : "disabled")
+                            .emit();
                         assessment = assessIntelligence(config, analysis);
                         assessment.ifPresent(intelligenceAssessments::add);
                         assessment.ifPresent(this::auditIntelligenceAssessment);
@@ -300,6 +372,18 @@ public class RunDryRunSignalsService {
                     saveSignalHistory(config, observedAt, analysis, currentChange, assessment).ifPresent(signalHistoryEntries::add);
                     if (analysis.recommendation() == RecommendationType.BET) {
                         if (blocksSignalForAutoBetting(config, analysis.exchange(), assessment)) {
+                            eventLogger.warn(BetxEventCategory.ANALYTICS, "signal.blocked")
+                                .correlationId(signalCorrelationId(observedAt, analysis.exchange(), analysis.marketId(), analysis.selectionId()))
+                                .cycleId(cycleId)
+                                .exchange(analysis.exchange())
+                                .marketId(analysis.marketId())
+                                .selectionId(analysis.selectionId())
+                                .strategy(ValueFootballSignalStrategy.STRATEGY_NAME)
+                                .executionMode(executionMode(sendTelegramAlerts, logSuppressedTelegramAlerts))
+                                .result("blocked")
+                                .field("reason", "intelligence")
+                                .field("decision", assessment.map(value -> value.decision().name()).orElse("missing"))
+                                .emit();
                             auditIntelligenceBlocked(config, analysis, assessment.orElse(null));
                             snapshotRepository.save(config.storage().path(), new ObservedMarketSnapshot(observedAt, snapshot));
                             snapshotsSaved++;
@@ -313,8 +397,26 @@ public class RunDryRunSignalsService {
                     snapshotRepository.save(config.storage().path(), new ObservedMarketSnapshot(observedAt, snapshot));
                     snapshotsSaved++;
                 }
+                eventLogger.info(BetxEventCategory.OPERATIONAL, "market.scan.completed")
+                    .correlationId(cycleId)
+                    .cycleId(cycleId)
+                    .exchange(exchange.name())
+                    .result("completed")
+                    .field("eventsRead", marketDataResult.eventsRead())
+                    .field("ignoredEvents", marketDataResult.ignoredEvents())
+                    .field("snapshots", marketDataResult.snapshots().size())
+                    .emit();
             } catch (RuntimeException exc) {
                 failures.add("Exchange " + exchange.name() + " failed: " + exc.getMessage());
+                eventLogger.error(BetxEventCategory.OPERATIONAL, "market.scan.failed")
+                    .correlationId(cycleId)
+                    .cycleId(cycleId)
+                    .exchange(exchange.name())
+                    .result("failed")
+                    .field("errorType", exc.getClass().getSimpleName())
+                    .field("message", safeMessage(exc))
+                    .emit();
+                dependencyError(cycleId, exchange.name(), "list_market_data", exc.getClass().getSimpleName(), safeMessage(exc));
             }
         }
 
@@ -341,7 +443,7 @@ public class RunDryRunSignalsService {
             );
         }
         cleanupExpiredMarketSnapshots(config);
-        return new DryRunSignalsResult(
+        DryRunSignalsResult result = new DryRunSignalsResult(
             signals,
             failures,
             false,
@@ -356,6 +458,32 @@ public class RunDryRunSignalsService {
             eventsRead,
             ignoredEvents
         );
+        long durationMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
+        eventLogger.info(BetxEventCategory.OPERATIONAL, "cycle.completed")
+            .correlationId(cycleId)
+            .cycleId(cycleId)
+            .executionMode(executionMode(sendTelegramAlerts, logSuppressedTelegramAlerts))
+            .result(failures.isEmpty() ? "completed" : "completed_with_failures")
+            .field("durationMs", durationMs)
+            .field("eventsRead", eventsRead)
+            .field("ignoredEvents", ignoredEvents)
+            .field("marketsRead", marketsRead.size())
+            .field("ignoredMarkets", ignoredMarkets.size())
+            .field("runnersAnalyzed", runnerAnalyses.size())
+            .field("signals", signals.size())
+            .field("blocks", runnerAnalyses.size() - signals.size())
+            .field("failures", failures.size())
+            .emit();
+        eventLogger.info(BetxEventCategory.ANALYTICS, "cycle.metrics.recorded")
+            .correlationId(cycleId)
+            .cycleId(cycleId)
+            .executionMode(executionMode(sendTelegramAlerts, logSuppressedTelegramAlerts))
+            .result("recorded")
+            .field("snapshotsSaved", snapshotsSaved)
+            .field("comparisonsCalculated", comparisonsCalculated)
+            .field("signalHistory", signalHistoryEntries.size())
+            .emit();
+        return result;
     }
 
     private void safeSendTelegramAlert(ConfigPath configPath, String text) {
@@ -549,6 +677,16 @@ public class RunDryRunSignalsService {
     }
 
     private void auditIntelligenceAssessment(MatchIntelligenceAssessment assessment) {
+        eventLogger.info(BetxEventCategory.ANALYTICS, "intelligence.assessed")
+            .correlationId("sig-" + assessment.exchange() + "-" + assessment.marketId() + "-" + assessment.selectionId())
+            .exchange(assessment.exchange())
+            .marketId(assessment.marketId())
+            .selectionId(assessment.selectionId())
+            .strategy(ValueFootballSignalStrategy.STRATEGY_NAME)
+            .result(assessment.decision().name().toLowerCase(java.util.Locale.ROOT))
+            .field("confidence", assessment.confidence())
+            .field("summary", nullSafe(assessment.summary()))
+            .emit();
         emit("INTELLIGENCE ASSESSMENT | provider=openrouter"
             + " | decision=" + assessment.decision()
             + " | confidence=" + assessment.confidence()
@@ -578,6 +716,56 @@ public class RunDryRunSignalsService {
                 + " | marketId=" + alert.analysis().marketId()
                 + " | selectionId=" + alert.analysis().selectionId()
         );
+    }
+
+    private void logSignalDecision(String cycleId, Instant observedAt, RunnerAnalysis analysis) {
+        boolean accepted = analysis.recommendation() == RecommendationType.BET;
+        eventLogger.info(BetxEventCategory.ANALYTICS, accepted ? "signal.generated" : "signal.rejected")
+            .correlationId(signalCorrelationId(observedAt, analysis.exchange(), analysis.marketId(), analysis.selectionId()))
+            .cycleId(cycleId)
+            .exchange(analysis.exchange())
+            .marketId(analysis.marketId())
+            .selectionId(analysis.selectionId())
+            .strategy(ValueFootballSignalStrategy.STRATEGY_NAME)
+            .executionMode("scan")
+            .result(accepted ? "accepted" : "rejected")
+            .field("reason", analysis.reason())
+            .field("odds", analysis.bestBackPrice())
+            .field("liquidity", analysis.liquidity())
+            .field("runner", analysis.displayRunner())
+            .emit();
+    }
+
+    private void dependencyError(String cycleId, String dependency, String action, String errorType, String message) {
+        eventLogger.error(BetxEventCategory.ERROR, "dependency.error")
+            .correlationId(cycleId)
+            .cycleId(cycleId)
+            .result("failed")
+            .field("dependency", dependency)
+            .field("action", action)
+            .field("errorType", errorType)
+            .field("message", message)
+            .emit();
+    }
+
+    private String cycleId(Instant timestamp) {
+        return "cycle-" + timestamp.toString().replace("-", "").replace(":", "").replace(".", "").replace("Z", "Z");
+    }
+
+    private String signalCorrelationId(Instant observedAt, String exchange, String marketId, long selectionId) {
+        return "sig-" + exchange + "-" + marketId + "-" + selectionId + "-" + observedAt.toString();
+    }
+
+    private String executionMode(boolean sendTelegramAlerts, boolean logSuppressedTelegramAlerts) {
+        if (sendTelegramAlerts) {
+            return "telegram_alerts";
+        }
+        return logSuppressedTelegramAlerts ? "startup_warmup" : "automatic";
+    }
+
+    private String safeMessage(RuntimeException exc) {
+        String message = exc.getMessage();
+        return message == null || message.isBlank() ? exc.getClass().getSimpleName() : message;
     }
 
     private String nullSafe(String value) {

@@ -1,5 +1,7 @@
 package com.betx;
 
+import com.betx.application.observability.BetxEventCategory;
+import com.betx.application.observability.BetxEventLogger;
 import com.betx.cli.BetxRootCommand;
 import java.io.PrintStream;
 import java.time.Clock;
@@ -22,12 +24,19 @@ public class BetxApplication implements CommandLineRunner, ExitCodeGenerator {
     private final CommandLine.IFactory factory;
     private final BetxRootCommand rootCommand;
     private final Environment environment;
+    private final BetxEventLogger eventLogger;
     private int exitCode;
 
-    public BetxApplication(CommandLine.IFactory factory, BetxRootCommand rootCommand, Environment environment) {
+    public BetxApplication(
+        CommandLine.IFactory factory,
+        BetxRootCommand rootCommand,
+        Environment environment,
+        BetxEventLogger eventLogger
+    ) {
         this.factory = factory;
         this.rootCommand = rootCommand;
         this.environment = environment;
+        this.eventLogger = eventLogger;
     }
 
     public static void main(String[] args) {
@@ -65,16 +74,34 @@ public class BetxApplication implements CommandLineRunner, ExitCodeGenerator {
 
     @Override
     public void run(String... args) {
+        eventLogger.info(BetxEventCategory.OPERATIONAL, "app.started")
+            .correlationId("app-" + java.time.Instant.now())
+            .result("started")
+            .field("command", commandName(args))
+            .emit();
         if (environment.getProperty("betx.interface.enabled", Boolean.class, false)) {
             exitCode = 0;
+            eventLogger.info(BetxEventCategory.OPERATIONAL, "app.stopped")
+                .result("stopped")
+                .field("exitCode", exitCode)
+                .emit();
             return;
         }
         exitCode = new CommandLine(rootCommand, factory)
             .setExecutionExceptionHandler((exception, commandLine, parseResult) -> {
+                eventLogger.error(BetxEventCategory.ERROR, "config.validation.failed")
+                    .result("failed")
+                    .field("errorType", exception.getClass().getSimpleName())
+                    .field("message", exception.getMessage())
+                    .emit();
                 commandLine.getErr().println(exception.getMessage());
                 return 1;
             })
             .execute(args);
+        eventLogger.info(BetxEventCategory.OPERATIONAL, "app.stopped")
+            .result("stopped")
+            .field("exitCode", exitCode)
+            .emit();
     }
 
     @Override
@@ -90,5 +117,22 @@ public class BetxApplication implements CommandLineRunner, ExitCodeGenerator {
     @Bean
     RestClient.Builder restClientBuilder() {
         return RestClient.builder();
+    }
+
+    private String commandName(String[] args) {
+        if (args == null) {
+            return "unknown";
+        }
+        for (int index = 0; index < args.length; index++) {
+            String arg = args[index];
+            if ("--config".equals(arg) || "-c".equals(arg)) {
+                index++;
+                continue;
+            }
+            if (arg != null && !arg.startsWith("-")) {
+                return arg;
+            }
+        }
+        return "root";
     }
 }

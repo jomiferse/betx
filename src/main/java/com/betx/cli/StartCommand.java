@@ -33,6 +33,7 @@ public class StartCommand implements Runnable {
     private final MarketSnapshotChangeFormatter changeFormatter;
     private final EventAnalysisFormatter analysisFormatter;
     private final TelegramBetConfirmationService telegramBetConfirmationService;
+    private final CliOutput output;
     private final Sleeper sleeper;
     private final int callbackPollSeconds;
 
@@ -56,6 +57,7 @@ public class StartCommand implements Runnable {
         this.signalFormatter = new DryRunSignalFormatter();
         this.changeFormatter = new MarketSnapshotChangeFormatter();
         this.analysisFormatter = new EventAnalysisFormatter();
+        this.output = new CliOutput();
         this.sleeper = Thread::sleep;
         this.callbackPollSeconds = 5;
     }
@@ -75,6 +77,7 @@ public class StartCommand implements Runnable {
         this.signalFormatter = new DryRunSignalFormatter();
         this.changeFormatter = new MarketSnapshotChangeFormatter();
         this.analysisFormatter = new EventAnalysisFormatter();
+        this.output = new CliOutput();
         this.sleeper = sleeper;
         this.callbackPollSeconds = callbackPollSeconds;
     }
@@ -83,32 +86,32 @@ public class StartCommand implements Runnable {
     public void run() {
         ConfigPath config = new ConfigPath(configPath);
         var status = startBetxService.start(config);
-        System.out.println(renderer.render(status));
+        output.println(renderer.render(status));
         boolean requestConfirmation = status.autoBettingEnabled() && status.requestConfirmation();
         if (requestConfirmation) {
-            System.out.println("BetX is running with auto-betting confirmations.");
-            System.out.println("Telegram bet confirmations are enabled.");
+            output.println("BetX is running with auto-betting confirmations.");
+            output.println("Telegram bet confirmations are enabled.");
         } else if (status.autoBettingEnabled()) {
-            System.out.println("BetX auto-betting is enabled without Telegram confirmation.");
+            output.println("BetX auto-betting is enabled without Telegram confirmation.");
         } else {
-            System.out.println("BetX auto-betting is disabled.");
-            System.out.println("No real bets will be placed.");
+            output.println("BetX auto-betting is disabled.");
+            output.println("No real bets will be placed.");
         }
 
         boolean firstCycle = true;
         do {
             boolean sendTelegramAlerts = !requestConfirmation && (once || !firstCycle);
-            DryRunSignalsResult result = dryRunSignalsService.run(config, sendTelegramAlerts, !requestConfirmation, System.out::println);
+            DryRunSignalsResult result = dryRunSignalsService.run(config, sendTelegramAlerts, !requestConfirmation, output::println);
             boolean startupAutoBettingCycle = status.autoBettingEnabled() && !requestConfirmation && !once && firstCycle;
             if (status.autoBettingEnabled() && !startupAutoBettingCycle) {
                 safeSyncBetConfirmations(config, result);
             } else if (startupAutoBettingCycle && !result.signals().isEmpty()) {
-                System.out.println("AUTO BET STARTUP CYCLE SKIPPED | signals=" + result.signals().size());
+                output.println("AUTO BET STARTUP CYCLE SKIPPED | signals=" + result.signals().size());
             }
             printResult(result, status.autoBettingEnabled(), status.requestConfirmation());
             if (once) {
                 if (requestConfirmation && !result.signals().isEmpty()) {
-                    System.out.println("Waiting briefly for Telegram confirmation updates...");
+                    output.println("Waiting briefly for Telegram confirmation updates...");
                     waitForNextCycle(config, callbackPollSeconds * ONCE_CONFIRMATION_DRAIN_POLLS, true);
                 }
                 return;
@@ -125,11 +128,11 @@ public class StartCommand implements Runnable {
 
     private void printResult(DryRunSignalsResult result, boolean autoBettingEnabled, boolean requestConfirmation) {
         if (result.noEnabledExchanges()) {
-            System.out.println("No enabled exchanges configured.");
+            output.println("No enabled exchanges configured.");
             return;
         }
 
-        System.out.println("Cycle complete | snapshots=" + result.snapshotsSaved()
+        output.println("Cycle complete | snapshots=" + result.snapshotsSaved()
             + " | comparisons=" + result.comparisonsCalculated()
             + " | events=" + result.eventsRead()
             + " | ignoredEvents=" + result.ignoredEvents()
@@ -139,33 +142,33 @@ public class StartCommand implements Runnable {
             + " | signals=" + result.signals().size()
             + " | signalHistory=" + result.signalHistoryEntries().size()
             + " | failures=" + result.failures().size());
-        result.failures().forEach(System.out::println);
+        output.printlnAll(result.failures());
         printSnapshotChanges(result);
         if (result.runnerAnalyses().size() <= 30) {
-            analysisFormatter.format(result.runnerAnalyses(), autoBettingEnabled, requestConfirmation).forEach(System.out::println);
+            output.printlnAll(analysisFormatter.format(result.runnerAnalyses(), autoBettingEnabled, requestConfirmation));
             printIntelligence(result);
         } else {
             List<com.betx.domain.signal.RunnerAnalysis> signalAnalyses = result.runnerAnalyses().stream()
                 .filter(analysis -> analysis.recommendation() == com.betx.domain.signal.RecommendationType.BET)
                 .toList();
-            analysisFormatter.format(signalAnalyses, autoBettingEnabled, requestConfirmation).forEach(System.out::println);
+            output.printlnAll(analysisFormatter.format(signalAnalyses, autoBettingEnabled, requestConfirmation));
             printIntelligence(result, signalAnalyses.stream()
                 .map(this::analysisKey)
                 .collect(java.util.stream.Collectors.toSet()));
         }
         if (result.runnerAnalyses().isEmpty()) {
-            System.out.println("No event analyses found.");
+            output.println("No event analyses found.");
             return;
         }
 
-        result.signals().forEach(signal -> System.out.println(signalFormatter.format(signal)));
+        result.signals().forEach(signal -> output.println(signalFormatter.format(signal)));
     }
 
     private void safeSyncBetConfirmations(ConfigPath config, DryRunSignalsResult result) {
         try {
-            telegramBetConfirmationService.sync(config, result, System.out::println);
+            telegramBetConfirmationService.sync(config, result, output::println);
         } catch (RuntimeException exc) {
-            System.out.println("TELEGRAM BET SYNC WARNING | message=" + nullSafe(exc.getMessage()));
+            output.println("TELEGRAM BET SYNC WARNING | message=" + nullSafe(exc.getMessage()));
         }
     }
 
@@ -185,7 +188,7 @@ public class StartCommand implements Runnable {
             ));
         result.intelligenceAssessments().stream()
             .filter(assessment -> visibleKeys.contains(intelligenceKey(assessment)))
-            .forEach(assessment -> System.out.println(
+            .forEach(assessment -> output.println(
                 "INTELLIGENCE | runner=" + runnersByKey.getOrDefault(intelligenceKey(assessment), "unknown")
                     + " | decision=" + assessment.decision()
                     + " | confidence=" + assessment.confidence() + "/100"
@@ -206,10 +209,10 @@ public class StartCommand implements Runnable {
                 .filter(change -> signalKeys.contains(changeKey(change)))
                 .toList();
         }
-        changesToPrint.forEach(change -> System.out.println(changeFormatter.format(change)));
+        changesToPrint.forEach(change -> output.println(changeFormatter.format(change)));
         int hidden = relevantChanges.size() - changesToPrint.size();
         if (hidden > 0) {
-            System.out.println("Snapshot changes summarized | relevant=" + relevantChanges.size()
+            output.println("Snapshot changes summarized | relevant=" + relevantChanges.size()
                 + " | shown=" + changesToPrint.size()
                 + " | hidden=" + hidden);
         }

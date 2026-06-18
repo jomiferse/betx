@@ -8,6 +8,10 @@ public final class DefaultConfigTemplates {
         return """
             app:
               log_level: info
+              structured_logs:
+                enabled: true
+                directory: ./logs/events
+                retention_days: 30
 
             telegram:
               enabled: true

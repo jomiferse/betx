@@ -97,4 +97,14 @@ class BetxConfigTest {
         assertThat(config.execution().queue().revalidateOddsAfter()).isEqualTo(java.time.Duration.ofSeconds(3));
         assertThat(config.execution().queue().minEffectiveBalance()).isEqualByComparingTo("0.01");
     }
+
+    @Test
+    void providesDefaultStructuredLoggingConfiguration() {
+        BetxConfig config = BetxConfig.defaults();
+
+        assertThat(config.app().logLevel()).isEqualTo("info");
+        assertThat(config.app().structuredLogs().enabled()).isTrue();
+        assertThat(config.app().structuredLogs().directory()).isEqualTo("./logs/events");
+        assertThat(config.app().structuredLogs().retentionDays()).isEqualTo(30);
+    }
 }

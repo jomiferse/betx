@@ -30,6 +30,7 @@ import picocli.CommandLine.Option;
 @Command(name = "paper-trade", description = "Record read-only value-football-draw-only paper recommendations.")
 public class PaperTradeCommand implements Runnable {
     private final RunPaperTradingService paperTradingService;
+    private final CliOutput output;
 
     @Option(names = {"--config", "-c"}, defaultValue = "betx.yml", description = "Path to betx.yml.")
     Path configPath;
@@ -55,6 +56,7 @@ public class PaperTradeCommand implements Runnable {
     @Autowired
     public PaperTradeCommand(RunPaperTradingService paperTradingService) {
         this.paperTradingService = paperTradingService;
+        this.output = new CliOutput();
     }
 
     @Override
@@ -90,8 +92,8 @@ public class PaperTradeCommand implements Runnable {
         Duration selectedPollInterval = pollInterval == null || pollInterval.isBlank()
             ? configuredPaper.pollInterval()
             : PaperConfig.parseDuration(pollInterval, Duration.ofSeconds(60));
-        System.out.println("PAPER MODE | strategy=value-football-draw-only | realOrders=false | telegram=false | intelligence=false");
-        System.out.println("Paper trading continuous mode started | pollInterval=" + durationLabel(selectedPollInterval)
+        output.println("PAPER MODE | strategy=value-football-draw-only | realOrders=false | telegram=false | intelligence=false");
+        output.println("Paper trading continuous mode started | pollInterval=" + durationLabel(selectedPollInterval)
             + " | gracefulShutdown=Ctrl+C");
         paperTradingService.runContinuous(
             new ConfigPath(configPath),
@@ -110,9 +112,9 @@ public class PaperTradeCommand implements Runnable {
             new BacktestPaperTradeCsvExporter().write(outputPath, report);
         }
         if (printModeHeader) {
-            System.out.println("PAPER MODE | strategy=value-football-draw-only | realOrders=false | telegram=false | intelligence=false");
+            output.println("PAPER MODE | strategy=value-football-draw-only | realOrders=false | telegram=false | intelligence=false");
         }
-        System.out.println(prefix
+        output.println(prefix
             + " | marketsScanned=" + result.marketsScanned()
             + " | runnersAnalyzed=" + result.runnersAnalyzed()
             + " | recommendationsGenerated=" + result.recommendationsGenerated()
@@ -129,14 +131,14 @@ public class PaperTradeCommand implements Runnable {
         printHistoryDiagnostics(result.historyDiagnostics());
         printSignalEvaluationSummary(result.paperSignalEvaluations());
         printPaperMetrics(report);
-        result.failures().forEach(System.out::println);
+        output.printlnAll(result.failures());
     }
 
     private void printHistoryDiagnostics(PaperTradeHistoryDiagnostics diagnostics) {
         PaperTradeHistoryDiagnostics safeDiagnostics = diagnostics == null
             ? PaperTradeHistoryDiagnostics.empty()
             : diagnostics;
-        System.out.println("PAPER_HISTORY | previousSnapshotsLoaded=" + safeDiagnostics.previousSnapshotsLoaded()
+        output.println("PAPER_HISTORY | previousSnapshotsLoaded=" + safeDiagnostics.previousSnapshotsLoaded()
             + " | runnersWithoutPreviousSnapshot=" + safeDiagnostics.runnersWithoutPreviousSnapshot()
             + " | runnersWithPreviousSnapshot=" + safeDiagnostics.runnersWithPreviousSnapshot()
             + " | runnersWithSufficientHistory=" + safeDiagnostics.runnersWithSufficientHistory()
@@ -147,10 +149,10 @@ public class PaperTradeCommand implements Runnable {
             + " | stableMarketKeys=" + safeDiagnostics.stableMarketKeys()
             + " | stableSelectionKeys=" + safeDiagnostics.stableSelectionKeys());
         for (PaperTradeAnalyzerRejectionReason reason : PaperTradeAnalyzerRejectionReason.values()) {
-            System.out.println("PAPER_ANALYZER | reason=" + reason
+            output.println("PAPER_ANALYZER | reason=" + reason
                 + " | count=" + safeDiagnostics.analyzerRejectionCounts().getOrDefault(reason, 0));
         }
-        safeDiagnostics.runnerClassificationSample().forEach(diagnostic -> System.out.println(
+        safeDiagnostics.runnerClassificationSample().forEach(diagnostic -> output.println(
             "PAPER_DRAW_CLASSIFICATION"
                 + " | marketId=" + diagnostic.marketId()
                 + " | marketName=" + diagnostic.marketName()
@@ -160,7 +162,7 @@ public class PaperTradeCommand implements Runnable {
                 + " | inferredRunnerType=" + diagnostic.inferredRunnerType()
                 + " | isDraw=" + diagnostic.draw()
         ));
-        safeDiagnostics.warnings().forEach(System.out::println);
+        output.printlnAll(safeDiagnostics.warnings());
     }
 
     private void printSignalEvaluationSummary(List<PaperSignalEvaluation> evaluations) {
@@ -174,7 +176,7 @@ public class PaperTradeCommand implements Runnable {
         long strategic = safeEvaluations.stream()
             .filter(evaluation -> strategicReason(evaluation.analyzerReason()))
             .count();
-        System.out.println("PAPER_EVALUATIONS | total=" + safeEvaluations.size()
+        output.println("PAPER_EVALUATIONS | total=" + safeEvaluations.size()
             + " | accepted=" + accepted
             + " | rejected=" + (safeEvaluations.size() - accepted)
             + " | structuralRejections=" + structural
@@ -188,7 +190,7 @@ public class PaperTradeCommand implements Runnable {
         for (PaperTradeAnalyzerRejectionReason reason : PaperTradeAnalyzerRejectionReason.values()) {
             long count = byReason.getOrDefault(reason, 0L);
             if (count > 0) {
-                System.out.println("PAPER_EVALUATION_REASON | reason=" + reason + " | count=" + count);
+                output.println("PAPER_EVALUATION_REASON | reason=" + reason + " | count=" + count);
             }
         }
         printEvaluationSegments("league", safeEvaluations, evaluation -> label(evaluation.competitionName()));
@@ -210,7 +212,7 @@ public class PaperTradeCommand implements Runnable {
                 + " | name=" + entry.getKey()
                 + " | total=" + entry.getValue().size()
                 + " | accepted=" + acceptedEvaluations(entry.getValue()))
-            .forEach(System.out::println);
+            .forEach(output::println);
     }
 
     private long acceptedEvaluations(List<PaperSignalEvaluation> evaluations) {
@@ -300,8 +302,8 @@ public class PaperTradeCommand implements Runnable {
                 || line.startsWith("CLV_BREAKDOWN ")
                 || line.startsWith("PAPER_VALIDATION ")
                 || line.startsWith("ROLLING_PAPER "))
-            .forEach(System.out::println);
-        leagueRoiLines(report.paperTrades()).forEach(System.out::println);
+            .forEach(output::println);
+        leagueRoiLines(report.paperTrades()).forEach(output::println);
     }
 
     private List<String> leagueRoiLines(List<com.betx.application.BacktestPaperTrade> trades) {

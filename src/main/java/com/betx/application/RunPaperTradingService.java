@@ -6,6 +6,9 @@ import com.betx.application.port.out.MarketSnapshotRepository;
 import com.betx.application.port.out.PaperSignalEvaluationRepository;
 import com.betx.application.port.out.PaperTradeRepository;
 import com.betx.application.port.out.PaperTradeSettlementGateway;
+import com.betx.application.port.out.StructuredEventSink;
+import com.betx.application.observability.BetxEventCategory;
+import com.betx.application.observability.BetxEventLogger;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.ExchangeConfig;
@@ -51,6 +54,7 @@ public class RunPaperTradingService {
     private final Map<String, PaperTradeSettlementGateway> settlementGateways;
     private final Clock clock;
     private final EventMarketAnalyzer analyzer;
+    private final BetxEventLogger eventLogger;
 
     @Autowired
     public RunPaperTradingService(
@@ -59,7 +63,8 @@ public class RunPaperTradingService {
         MarketSnapshotRepository snapshotRepository,
         PaperTradeRepository paperTradeRepository,
         PaperSignalEvaluationRepository paperSignalEvaluationRepository,
-        List<PaperTradeSettlementGateway> settlementGateways
+        List<PaperTradeSettlementGateway> settlementGateways,
+        BetxEventLogger eventLogger
     ) {
         this(
             configRepository,
@@ -68,7 +73,8 @@ public class RunPaperTradingService {
             paperTradeRepository,
             paperSignalEvaluationRepository,
             settlementGateways,
-            Clock.systemUTC()
+            Clock.systemUTC(),
+            eventLogger
         );
     }
 
@@ -87,7 +93,8 @@ public class RunPaperTradingService {
             paperTradeRepository,
             new NoopPaperSignalEvaluationRepository(),
             settlementGateways,
-            clock
+            clock,
+            new BetxEventLogger(StructuredEventSink.noop(), clock)
         );
     }
 
@@ -99,6 +106,28 @@ public class RunPaperTradingService {
         PaperSignalEvaluationRepository paperSignalEvaluationRepository,
         List<PaperTradeSettlementGateway> settlementGateways,
         Clock clock
+    ) {
+        this(
+            configRepository,
+            marketDataGateways,
+            snapshotRepository,
+            paperTradeRepository,
+            paperSignalEvaluationRepository,
+            settlementGateways,
+            clock,
+            new BetxEventLogger(StructuredEventSink.noop(), clock)
+        );
+    }
+
+    RunPaperTradingService(
+        BetxConfigRepository configRepository,
+        List<ExchangeMarketDataGateway> marketDataGateways,
+        MarketSnapshotRepository snapshotRepository,
+        PaperTradeRepository paperTradeRepository,
+        PaperSignalEvaluationRepository paperSignalEvaluationRepository,
+        List<PaperTradeSettlementGateway> settlementGateways,
+        Clock clock,
+        BetxEventLogger eventLogger
     ) {
         this.configRepository = configRepository;
         this.marketDataGateways = marketDataGateways.stream()
@@ -112,6 +141,7 @@ public class RunPaperTradingService {
             .collect(Collectors.toMap(PaperTradeSettlementGateway::exchangeName, Function.identity(), (left, right) -> left));
         this.clock = clock;
         this.analyzer = new EventMarketAnalyzer();
+        this.eventLogger = eventLogger == null ? new BetxEventLogger(StructuredEventSink.noop(), clock) : eventLogger;
     }
 
     RunPaperTradingService(
@@ -247,7 +277,17 @@ public class RunPaperTradingService {
         BacktestSlippageModel slippageModel,
         BigDecimal commissionRate
     ) {
+        Instant cycleStarted = Instant.now(clock);
+        String cycleId = "paper-cycle-" + cycleStarted.toString();
+        long startedNanos = System.nanoTime();
+        eventLogger.info(BetxEventCategory.OPERATIONAL, "cycle.started")
+            .correlationId(cycleId)
+            .cycleId(cycleId)
+            .executionMode("paper")
+            .result("started")
+            .emit();
         BetxConfig config = configRepository.load(configPath);
+        eventLogger.configure(config.app());
         Optional<StrategyConfig> strategyConfig = config.strategies().stream()
             .filter(strategy -> ValueFootballSignalStrategy.STRATEGY_NAME.equals(strategy.name()) && strategy.enabled())
             .findFirst();
@@ -272,9 +312,17 @@ public class RunPaperTradingService {
             ExchangeMarketDataGateway gateway = marketDataGateways.get(exchange.name());
             if (gateway == null) {
                 failures.add("Exchange " + exchange.name() + " failed: no market data gateway configured");
+                dependencyError(cycleId, exchange.name(), "market_data_gateway", new IllegalStateException("No market data gateway configured."));
                 continue;
             }
             try {
+                eventLogger.info(BetxEventCategory.OPERATIONAL, "market.scan.started")
+                    .correlationId(cycleId)
+                    .cycleId(cycleId)
+                    .exchange(exchange.name())
+                    .executionMode("paper")
+                    .result("started")
+                    .emit();
                 List<MarketSnapshot> snapshots = gateway.listMarketData(exchange).snapshots();
                 diagnostics.recordMarketInvariants(snapshots);
                 for (MarketSnapshot snapshot : snapshots) {
@@ -304,13 +352,24 @@ public class RunPaperTradingService {
                         if (updated.status() == PaperTradeStatus.SETTLED
                             && existingPaperTrade.get().status() != PaperTradeStatus.SETTLED) {
                             settledTrades++;
+                            logPaperTrade("paper_trade.settled", "settled", updated, cycleId)
+                                .field("result", updated.result())
+                                .field("netPnl", updated.netPnl())
+                                .emit();
                         }
                         if (updated.status() == PaperTradeStatus.EXECUTION_FAILED
                             && existingPaperTrade.get().status() == PaperTradeStatus.RECOMMENDED) {
                             executionFailures++;
+                            logPaperTrade("paper_trade.execution_failed", "failed", updated, cycleId).emit();
                         }
                         if (updated.status() == PaperTradeStatus.EXECUTED) {
                             missingClosingPrices++;
+                        }
+                        if (updated.status() == PaperTradeStatus.CLOSED
+                            && existingPaperTrade.get().status() != PaperTradeStatus.CLOSED) {
+                            logPaperTrade("paper_trade.closed", "closed", updated, cycleId)
+                                .field("closingOdds", updated.closingOdds())
+                                .emit();
                         }
                         if (updated.status() != PaperTradeStatus.SETTLED && updated.marketStartTime() != null
                             && !observedAt.isBefore(updated.marketStartTime())) {
@@ -338,15 +397,37 @@ public class RunPaperTradingService {
                         diagnostics.recordAnalyzerOutcome(analyzerOutcome);
                         PaperTrade paperTrade = PaperTrade.recommended(snapshot, observedAt, config.risk().maxStake());
                         PaperTrade executed = executePaperTrade(observedAt, paperTrade, snapshot, oddsSlippageRate, slippageModel);
+                        logPaperTrade("paper_trade.recommended", "recommended", paperTrade, cycleId)
+                            .field("requestedOdds", paperTrade.requestedOdds())
+                            .emit();
                         if (executed.status() == PaperTradeStatus.EXECUTION_FAILED) {
                             executionFailures++;
+                            logPaperTrade("paper_trade.execution_failed", "failed", executed, cycleId)
+                                .field("reason", "insufficient_liquidity_or_invalid_odds")
+                                .emit();
                         } else {
                             recommendationsGenerated++;
+                            logPaperTrade("paper_trade.executed", "executed", executed, cycleId)
+                                .field("executionOdds", executed.executionOdds())
+                                .emit();
                         }
                         paperTradeRepository.upsert(config.storage().path(), executed);
                     } else {
                         analyzerOutcome = classifyAnalyzerOutcome(snapshot, recent, analysis);
                         diagnostics.recordAnalyzerOutcome(analyzerOutcome);
+                        eventLogger.info(BetxEventCategory.ANALYTICS, "signal.rejected")
+                            .correlationId(signalCorrelationId(observedAt, snapshot.exchange(), snapshot.marketId(), snapshot.selectionId()))
+                            .cycleId(cycleId)
+                            .exchange(snapshot.exchange())
+                            .marketId(snapshot.marketId())
+                            .selectionId(snapshot.selectionId())
+                            .strategy(ValueFootballSignalStrategy.STRATEGY_NAME)
+                            .executionMode("paper")
+                            .result("rejected")
+                            .field("reason", analyzerOutcome)
+                            .field("odds", snapshot.bestBackPrice())
+                            .field("liquidity", snapshot.liquidity())
+                            .emit();
                     }
                     PaperSignalEvaluation evaluation = toSignalEvaluation(observedAt, snapshot, recent, analysis, analyzerOutcome);
                     if (shouldPersistSignalEvaluation(evaluation)) {
@@ -356,16 +437,25 @@ public class RunPaperTradingService {
                     snapshotRepository.save(config.storage().path(), new ObservedMarketSnapshot(observedAt, snapshot));
                     snapshotsSaved++;
                 }
+                eventLogger.info(BetxEventCategory.OPERATIONAL, "market.scan.completed")
+                    .correlationId(cycleId)
+                    .cycleId(cycleId)
+                    .exchange(exchange.name())
+                    .executionMode("paper")
+                    .result("completed")
+                    .field("snapshots", snapshots.size())
+                    .emit();
             } catch (RuntimeException exc) {
                 failures.add("Exchange " + exchange.name() + " failed: " + exc.getMessage());
+                dependencyError(cycleId, exchange.name(), "paper_market_scan", exc);
             }
         }
-        settledTrades += settlePersistedTrades(config, observedAt, commissionRate);
+        settledTrades += settlePersistedTrades(config, observedAt, commissionRate, cycleId);
         List<BacktestPaperTrade> paperTrades = paperTradeRepository.listAll(config.storage().path()).stream()
             .sorted(Comparator.comparing(PaperTrade::recommendationTimestamp))
             .map(PaperTrade::toBacktestPaperTrade)
             .toList();
-        return new PaperTradingResult(
+        PaperTradingResult result = new PaperTradingResult(
             paperTrades,
             failures,
             runnersAnalyzed,
@@ -380,6 +470,30 @@ public class RunPaperTradingService {
             diagnostics.toDiagnostics(),
             signalEvaluations
         );
+        eventLogger.info(BetxEventCategory.OPERATIONAL, "cycle.completed")
+            .correlationId(cycleId)
+            .cycleId(cycleId)
+            .executionMode("paper")
+            .result(failures.isEmpty() ? "completed" : "completed_with_failures")
+            .field("durationMs", java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos))
+            .field("marketsScanned", result.marketsScanned())
+            .field("runnersAnalyzed", result.runnersAnalyzed())
+            .field("recommendationsGenerated", result.recommendationsGenerated())
+            .field("duplicatesSkipped", result.duplicatesSkipped())
+            .field("executionFailures", result.executionFailures())
+            .field("unsettledMarkets", result.unsettledMarkets())
+            .field("settledTrades", result.settledTrades())
+            .field("failures", result.failures().size())
+            .emit();
+        eventLogger.info(BetxEventCategory.ANALYTICS, "cycle.metrics.recorded")
+            .correlationId(cycleId)
+            .cycleId(cycleId)
+            .executionMode("paper")
+            .result("recorded")
+            .field("snapshotsSaved", result.snapshotsSaved())
+            .field("paperEvaluations", result.paperSignalEvaluations().size())
+            .emit();
+        return result;
     }
 
     private PaperSignalEvaluation toSignalEvaluation(
@@ -504,7 +618,7 @@ public class RunPaperTradingService {
             .setScale(8, RoundingMode.HALF_UP);
     }
 
-    private int settlePersistedTrades(BetxConfig config, Instant observedAt, BigDecimal commissionRate) {
+    private int settlePersistedTrades(BetxConfig config, Instant observedAt, BigDecimal commissionRate, String cycleId) {
         int settled = 0;
         for (PaperTrade trade : paperTradeRepository.listAll(config.storage().path())) {
             if ((trade.status() != PaperTradeStatus.CLOSED && trade.status() != PaperTradeStatus.EXECUTED) || !trade.matched()) {
@@ -518,7 +632,12 @@ public class RunPaperTradingService {
             if (outcome.isEmpty()) {
                 continue;
             }
-            paperTradeRepository.upsert(config.storage().path(), trade.withSettled(observedAt, outcome.get(), commissionRate));
+            PaperTrade settledTrade = trade.withSettled(observedAt, outcome.get(), commissionRate);
+            paperTradeRepository.upsert(config.storage().path(), settledTrade);
+            logPaperTrade("paper_trade.settled", "settled", settledTrade, cycleId)
+                .field("result", settledTrade.result())
+                .field("netPnl", settledTrade.netPnl())
+                .emit();
             settled++;
         }
         return settled;
@@ -583,6 +702,12 @@ public class RunPaperTradingService {
         try {
             return settlementGateway.outcome(config, trade);
         } catch (RuntimeException exc) {
+            dependencyError(
+                "paper-cycle-" + Instant.now(clock),
+                trade.exchange(),
+                "paper_settlement",
+                exc
+            );
             return Optional.empty();
         }
     }
@@ -593,6 +718,45 @@ public class RunPaperTradingService {
         }
         Instant windowStart = snapshot.marketStartTime().minus(Duration.ofMinutes(closingCaptureMinutesBeforeStart));
         return !observedAt.isBefore(windowStart) && !observedAt.isAfter(snapshot.marketStartTime());
+    }
+
+    private BetxEventLogger.EventBuilder logPaperTrade(String event, String result, PaperTrade trade, String cycleId) {
+        return eventLogger.info(BetxEventCategory.ANALYTICS, event)
+            .correlationId("paper-" + trade.id())
+            .cycleId(cycleId)
+            .exchange(trade.exchange())
+            .marketId(trade.marketId())
+            .selectionId(trade.selectionId())
+            .strategy(ValueFootballSignalStrategy.STRATEGY_NAME)
+            .executionMode("paper")
+            .result(result)
+            .field("paperTradeId", trade.id())
+            .field("status", trade.status())
+            .field("runner", trade.runnerName())
+            .field("stake", trade.stake())
+            .field("requestedOdds", trade.requestedOdds())
+            .field("matched", trade.matched());
+    }
+
+    private String signalCorrelationId(Instant observedAt, String exchange, String marketId, long selectionId) {
+        return "sig-" + exchange + "-" + marketId + "-" + selectionId + "-" + observedAt;
+    }
+
+    private void dependencyError(String cycleId, String dependency, String action, RuntimeException exc) {
+        eventLogger.error(BetxEventCategory.ERROR, "dependency.error")
+            .correlationId(cycleId)
+            .cycleId(cycleId)
+            .result("failed")
+            .field("dependency", dependency)
+            .field("action", action)
+            .field("errorType", exc.getClass().getSimpleName())
+            .field("message", safeMessage(exc))
+            .emit();
+    }
+
+    private String safeMessage(RuntimeException exc) {
+        String message = exc.getMessage();
+        return message == null || message.isBlank() ? exc.getClass().getSimpleName() : message;
     }
 
     private static final class NoopPaperTradeRepository implements PaperTradeRepository {

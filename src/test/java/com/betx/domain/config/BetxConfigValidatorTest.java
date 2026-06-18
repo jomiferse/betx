@@ -20,6 +20,30 @@ class BetxConfigValidatorTest {
     }
 
     @Test
+    void rejectsInvalidStructuredLogRetention() {
+        BetxConfig defaults = BetxConfig.defaults();
+        BetxConfig config = new BetxConfig(
+            new AppConfig("info", new StructuredLogsConfig(true, "./logs/events", 0)),
+            defaults.telegram(),
+            defaults.betfair(),
+            defaults.exchanges(),
+            defaults.marketData(),
+            defaults.storage(),
+            defaults.paper(),
+            defaults.risk(),
+            defaults.strategies(),
+            defaults.ml(),
+            defaults.intelligence(),
+            defaults.resilience(),
+            defaults.execution()
+        );
+
+        assertThatThrownBy(() -> validator.validate(config))
+            .isInstanceOf(ConfigException.class)
+            .hasMessage("app.structured_logs.retention_days must be greater than zero.");
+    }
+
+    @Test
     void acceptsConfigurationWithoutAppMode() {
         BetxConfig defaults = BetxConfig.defaults();
         BetxConfig config = new BetxConfig(
