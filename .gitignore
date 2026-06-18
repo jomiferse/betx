@@ -1,6 +1,10 @@
 # Maven / Java build output
 target/
 .mvn/
+frontend/dist/
+frontend/node_modules/
+frontend/.node/
+*.tsbuildinfo
 
 # Coverage and test output
 .coverage

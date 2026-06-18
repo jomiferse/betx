@@ -50,6 +50,7 @@ public class BetxInterfaceStatusService {
                 "BetX necesita atencion antes de continuar.",
                 null,
                 state.updatedAt(),
+                state.lastCycleAt(),
                 false
             );
         }
@@ -66,6 +67,7 @@ public class BetxInterfaceStatusService {
             state.message(),
             availableBalance,
             state.updatedAt(),
+            state.lastCycleAt(),
             manualConfirmationEnabled
         );
     }

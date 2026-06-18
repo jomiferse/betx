@@ -18,20 +18,22 @@ class BetxInterfaceStaticPageTest {
     @Test
     void pageUsesOnlyCommercialInterfaceLanguage() throws IOException {
         String html = resource("/static/interface/index.html");
-        String js = resource("/static/interface/app.js");
+        String frontendSource = frontendSource("frontend/src");
 
         assertThat(html)
             .contains("BetX")
-            .contains("Activar BetX")
-            .contains("Pausar BetX")
             .doesNotContain("paper")
             .doesNotContain("backtest")
             .doesNotContain("runner")
             .doesNotContain("snapshot")
             .doesNotContain("gateway");
-        assertThat(js)
-            .contains("/api/interface/status")
-            .contains("/api/interface/activity")
+        assertThat(frontendSource)
+            .contains("API_ROOT = \"/api/v1/interface\"")
+            .contains("readJson<InterfaceStatusView>(\"/status\")")
+            .contains("readJson<ActivityItem[]>(\"/activity\")")
+            .contains("Activar BetX")
+            .contains("Pausar BetX")
+            .doesNotContain("/api/interface/status")
             .doesNotContain("paper")
             .doesNotContain("backtest");
     }
@@ -41,5 +43,26 @@ class BetxInterfaceStaticPageTest {
             assertThat(stream).as(path).isNotNull();
             return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
         }
+    }
+
+    private String frontendSource(String directory) throws IOException {
+        StringBuilder content = new StringBuilder();
+        try (var paths = java.nio.file.Files.walk(java.nio.file.Path.of(directory))) {
+            paths.filter(java.nio.file.Files::isRegularFile)
+                .filter(path -> path.toString().endsWith(".ts") || path.toString().endsWith(".tsx"))
+                .filter(path -> !path.toString().endsWith(".test.ts"))
+                .filter(path -> !path.toString().endsWith(".test.tsx"))
+                .sorted()
+                .forEach(path -> {
+                    try {
+                        content.append(java.nio.file.Files.readString(path, StandardCharsets.UTF_8));
+                    } catch (IOException exc) {
+                        throw new java.io.UncheckedIOException(exc);
+                    }
+                });
+        } catch (java.io.UncheckedIOException exc) {
+            throw exc.getCause();
+        }
+        return content.toString();
     }
 }

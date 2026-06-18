@@ -12,16 +12,22 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
 public class BetxInterfaceRuntimeService {
+    private static final Logger LOG = LoggerFactory.getLogger(BetxInterfaceRuntimeService.class);
+
     private final StartBetxService startBetxService;
     private final BetxConfigRepository configRepository;
     private final RunDryRunSignalsService dryRunSignalsService;
     private final Clock clock;
     private final ScheduledExecutorService executor;
+    private final Consumer<String> runtimeLog;
     private final AtomicReference<RuntimeState> state;
     private ScheduledFuture<?> scheduledRun;
 
@@ -41,15 +47,35 @@ public class BetxInterfaceRuntimeService {
         Clock clock,
         ScheduledExecutorService executor
     ) {
+        this(
+            startBetxService,
+            configRepository,
+            dryRunSignalsService,
+            clock,
+            executor,
+            message -> LOG.info("{}", message)
+        );
+    }
+
+    BetxInterfaceRuntimeService(
+        StartBetxService startBetxService,
+        BetxConfigRepository configRepository,
+        RunDryRunSignalsService dryRunSignalsService,
+        Clock clock,
+        ScheduledExecutorService executor,
+        Consumer<String> runtimeLog
+    ) {
         this.startBetxService = startBetxService;
         this.configRepository = configRepository;
         this.dryRunSignalsService = dryRunSignalsService;
         this.clock = clock == null ? Clock.systemUTC() : clock;
         this.executor = executor == null ? daemonExecutor() : executor;
+        this.runtimeLog = runtimeLog == null ? message -> LOG.info("{}", message) : runtimeLog;
         this.state = new AtomicReference<>(new RuntimeState(
             InterfaceStatus.PAUSED,
             "BetX esta pausado.",
-            Instant.now(this.clock)
+            Instant.now(this.clock),
+            null
         ));
     }
 
@@ -88,13 +114,46 @@ public class BetxInterfaceRuntimeService {
     }
 
     private RuntimeState update(InterfaceStatus status, String message) {
-        RuntimeState updated = new RuntimeState(status, message, Instant.now(clock));
+        RuntimeState updated = new RuntimeState(status, message, Instant.now(clock), state.get().lastCycleAt());
+        state.set(updated);
+        return updated;
+    }
+
+    private RuntimeState updateLastCycle() {
+        RuntimeState current = state.get();
+        RuntimeState updated = new RuntimeState(
+            current.status(),
+            current.message(),
+            Instant.now(clock),
+            Instant.now(clock)
+        );
         state.set(updated);
         return updated;
     }
 
     private void runCycle(ConfigPath configPath, StartupStatus startup) {
-        dryRunSignalsService.run(configPath, !startup.requestConfirmation(), !startup.requestConfirmation());
+        DryRunSignalsResult result = dryRunSignalsService.run(
+            configPath,
+            !startup.requestConfirmation(),
+            !startup.requestConfirmation()
+        );
+        logCycleResult(result);
+        updateLastCycle();
+    }
+
+    private void logCycleResult(DryRunSignalsResult result) {
+        runtimeLog.accept(String.format(
+            "BetX interface cycle complete | snapshots=%d | comparisons=%d | events=%d | ignoredEvents=%d | markets=%d | ignoredMarkets=%d | signals=%d | signalHistory=%d | failures=%d",
+            result.snapshotsSaved(),
+            result.comparisonsCalculated(),
+            result.eventsRead(),
+            result.ignoredEvents(),
+            result.marketsRead(),
+            result.ignoredMarkets(),
+            result.signals().size(),
+            result.signalHistoryEntries().size(),
+            result.failures().size()
+        ));
     }
 
     private void scheduleNextCycles(ConfigPath configPath, StartupStatus startup) {
@@ -137,6 +196,6 @@ public class BetxInterfaceRuntimeService {
         });
     }
 
-    public record RuntimeState(InterfaceStatus status, String message, Instant updatedAt) {
+    public record RuntimeState(InterfaceStatus status, String message, Instant updatedAt, Instant lastCycleAt) {
     }
 }

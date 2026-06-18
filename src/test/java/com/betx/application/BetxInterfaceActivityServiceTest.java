@@ -9,6 +9,7 @@ import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.StorageConfig;
 import com.betx.domain.order.BetIntent;
 import com.betx.domain.order.BetIntentStage;
+import com.betx.domain.order.BetSettlementResult;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -37,6 +38,12 @@ class BetxInterfaceActivityServiceTest {
             BetIntentStage.EXECUTED,
             Instant.parse("2026-06-18T09:00:00Z"),
             Instant.parse("2026-06-18T09:01:00Z")
+        ).withSettlement(
+            BetIntentStage.SETTLED,
+            BetSettlementResult.WIN,
+            BigDecimal.valueOf(4),
+            Instant.parse("2026-06-18T09:20:00Z"),
+            "settled"
         )));
         BetxInterfaceActivityService service = new BetxInterfaceActivityService(
             repository,
@@ -53,7 +60,10 @@ class BetxInterfaceActivityServiceTest {
             assertThat(item.selection()).isEqualTo("Empate");
             assertThat(item.odds()).isEqualByComparingTo("3.2");
             assertThat(item.amount()).isEqualByComparingTo("5");
-            assertThat(item.statusLabel()).isEqualTo("Realizada");
+            assertThat(item.status()).isEqualTo("SETTLED");
+            assertThat(item.result()).isEqualTo("WIN");
+            assertThat(item.netPnl()).isEqualByComparingTo("4");
+            assertThat(item.updatedAt()).isEqualTo(Instant.parse("2026-06-18T09:20:00Z"));
         });
     }
 

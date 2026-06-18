@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -37,6 +38,37 @@ class BetxInterfaceRuntimeServiceTest {
         assertThat(state.status()).isEqualTo(InterfaceStatus.ACTIVE);
         assertThat(dryRun.runs).isEqualTo(1);
         assertThat(state.message()).isEqualTo("BetX esta activo.");
+        assertThat(state.lastCycleAt()).isEqualTo(Instant.parse("2026-06-18T10:00:00Z"));
+    }
+
+    @Test
+    void activateLogsInterfaceCycleSummary() {
+        List<String> logs = new ArrayList<>();
+        RecordingDryRunService dryRun = new RecordingDryRunService(new DryRunSignalsResult(
+            List.of(),
+            List.of(),
+            false,
+            4,
+            2,
+            List.of(),
+            List.of(),
+            3,
+            1,
+            5,
+            2
+        ));
+        BetxInterfaceRuntimeService service = service(configWithEnabledExchange(), dryRun, logs);
+
+        service.activate(CONFIG);
+
+        assertThat(logs).singleElement()
+            .asString()
+            .contains("BetX interface cycle complete")
+            .contains("events=5")
+            .contains("markets=3")
+            .contains("snapshots=4")
+            .contains("signals=0")
+            .contains("failures=0");
     }
 
     @Test
@@ -63,6 +95,10 @@ class BetxInterfaceRuntimeServiceTest {
     }
 
     private BetxInterfaceRuntimeService service(BetxConfig config, RecordingDryRunService dryRun) {
+        return service(config, dryRun, new ArrayList<>());
+    }
+
+    private BetxInterfaceRuntimeService service(BetxConfig config, RecordingDryRunService dryRun, List<String> logs) {
         StaticConfigRepository configRepository = new StaticConfigRepository(config);
         return new BetxInterfaceRuntimeService(
             new StartBetxService(configRepository),
@@ -73,7 +109,8 @@ class BetxInterfaceRuntimeServiceTest {
                 Thread thread = new Thread(runnable, "test-betx-interface-runtime");
                 thread.setDaemon(true);
                 return thread;
-            })
+            }),
+            logs::add
         );
     }
 
@@ -87,20 +124,26 @@ class BetxInterfaceRuntimeServiceTest {
 
     private static final class RecordingDryRunService extends RunDryRunSignalsService {
         private int runs;
+        private final DryRunSignalsResult result;
 
         private RecordingDryRunService() {
+            this(new DryRunSignalsResult(List.of(), List.of(), false));
+        }
+
+        private RecordingDryRunService(DryRunSignalsResult result) {
             super(
                 new StaticConfigRepository(BetxConfig.defaults()),
                 List.<ExchangeMarketDataGateway>of(),
                 null,
                 new NoopBetExecutionGateway()
             );
+            this.result = result;
         }
 
         @Override
         public DryRunSignalsResult run(ConfigPath configPath, boolean sendTelegramAlerts, boolean logSuppressedTelegramAlerts) {
             runs++;
-            return new DryRunSignalsResult(List.of(), List.of(), false);
+            return result;
         }
     }
 

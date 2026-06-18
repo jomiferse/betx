@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/interface")
+@RequestMapping("/api/v1/interface")
 @ConditionalOnProperty(name = "betx.interface.enabled", havingValue = "true")
 public class BetxInterfaceController {
     private final BetxInterfaceStatusService statusService;

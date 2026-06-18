@@ -9,8 +9,9 @@ public record BetxInterfaceActivityItem(
     String selection,
     BigDecimal odds,
     BigDecimal amount,
-    String statusLabel,
-    BigDecimal profitLoss,
+    String status,
+    String result,
+    BigDecimal netPnl,
     Instant updatedAt
 ) {
 }

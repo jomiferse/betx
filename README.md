@@ -1,6 +1,6 @@
 # BetX
 
-BetX is a terminal-first betting signals engine for football markets.
+BetX is a betting signals engine for football markets with a CLI for operations and a local web interface for day-to-day use.
 
 It reads exchange market data, stores snapshots locally, detects useful price and liquidity movement, and sends actionable Telegram alerts. It is safe by default: auto-betting is disabled unless explicitly configured per exchange.
 
@@ -14,6 +14,7 @@ Current version: `0.7.0`
 - Scores each runner from `0-100` using recent odds, liquidity, persistence, and volatility.
 - Sends filtered Telegram alerts for actionable `BET` signals.
 - Supports Betfair auto-betting with optional Telegram confirmation.
+- Provides a local web interface at `/interface` for status, activation, pause, and recent activity.
 - Provides paper readiness checks for internal strategy and release validation.
 - Runs restart-safe prospective paper trading for `value-football-draw-only`.
 - Writes separated local audit logs for CLI, paper-trade, and Telegram messages.
@@ -25,15 +26,23 @@ Current version: `0.7.0`
 - Betfair API credentials for real market data
 - A Telegram bot token if you want alerts
 
+Node.js is not required to run the packaged application. Maven installs an isolated Node/npm toolchain under `frontend/.node` only while building the React interface.
+
 ## Quick Start
 
 ```bash
 mvn package
 java -jar target/betx.jar init
-java -jar target/betx.jar start --config betx.yml --once
+java -jar target/betx.jar interface --config betx.yml
 ```
 
 The generated `betx.yml` starts with Betfair disabled. Add your exchange credentials and enable the exchange before expecting live market data.
+
+The interface command starts the local Spring Boot app and opens:
+
+```text
+http://localhost:8080/interface/
+```
 
 ## Common Commands
 
@@ -50,6 +59,12 @@ java -jar target/betx.jar start --config betx.yml --once
 
 # Run continuously
 java -jar target/betx.jar start --config betx.yml
+
+# Start the local web interface
+java -jar target/betx.jar interface --config betx.yml
+
+# Start the local web interface without opening a browser
+java -jar target/betx.jar interface --config betx.yml --no-browser
 
 # Replay historical normalized CSV data
 java -jar target/betx.jar backtest --config betx.yml --input backtest/history.csv
@@ -73,7 +88,49 @@ java -jar target/betx.jar betfair test --config betx.yml
 java -jar target/betx.jar betfair markets --config betx.yml
 ```
 
-The offline ML laboratory lives under `ml/` and is currently paused. Its outputs are retained for research diagnostics only and must not affect live betting, paper trading, Telegram, readiness gates, or Java runtime decisions. See `ml/README.md` and `docs/decisions/ADR-ML-PAUSED.md` for the paused status and reopening criteria.
+The offline ML laboratory lives under `ml/` and is currently paused. Its outputs are retained for research diagnostics only and must not affect live betting, paper trading, Telegram, readiness gates, or Java runtime decisions. See `ml/README.md` for the paused status and reopening criteria.
+
+## Local Web Interface
+
+The commercial interface is intentionally small and product-oriented. It is available from the `interface` command and served by the same JAR as the backend:
+
+```bash
+java -jar target/betx.jar interface --config betx.yml
+```
+
+By default, BetX opens the browser automatically. Use `--no-browser` when running headless, and `--port` to choose another local port:
+
+```bash
+java -jar target/betx.jar interface --config betx.yml --port 18080 --no-browser
+```
+
+The current interface shows:
+
+- BetX status: active, paused, or needs attention.
+- Available balance when the exchange account can provide it.
+- Manual confirmation state.
+- Recent activity.
+- Actions to activate or pause BetX.
+
+The frontend is a React + TypeScript + Vite app under `frontend/`. Maven builds it, runs its tests, and copies `frontend/dist` into `target/classes/static/interface`, so the final JAR serves it from `/interface`.
+
+The interface API is versioned under:
+
+```text
+/api/v1/interface/*
+```
+
+Internal tooling remains in the CLI. Backtesting, paper trading, readiness checks, ML experiments, low-level logs, and diagnostics are not exposed in the commercial interface.
+
+The execution mode is controlled internally by `betx.yml` exchange configuration. The interface must not expose a PAPER/LIVE selector. If the user needs mode context, use product language such as `Modo simulacion` or `Apuestas reales`, without allowing mode changes from the first interface.
+
+Frontend-only development commands are for contributors:
+
+```bash
+cd frontend
+.node/node/npm test -- --run
+.node/node/npm run build
+```
 
 ## Configuration
 

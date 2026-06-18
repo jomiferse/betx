@@ -22,7 +22,8 @@ class BetxInterfaceStatusServiceTest {
         BetxInterfaceRuntimeService.RuntimeState state = new BetxInterfaceRuntimeService.RuntimeState(
             InterfaceStatus.PAUSED,
             "BetX esta pausado.",
-            Instant.parse("2026-06-18T10:00:00Z")
+            Instant.parse("2026-06-18T10:00:00Z"),
+            Instant.parse("2026-06-18T09:58:00Z")
         );
         BetxConfig config = BetxConfig.defaults().withExchanges(List.of(new ExchangeConfig(
             "betfair",
@@ -47,6 +48,7 @@ class BetxInterfaceStatusServiceTest {
         assertThat(view.status()).isEqualTo(InterfaceStatus.PAUSED);
         assertThat(view.message()).isEqualTo("BetX esta pausado.");
         assertThat(view.availableBalance()).isEqualByComparingTo("100");
+        assertThat(view.lastCycleAt()).isEqualTo(Instant.parse("2026-06-18T09:58:00Z"));
         assertThat(view.manualConfirmationEnabled()).isTrue();
     }
 
@@ -55,7 +57,8 @@ class BetxInterfaceStatusServiceTest {
         BetxInterfaceRuntimeService.RuntimeState state = new BetxInterfaceRuntimeService.RuntimeState(
             InterfaceStatus.PAUSED,
             "BetX esta pausado.",
-            Instant.parse("2026-06-18T10:00:00Z")
+            Instant.parse("2026-06-18T10:00:00Z"),
+            null
         );
         BetxInterfaceStatusService service = new BetxInterfaceStatusService(
             () -> state,

@@ -8,6 +8,7 @@ public record BetxInterfaceStatusView(
     String message,
     BigDecimal availableBalance,
     Instant lastUpdatedAt,
+    Instant lastCycleAt,
     boolean manualConfirmationEnabled
 ) {
 }

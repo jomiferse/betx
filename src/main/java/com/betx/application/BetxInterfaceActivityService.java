@@ -46,19 +46,20 @@ public class BetxInterfaceActivityService {
             blankToDash(intent.runnerName()),
             intent.odds(),
             intent.selectedStake(),
-            label(intent.stage()),
+            status(intent.stage()),
+            intent.settlementResult() == null ? null : intent.settlementResult().name(),
             intent.realizedProfitLoss(),
             intent.updatedAt()
         );
     }
 
-    private String label(BetIntentStage stage) {
+    private String status(BetIntentStage stage) {
         return switch (stage) {
-            case AWAITING_CONFIRMATION, AWAITING_STAKE -> "Pendiente";
-            case EXECUTED -> "Realizada";
-            case SETTLED -> "Finalizada";
-            case CANCELLED -> "Descartada";
-            case FAILED -> "Necesita atencion";
+            case AWAITING_CONFIRMATION, AWAITING_STAKE -> "PENDING";
+            case EXECUTED -> "EXECUTED";
+            case SETTLED -> "SETTLED";
+            case CANCELLED -> "CANCELLED";
+            case FAILED -> "REJECTED";
         };
     }
 
