@@ -100,28 +100,35 @@ public class StartCommand implements Runnable {
 
         boolean firstCycle = true;
         do {
-            boolean sendTelegramAlerts = !requestConfirmation && (once || !firstCycle);
-            DryRunSignalsResult result = dryRunSignalsService.run(config, sendTelegramAlerts, !requestConfirmation, output::println);
-            boolean startupAutoBettingCycle = status.autoBettingEnabled() && !requestConfirmation && !once && firstCycle;
-            if (status.autoBettingEnabled() && !startupAutoBettingCycle) {
-                safeSyncBetConfirmations(config, result);
-            } else if (startupAutoBettingCycle && !result.signals().isEmpty()) {
-                output.println("AUTO BET STARTUP CYCLE SKIPPED | signals=" + result.signals().size());
-            }
-            printResult(result, status.autoBettingEnabled(), status.requestConfirmation());
-            if (once) {
-                if (requestConfirmation && !result.signals().isEmpty()) {
-                    output.println("Waiting briefly for Telegram confirmation updates...");
-                    waitForNextCycle(config, callbackPollSeconds * ONCE_CONFIRMATION_DRAIN_POLLS, true);
+            try {
+                boolean sendTelegramAlerts = !requestConfirmation && (once || !firstCycle);
+                DryRunSignalsResult result = dryRunSignalsService.run(config, sendTelegramAlerts, !requestConfirmation, output::println);
+                boolean startupAutoBettingCycle = status.autoBettingEnabled() && !requestConfirmation && !once && firstCycle;
+                if (status.autoBettingEnabled() && !startupAutoBettingCycle) {
+                    safeSyncBetConfirmations(config, result);
+                } else if (startupAutoBettingCycle && !result.signals().isEmpty()) {
+                    output.println("AUTO BET STARTUP CYCLE SKIPPED | signals=" + result.signals().size());
                 }
-                return;
-            }
-            if (result.noEnabledExchanges()) {
-                return;
-            }
-            firstCycle = false;
-            if (!waitForNextCycle(config, status.pollIntervalSeconds(), requestConfirmation)) {
-                return;
+                printResult(result, status.autoBettingEnabled(), status.requestConfirmation());
+                if (once) {
+                    if (requestConfirmation && !result.signals().isEmpty()) {
+                        output.println("Waiting briefly for Telegram confirmation updates...");
+                        waitForNextCycle(config, callbackPollSeconds * ONCE_CONFIRMATION_DRAIN_POLLS, true);
+                    }
+                    return;
+                }
+                if (result.noEnabledExchanges()) {
+                    return;
+                }
+                firstCycle = false;
+                if (!waitForNextCycle(config, status.pollIntervalSeconds(), requestConfirmation)) {
+                    return;
+                }
+            } catch (RuntimeException exc) {
+                output.println("CYCLE WARNING | message=" + nullSafe(exc.getMessage()));
+                if (once || !waitForNextCycle(config, status.pollIntervalSeconds(), requestConfirmation)) {
+                    return;
+                }
             }
         } while (true);
     }

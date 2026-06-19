@@ -148,6 +148,19 @@ class StartCommandTest {
     }
 
     @Test
+    void unexpectedCycleFailureDoesNotStopContinuousStartLoop() {
+        BetxConfig config = configWithAutoBetting(2, true, false);
+        FailingOnceDryRunSignalsService dryRunSignalsService = new FailingOnceDryRunSignalsService(config);
+        StartCommand command = command(config, dryRunSignalsService, new NoopTelegramBetConfirmationService());
+        command.once = false;
+
+        String output = captureOutput(command::run);
+
+        assertThat(output).contains("CYCLE WARNING | message=Network unavailable after wake.");
+        assertThat(dryRunSignalsService.runs()).isEqualTo(2);
+    }
+
+    @Test
     void continuousAutoBettingWithoutConfirmationSkipsStartupCycleExecution() {
         BetxConfig config = configWithAutoBetting(2, true, false);
         RecordingTelegramBetConfirmationService confirmations = new RecordingTelegramBetConfirmationService();
@@ -620,6 +633,32 @@ class StartCommandTest {
 
         private List<Boolean> logSuppressedTelegramAlerts() {
             return logSuppressedTelegramAlerts;
+        }
+    }
+
+    private static final class FailingOnceDryRunSignalsService extends RunDryRunSignalsService {
+        private int runs;
+
+        private FailingOnceDryRunSignalsService(BetxConfig config) {
+            super(new StaticConfigRepository(config), List.of(), new NoopTelegramConnectionService(), new NoopExecutionGateway());
+        }
+
+        @Override
+        public DryRunSignalsResult run(
+            ConfigPath configPath,
+            boolean sendTelegramAlerts,
+            boolean logSuppressedTelegramAlerts,
+            java.util.function.Consumer<String> outputConsumer
+        ) {
+            runs++;
+            if (runs == 1) {
+                throw new IllegalStateException("Network unavailable after wake.");
+            }
+            return new DryRunSignalsResult(List.of(), List.of(), true);
+        }
+
+        private int runs() {
+            return runs;
         }
     }
 
