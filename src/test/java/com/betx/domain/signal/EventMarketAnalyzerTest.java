@@ -49,6 +49,7 @@ class EventMarketAnalyzerTest {
         assertThat(analysis.recommendation()).isEqualTo(RecommendationType.BET);
         assertThat(analysis.reason()).contains("liquidity_ok", "spread_ok", "odds_range_ok", "favorable_odds_movement", "dry_run_only");
         assertThat(analysis.score().value()).isGreaterThanOrEqualTo(70);
+        assertThat(analysis.strategyName()).isEqualTo("value-football");
     }
 
     @Test

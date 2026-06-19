@@ -57,19 +57,19 @@ public class EventMarketAnalyzer {
         RiskConfig riskConfig
     ) {
         if (isTestMarket(snapshot)) {
-            return rejected(snapshot, "test_market");
+            return rejected(snapshot, strategyConfig.name(), "test_market");
         }
         if (snapshot.bestBackPrice() == null || snapshot.bestLayPrice() == null) {
-            return rejected(snapshot, "missing_back_or_lay_price");
+            return rejected(snapshot, strategyConfig.name(), "missing_back_or_lay_price");
         }
         if (snapshot.liquidity().compareTo(strategyConfig.minLiquidity()) < 0) {
-            return rejected(snapshot, "liquidity_below_minimum");
+            return rejected(snapshot, strategyConfig.name(), "liquidity_below_minimum");
         }
         if (snapshot.spread() == null || snapshot.spread().compareTo(MAX_RELATIVE_SPREAD) > 0) {
-            return rejected(snapshot, "spread_above_threshold");
+            return rejected(snapshot, strategyConfig.name(), "spread_above_threshold");
         }
         if (snapshot.bestBackPrice().compareTo(MIN_BACK_ODDS) < 0 || snapshot.bestBackPrice().compareTo(MAX_BACK_ODDS) > 0) {
-            return rejected(snapshot, "odds_out_of_range");
+            return rejected(snapshot, strategyConfig.name(), "odds_out_of_range");
         }
         RunnerProfile runnerProfile = RunnerProfile.from(snapshot);
 
@@ -77,25 +77,26 @@ public class EventMarketAnalyzer {
             ? List.of()
             : recentSnapshots.stream().map(ObservedMarketSnapshot::snapshot).toList();
         if (runnerProfile == RunnerProfile.DRAW && history.isEmpty()) {
-            return rejected(snapshot, "draw_runner_not_supported");
+            return rejected(snapshot, strategyConfig.name(), "draw_runner_not_supported");
         }
         if (history.isEmpty()) {
             return RunnerAnalysis.from(
                 snapshot,
                 RecommendationType.WATCH,
                 "valid_market_waiting_for_movement",
-                SignalScore.fromValue(35, List.of("Base market quality is acceptable"))
+                SignalScore.fromValue(35, List.of("Base market quality is acceptable")),
+                strategyConfig.name()
             );
         }
 
         MarketMovementFeatures features = features(snapshot, history);
         boolean stableDrawProfile = isStableDrawProfile(snapshot, features, runnerProfile);
         if (runnerProfile == RunnerProfile.DRAW && !stableDrawProfile) {
-            return rejected(snapshot, "draw_runner_not_supported");
+            return rejected(snapshot, strategyConfig.name(), "draw_runner_not_supported");
         }
         boolean awayValueProfile = isAwayValueProfile(snapshot, features, runnerProfile);
         if (runnerProfile == RunnerProfile.AWAY && !awayValueProfile) {
-            return rejected(snapshot, "away_runner_value_profile_missing");
+            return rejected(snapshot, strategyConfig.name(), "away_runner_value_profile_missing");
         }
         SignalScore score = score(snapshot, history, features, runnerProfile, stableDrawProfile, awayValueProfile);
         RecommendationType recommendation = score.value() >= BET_SCORE_THRESHOLD ? RecommendationType.BET : RecommendationType.WATCH;
@@ -103,7 +104,8 @@ public class EventMarketAnalyzer {
             snapshot,
             recommendation,
             reason(recommendation, features, score, runnerProfile, stableDrawProfile, awayValueProfile),
-            score
+            score,
+            strategyConfig.name()
         );
     }
 
@@ -115,8 +117,8 @@ public class EventMarketAnalyzer {
         return value != null && value.toLowerCase(Locale.ROOT).contains("test");
     }
 
-    private RunnerAnalysis rejected(MarketSnapshot snapshot, String reason) {
-        return RunnerAnalysis.from(snapshot, RecommendationType.NO_BET, reason, SignalScore.zero(reason));
+    private RunnerAnalysis rejected(MarketSnapshot snapshot, String strategyName, String reason) {
+        return RunnerAnalysis.from(snapshot, RecommendationType.NO_BET, reason, SignalScore.zero(reason), strategyName);
     }
 
     private MarketMovementFeatures features(MarketSnapshot current, List<MarketSnapshot> history) {

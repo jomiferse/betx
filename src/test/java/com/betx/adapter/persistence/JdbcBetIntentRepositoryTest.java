@@ -6,6 +6,7 @@ import com.betx.domain.order.BetIntent;
 import com.betx.domain.order.BetIntentSource;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.BetSettlementResult;
+import com.betx.domain.order.SelectionSide;
 import com.betx.domain.signal.BetSide;
 import java.math.BigDecimal;
 import java.nio.file.Path;
@@ -53,6 +54,9 @@ class JdbcBetIntentRepositoryTest {
                 assertThat(intent.externalOrderId()).isEqualTo("bet-123");
                 assertThat(intent.source()).isEqualTo(BetIntentSource.AUTOMATIC);
                 assertThat(intent.side()).isEqualTo(BetSide.BACK);
+                assertThat(intent.selectionSide()).isEqualTo(SelectionSide.HOME);
+                assertThat(intent.competitionName()).isEqualTo("La Liga");
+                assertThat(intent.strategyName()).isEqualTo("value-football");
             });
         assertThat(repository.listRecent(databasePath, 10))
             .extracting(BetIntent::id)
@@ -134,6 +138,27 @@ class JdbcBetIntentRepositoryTest {
     }
 
     @Test
+    void persistsAllNormalizedSelectionSidesAndReportMetadata() {
+        JdbcBetIntentRepository repository = new JdbcBetIntentRepository(tempDir.resolve("selection-sides.db").toString());
+        String databasePath = tempDir.resolve("selection-sides.db").toString();
+
+        repository.save(databasePath, intentWithMetadata("home", SelectionSide.HOME, "La Liga", "value-football"));
+        repository.save(databasePath, intentWithMetadata("draw", SelectionSide.DRAW, "Premier League", "value-football"));
+        repository.save(databasePath, intentWithMetadata("away", SelectionSide.AWAY, "Serie A", "value-football"));
+
+        assertThat(repository.findById(databasePath, "home"))
+            .hasValueSatisfying(intent -> {
+                assertThat(intent.selectionSide()).isEqualTo(SelectionSide.HOME);
+                assertThat(intent.competitionName()).isEqualTo("La Liga");
+                assertThat(intent.strategyName()).isEqualTo("value-football");
+            });
+        assertThat(repository.findById(databasePath, "draw"))
+            .hasValueSatisfying(intent -> assertThat(intent.selectionSide()).isEqualTo(SelectionSide.DRAW));
+        assertThat(repository.findById(databasePath, "away"))
+            .hasValueSatisfying(intent -> assertThat(intent.selectionSide()).isEqualTo(SelectionSide.AWAY));
+    }
+
+    @Test
     void persistsExecutionBalanceAuditFields() {
         JdbcBetIntentRepository repository = new JdbcBetIntentRepository(tempDir.resolve("execution-audit.db").toString());
         String databasePath = tempDir.resolve("execution-audit.db").toString();
@@ -147,6 +172,9 @@ class JdbcBetIntentRepositoryTest {
             "Team A v Team B",
             "Match Odds",
             "Team A",
+            "La Liga",
+            SelectionSide.HOME,
+            "value-football",
             "liquidity_ok",
             BigDecimal.valueOf(2.5),
             BigDecimal.valueOf(5),
@@ -218,6 +246,9 @@ class JdbcBetIntentRepositoryTest {
                 assertThat(intent.externalOrderId()).isEqualTo("bet-123");
                 assertThat(intent.source()).isEqualTo(BetIntentSource.AUTOMATIC);
                 assertThat(intent.side()).isEqualTo(BetSide.BACK);
+                assertThat(intent.selectionSide()).isEqualTo(SelectionSide.HOME);
+                assertThat(intent.competitionName()).isEqualTo("La Liga");
+                assertThat(intent.strategyName()).isEqualTo("value-football");
                 assertThat(intent.settlementResult()).isNull();
                 assertThat(intent.realizedProfitLoss()).isNull();
                 assertThat(intent.settledAt()).isNull();
@@ -242,6 +273,9 @@ class JdbcBetIntentRepositoryTest {
             "Team A v Team B",
             "Match Odds",
             "Team A",
+            "La Liga",
+            SelectionSide.HOME,
+            "value-football",
             "liquidity_ok",
             BigDecimal.valueOf(2.5),
             BigDecimal.valueOf(5),
@@ -274,6 +308,9 @@ class JdbcBetIntentRepositoryTest {
             "Team A v Team B",
             "Match Odds",
             "Team A",
+            "La Liga",
+            SelectionSide.HOME,
+            "value-football",
             "liquidity_ok",
             BigDecimal.valueOf(2.5),
             BigDecimal.valueOf(5),
@@ -284,6 +321,32 @@ class JdbcBetIntentRepositoryTest {
             stage,
             Instant.parse("2026-06-05T08:00:00Z"),
             Instant.parse(updatedAt)
+        );
+    }
+
+    private BetIntent intentWithMetadata(String id, SelectionSide selectionSide, String competitionName, String strategyName) {
+        return new BetIntent(
+            id,
+            BetIntentSource.AUTOMATIC,
+            "betfair",
+            "market-" + id,
+            id.hashCode(),
+            "Team A v Team B",
+            "Match Odds",
+            "Team A",
+            competitionName,
+            selectionSide,
+            strategyName,
+            "liquidity_ok",
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            BigDecimal.valueOf(20),
+            BigDecimal.valueOf(5),
+            "accepted",
+            "bet-" + id,
+            BetIntentStage.EXECUTED,
+            Instant.parse("2026-06-05T08:00:00Z"),
+            Instant.parse("2026-06-05T09:00:00Z")
         );
     }
 }

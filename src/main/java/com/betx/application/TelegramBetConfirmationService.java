@@ -22,10 +22,12 @@ import com.betx.domain.order.BetExecutionResult;
 import com.betx.domain.order.BetOrder;
 import com.betx.domain.order.BetIntentSource;
 import com.betx.domain.order.BetSettlementResult;
+import com.betx.domain.order.SelectionSide;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.BetSignal;
 import com.betx.domain.signal.RecommendationType;
 import com.betx.domain.signal.RunnerAnalysis;
+import com.betx.domain.signal.RunnerType;
 import com.betx.domain.order.BetIntent;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.telegram.TelegramConnectionContext;
@@ -386,6 +388,18 @@ public class TelegramBetConfirmationService {
         return BetSettlementResult.VOID;
     }
 
+    private SelectionSide selectionSide(RunnerType runnerType) {
+        if (runnerType == null) {
+            return SelectionSide.UNKNOWN;
+        }
+        return switch (runnerType) {
+            case HOME -> SelectionSide.HOME;
+            case DRAW -> SelectionSide.DRAW;
+            case AWAY -> SelectionSide.AWAY;
+            case UNKNOWN -> SelectionSide.UNKNOWN;
+        };
+    }
+
     private void offerBetConfirmations(ConfigPath configPath, BetxConfig config, DryRunSignalsResult result) {
         Map<String, RunnerAnalysis> analysesByKey = result.runnerAnalyses().stream()
             .filter(analysis -> analysis.recommendation() == RecommendationType.BET)
@@ -447,9 +461,13 @@ public class TelegramBetConfirmationService {
                 analysis.eventName(),
                 analysis.marketName(),
                 analysis.displayRunner(),
+                analysis.competitionName(),
+                selectionSide(analysis.runnerType()),
+                analysis.strategyName(),
                 signal.reason(),
                 signal.odds(),
                 autoBetting.maxStake(),
+                null,
                 null,
                 null,
                 null,
@@ -678,6 +696,9 @@ public class TelegramBetConfirmationService {
                 analysis.eventName(),
                 analysis.marketName(),
                 analysis.displayRunner(),
+                analysis.competitionName(),
+                selectionSide(analysis.runnerType()),
+                analysis.strategyName(),
                 signal.reason(),
                 signal.odds(),
                 autoBetting.maxStake(),
@@ -1107,6 +1128,9 @@ public class TelegramBetConfirmationService {
             analysis.eventName(),
             analysis.marketName(),
             analysis.displayRunner(),
+            analysis.competitionName(),
+            selectionSide(analysis.runnerType()),
+            analysis.strategyName(),
             signal.reason(),
             signal.odds(),
             autoBetting.maxStake(),
@@ -1140,6 +1164,9 @@ public class TelegramBetConfirmationService {
             analysis.eventName(),
             analysis.marketName(),
             analysis.displayRunner(),
+            analysis.competitionName(),
+            selectionSide(analysis.runnerType()),
+            analysis.strategyName(),
             signal.reason(),
             signal.odds(),
             autoBetting.maxStake(),

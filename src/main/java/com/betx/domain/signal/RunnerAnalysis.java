@@ -13,6 +13,8 @@ public record RunnerAnalysis(
     Instant marketStartTime,
     long selectionId,
     String runnerName,
+    RunnerType runnerType,
+    String strategyName,
     BigDecimal bestBackPrice,
     BigDecimal bestLayPrice,
     BigDecimal spread,
@@ -28,6 +30,8 @@ public record RunnerAnalysis(
         if (recommendation == null) {
             throw new IllegalArgumentException("recommendation is required.");
         }
+        runnerType = runnerType == null ? RunnerType.UNKNOWN : runnerType;
+        strategyName = strategyName == null || strategyName.isBlank() ? "N/A" : strategyName.strip();
         reason = reason == null || reason.isBlank() ? "unspecified" : reason;
         score = score == null ? SignalScore.zero(reason) : score;
     }
@@ -57,6 +61,8 @@ public record RunnerAnalysis(
             marketStartTime,
             selectionId,
             runnerName,
+            RunnerType.UNKNOWN,
+            "N/A",
             bestBackPrice,
             bestLayPrice,
             spread,
@@ -67,11 +73,59 @@ public record RunnerAnalysis(
         );
     }
 
+    public RunnerAnalysis(
+        String exchange,
+        String marketId,
+        String marketName,
+        String eventName,
+        String competitionName,
+        Instant marketStartTime,
+        long selectionId,
+        String runnerName,
+        BigDecimal bestBackPrice,
+        BigDecimal bestLayPrice,
+        BigDecimal spread,
+        BigDecimal liquidity,
+        RecommendationType recommendation,
+        String reason,
+        SignalScore score
+    ) {
+        this(
+            exchange,
+            marketId,
+            marketName,
+            eventName,
+            competitionName,
+            marketStartTime,
+            selectionId,
+            runnerName,
+            RunnerType.UNKNOWN,
+            "N/A",
+            bestBackPrice,
+            bestLayPrice,
+            spread,
+            liquidity,
+            recommendation,
+            reason,
+            score
+        );
+    }
+
     public static RunnerAnalysis from(MarketSnapshot snapshot, RecommendationType recommendation, String reason) {
         return from(snapshot, recommendation, reason, SignalScore.zero(reason));
     }
 
     public static RunnerAnalysis from(MarketSnapshot snapshot, RecommendationType recommendation, String reason, SignalScore score) {
+        return from(snapshot, recommendation, reason, score, "N/A");
+    }
+
+    public static RunnerAnalysis from(
+        MarketSnapshot snapshot,
+        RecommendationType recommendation,
+        String reason,
+        SignalScore score,
+        String strategyName
+    ) {
         return new RunnerAnalysis(
             snapshot.exchange(),
             snapshot.marketId(),
@@ -81,6 +135,8 @@ public record RunnerAnalysis(
             snapshot.marketStartTime(),
             snapshot.selectionId(),
             snapshot.runnerName(),
+            snapshot.runnerType(),
+            strategyName,
             snapshot.bestBackPrice(),
             snapshot.bestLayPrice(),
             snapshot.spread(),
