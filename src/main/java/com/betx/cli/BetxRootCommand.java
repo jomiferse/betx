@@ -13,6 +13,7 @@ import picocli.CommandLine.Command;
         StartCommand.class,
         InterfaceCommand.class,
         ReportCommand.class,
+        DiagnosticsCommand.class,
         PaperTradeCommand.class,
         PaperReadinessCommand.class,
         BacktestCommand.class,

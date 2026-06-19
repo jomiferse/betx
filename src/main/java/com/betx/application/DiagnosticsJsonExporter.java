@@ -1,0 +1,104 @@
+package com.betx.application;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+public class DiagnosticsJsonExporter {
+    private final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+
+    public void export(DiagnosticsReport report, Path exportPath) {
+        try {
+            Path parent = exportPath.toAbsolutePath().getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            mapper.writerWithDefaultPrettyPrinter().writeValue(exportPath.toFile(), payload(report));
+        } catch (IOException exc) {
+            throw new UncheckedIOException("Could not write diagnostics JSON export: " + exportPath, exc);
+        }
+    }
+
+    private Map<String, Object> payload(DiagnosticsReport report) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("generatedAt", instant(report.generatedAt()));
+        Map<String, Object> period = new LinkedHashMap<>();
+        period.put("from", instant(report.period().from()));
+        period.put("to", instant(report.period().to()));
+        period.put("label", report.period().label());
+        payload.put("period", period);
+        payload.put("coverage", report.coverage());
+        payload.put("decisionFunnel", report.decisionFunnel());
+        payload.put("executionMetrics", execution(report.executionMetrics()));
+        payload.put("paperVsRealMetrics", report.paperVsRealMetrics());
+        payload.put("integrityFindings", report.integrityFindings());
+        payload.put("limitations", report.limitations());
+        payload.put("topFindings", report.topFindings());
+        payload.put("matchedPairs", report.matchedPairs().stream().map(this::match).toList());
+        return payload;
+    }
+
+    private Map<String, Object> execution(DiagnosticsExecutionMetrics metrics) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("ordersSubmitted", metrics.ordersSubmitted());
+        value.put("fullyMatched", metrics.fullyMatched());
+        value.put("partiallyMatched", metrics.partiallyMatched());
+        value.put("unmatched", metrics.unmatched());
+        value.put("rejected", metrics.rejected());
+        value.put("cancelled", metrics.cancelled());
+        value.put("averageExecutionLatencyMs", millis(metrics.averageExecutionLatency()));
+        value.put("medianExecutionLatencyMs", millis(metrics.medianExecutionLatency()));
+        value.put("p95ExecutionLatencyMs", millis(metrics.p95ExecutionLatency()));
+        value.put("latencyProvenance", metrics.latencyProvenance());
+        value.put("averageRealRecordedVsPaperOddsDifference", metrics.averageRealRecordedVsPaperOddsDifference());
+        value.put("oddsProvenance", metrics.oddsProvenance());
+        value.put("missingRecordedOdds", metrics.missingRecordedOdds());
+        value.put("missingExchangeOrderId", metrics.missingExchangeOrderId());
+        return value;
+    }
+
+    private Map<String, Object> match(DiagnosticsMatch match) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("matchStatus", match.matchStatus());
+        value.put("eventName", match.eventName());
+        value.put("marketId", match.marketId());
+        value.put("selectionId", match.selectionId());
+        value.put("runnerName", match.runnerName());
+        value.put("selectionSide", match.selectionSide());
+        value.put("competitionName", match.competitionName());
+        value.put("strategyName", match.strategyName());
+        value.put("recommendationTimestamp", instant(match.recommendationTimestamp()));
+        value.put("paperExecutionTimestamp", instant(match.paperExecutionTimestamp()));
+        value.put("realRecordedTimestamp", instant(match.realRecordedTimestamp()));
+        value.put("recommendedOdds", match.recommendedOdds());
+        value.put("paperOdds", match.paperOdds());
+        value.put("realRecordedOdds", match.realRecordedOdds());
+        value.put("realOddsSource", match.realOddsSource());
+        value.put("closingOdds", match.closingOdds());
+        value.put("paperStake", match.paperStake());
+        value.put("realStake", match.realStake());
+        value.put("paperResult", match.paperResult());
+        value.put("realResult", match.realResult());
+        value.put("paperPnl", match.paperPnl());
+        value.put("realPnl", match.realPnl());
+        value.put("executionPnlDifference", match.executionPnlDifference());
+        value.put("paperPnlPerUnitStake", match.paperPnlPerUnitStake());
+        value.put("realPnlPerUnitStake", match.realPnlPerUnitStake());
+        value.put("normalizedExecutionDifference", match.normalizedExecutionDifference());
+        return value;
+    }
+
+    private static String instant(Instant value) {
+        return value == null ? null : value.toString();
+    }
+
+    private static Long millis(Duration value) {
+        return value == null ? null : value.toMillis();
+    }
+}

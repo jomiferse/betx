@@ -1,0 +1,96 @@
+package com.betx.application;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+
+public class DiagnosticsCsvExporter {
+    private static final String HEADER = String.join(",",
+        "match_status",
+        "market_id",
+        "selection_id",
+        "event_name",
+        "runner_name",
+        "selection_side",
+        "competition_name",
+        "strategy_name",
+        "recommended_odds",
+        "paper_odds",
+        "real_recorded_odds",
+        "real_odds_source",
+        "closing_odds",
+        "paper_stake",
+        "real_stake",
+        "paper_pnl",
+        "real_pnl",
+        "execution_pnl_difference",
+        "paper_pnl_per_unit_stake",
+        "real_pnl_per_unit_stake",
+        "normalized_execution_difference",
+        "paper_executed_at",
+        "real_recorded_at",
+        "settled_at"
+    );
+
+    public void export(DiagnosticsReport report, Path exportPath) {
+        try {
+            Path parent = exportPath.toAbsolutePath().getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            Files.write(exportPath, lines(report), StandardCharsets.UTF_8);
+        } catch (IOException exc) {
+            throw new UncheckedIOException("Could not write diagnostics CSV export: " + exportPath, exc);
+        }
+    }
+
+    public List<String> lines(DiagnosticsReport report) {
+        List<String> lines = new ArrayList<>();
+        lines.add(HEADER);
+        for (DiagnosticsMatch match : report.matchedPairs()) {
+            lines.add(String.join(",",
+                csv(match.matchStatus().name()),
+                csv(match.marketId()),
+                csv(match.selectionId()),
+                csv(match.eventName()),
+                csv(match.runnerName()),
+                csv(match.selectionSide()),
+                csv(match.competitionName()),
+                csv(match.strategyName()),
+                csv(match.recommendedOdds()),
+                csv(match.paperOdds()),
+                csv(match.realRecordedOdds()),
+                csv(match.realOddsSource()),
+                csv(match.closingOdds()),
+                csv(match.paperStake()),
+                csv(match.realStake()),
+                csv(match.paperPnl()),
+                csv(match.realPnl()),
+                csv(match.executionPnlDifference()),
+                csv(match.paperPnlPerUnitStake()),
+                csv(match.realPnlPerUnitStake()),
+                csv(match.normalizedExecutionDifference()),
+                csv(match.paperExecutionTimestamp()),
+                csv(match.realRecordedTimestamp()),
+                ""
+            ));
+        }
+        return lines;
+    }
+
+    private static String csv(Object value) {
+        if (value == null) {
+            return "";
+        }
+        String text = value instanceof Instant instant ? instant.toString() : String.valueOf(value);
+        if (text.contains(",") || text.contains("\"") || text.contains("\n")) {
+            return "\"" + text.replace("\"", "\"\"") + "\"";
+        }
+        return text;
+    }
+}
