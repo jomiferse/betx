@@ -486,6 +486,17 @@ public class TelegramBetConfirmationService {
             if (analysis == null) {
                 continue;
             }
+            Optional<BetIntent> existingDuplicate = intentRepository.findDuplicateBlockingByKey(
+                config.storage().path(),
+                signal.exchange(),
+                signal.marketId(),
+                signal.selectionId(),
+                signal.side()
+            );
+            if (existingDuplicate.isPresent()) {
+                logDuplicateSkipped(signal, existingDuplicate.get());
+                continue;
+            }
             if (intentRepository.findActiveByKey(config.storage().path(), signal.exchange(), signal.marketId(), signal.selectionId()).isPresent()) {
                 auditSkipped("active_intent_exists", signal.exchange(), signal.marketId(), signal.selectionId());
                 continue;
@@ -536,6 +547,11 @@ public class TelegramBetConfirmationService {
                 now,
                 now
             ).withEvaluationId(signal.evaluationId());
+            Optional<BetIntent> duplicate = intentRepository.claimDuplicateProtectionKey(config.storage().path(), intent);
+            if (duplicate.isPresent()) {
+                logDuplicateSkipped(signal, duplicate.get());
+                continue;
+            }
             boolean sent = safeTelegramSend(
                 configPath,
                 telegramBetAlertFormatter.formatLiveConfirmation(
@@ -547,6 +563,7 @@ public class TelegramBetConfirmationService {
                 confirmationKeyboard(intent.id())
             );
             if (!sent) {
+                intentRepository.releaseDuplicateProtectionKey(config.storage().path(), intent);
                 auditSkipped("telegram_send_failed", signal.exchange(), signal.marketId(), signal.selectionId());
                 continue;
             }
@@ -586,6 +603,17 @@ public class TelegramBetConfirmationService {
             }
             Instant now = Instant.now(clock);
             String marketKey = marketKey(signal.exchange(), signal.marketId());
+            Optional<BetIntent> existingDuplicate = intentRepository.findDuplicateBlockingByKey(
+                config.storage().path(),
+                signal.exchange(),
+                signal.marketId(),
+                signal.selectionId(),
+                signal.side()
+            );
+            if (existingDuplicate.isPresent()) {
+                logDuplicateSkipped(signal, existingDuplicate.get());
+                continue;
+            }
             if (intentRepository.findActiveByMarket(config.storage().path(), signal.exchange(), signal.marketId()).isPresent()) {
                 auditSkipped("active_market_intent_exists", signal.exchange(), signal.marketId(), signal.selectionId());
                 continue;
@@ -721,6 +749,38 @@ public class TelegramBetConfirmationService {
                 .field("reservedBalance", reservation.reservedBalance())
                 .field("selectedStake", reservation.stake())
                 .emit();
+            BetIntent intent = new BetIntent(
+                UUID.randomUUID().toString(),
+                BetIntentSource.AUTOMATIC,
+                signal.exchange(),
+                signal.marketId(),
+                signal.selectionId(),
+                analysis.eventName(),
+                analysis.marketName(),
+                analysis.displayRunner(),
+                analysis.competitionName(),
+                selectionSide(analysis.runnerType()),
+                analysis.strategyName(),
+                signal.reason(),
+                signal.odds(),
+                autoBetting.maxStake(),
+                reservation.availableBalance(),
+                reservation.effectiveAvailableBalance(),
+                reservation.reservedBalance(),
+                reservation.balanceSnapshotAt(),
+                stake,
+                "Order submission pending.",
+                null,
+                BetIntentStage.EXECUTED,
+                now,
+                now
+            ).withEvaluationId(signal.evaluationId());
+            Optional<BetIntent> duplicate = intentRepository.claimDuplicateProtectionKey(config.storage().path(), intent);
+            if (duplicate.isPresent()) {
+                orderExecutionCoordinator.complete(reservation, false);
+                logDuplicateSkipped(signal, duplicate.get());
+                continue;
+            }
             BetOrder order = new BetOrder(
                 signal.exchange(),
                 signal.marketId(),
@@ -754,35 +814,20 @@ public class TelegramBetConfirmationService {
                 dependencyError("betfair", "place_order", exc);
             }
             orderExecutionCoordinator.complete(reservation, execution.accepted());
-            BetIntent intent = new BetIntent(
-                UUID.randomUUID().toString(),
-                BetIntentSource.AUTOMATIC,
-                signal.exchange(),
-                signal.marketId(),
-                signal.selectionId(),
-                analysis.eventName(),
-                analysis.marketName(),
-                analysis.displayRunner(),
-                analysis.competitionName(),
-                selectionSide(analysis.runnerType()),
-                analysis.strategyName(),
-                signal.reason(),
-                signal.odds(),
-                autoBetting.maxStake(),
-                reservation.availableBalance(),
-                reservation.effectiveAvailableBalance(),
-                reservation.reservedBalance(),
-                reservation.balanceSnapshotAt(),
-                stake,
-                execution.message(),
-                execution.externalOrderId(),
-                execution.accepted() ? BetIntentStage.EXECUTED : BetIntentStage.FAILED,
-                now,
-                now
-            ).withEvaluationId(signal.evaluationId())
+            intent = intent.withStageAt(
+                    execution.accepted() ? BetIntentStage.EXECUTED : BetIntentStage.FAILED,
+                    reservation.availableBalance(),
+                    stake,
+                    execution.message(),
+                    Instant.now(clock)
+                )
+                .withExternalOrderId(execution.externalOrderId())
                 .withOrderSubmitted(orderSubmittedAt, signal.odds(), stake)
                 .withOrderResponse(orderResponseAt, execution.accepted() ? BetExecutionStatus.UNMATCHED : BetExecutionStatus.REJECTED);
             intentRepository.save(config.storage().path(), intent);
+            if (!execution.accepted() && (execution.externalOrderId() == null || execution.externalOrderId().isBlank())) {
+                intentRepository.releaseDuplicateProtectionKey(config.storage().path(), intent);
+            }
             linkHistoryForSignal(config, historyByKey, signal, intent);
             safeUpdateSignalHistory(config, intent);
             if (execution.accepted()) {
@@ -1510,6 +1555,25 @@ public class TelegramBetConfirmationService {
             + " | exchange=" + exchange
             + " | marketId=" + marketId
             + " | selectionId=" + selectionId);
+    }
+
+    private void logDuplicateSkipped(BetSignal signal, BetIntent existing) {
+        eventLogger.warn(BetxEventCategory.AUDIT, "bet_intent.skipped")
+            .correlationId(signalCorrelationId(signal))
+            .exchange(signal.exchange())
+            .marketId(signal.marketId())
+            .selectionId(signal.selectionId())
+            .strategy("value-football")
+            .result("skipped")
+            .field("reason", "DUPLICATE_REAL_BET")
+            .field("existingBetIntentId", existing.id())
+            .field("side", signal.side())
+            .emit();
+        emit("BET INTENT SKIPPED | reason=DUPLICATE_REAL_BET"
+            + " | existingBetIntentId=" + existing.id()
+            + " | exchange=" + signal.exchange()
+            + " | marketId=" + signal.marketId()
+            + " | selectionId=" + signal.selectionId());
     }
 
     private void auditTelegramFailure(String action, RuntimeException exc) {

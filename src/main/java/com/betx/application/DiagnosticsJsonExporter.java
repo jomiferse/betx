@@ -36,6 +36,10 @@ public class DiagnosticsJsonExporter {
         payload.put("coverage", report.coverage());
         payload.put("decisionFunnel", report.decisionFunnel());
         payload.put("executionMetrics", execution(report.executionMetrics()));
+        payload.put("logEventCoverage", report.logEventCoverage());
+        payload.put("persistedExecutionCoverage", report.persistedExecutionCoverage());
+        payload.put("placeOrdersResponseDuration", placeOrdersResponseDuration(report.placeOrdersResponseDuration()));
+        payload.put("prospectiveRealBettingCohort", report.prospectiveRealBettingCohort());
         payload.put("executionDataCoverage", report.executionDataCoverage());
         payload.put("matchingGaps", report.matchingGaps());
         payload.put("paperVsRealMetrics", report.paperVsRealMetrics());
@@ -62,6 +66,21 @@ public class DiagnosticsJsonExporter {
         value.put("oddsProvenance", metrics.oddsProvenance());
         value.put("missingRecordedOdds", metrics.missingRecordedOdds());
         value.put("missingExchangeOrderId", metrics.missingExchangeOrderId());
+        return value;
+    }
+
+    private Map<String, Object> placeOrdersResponseDuration(DiagnosticsPlaceOrdersResponseDuration duration) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("observations", duration.observations());
+        value.put("averageMs", millis(duration.average()));
+        value.put("medianMs", millis(duration.median()));
+        value.put("p95Ms", millis(duration.p95()));
+        value.put("minimumMs", millis(duration.minimum()));
+        value.put("maximumMs", millis(duration.maximum()));
+        value.put("orderResponseBeforeSubmission", duration.responseBeforeSubmission());
+        value.put("missingOrderResponse", duration.missingOrderResponse());
+        value.put("slowPlaceOrderResponse", duration.slowResponses());
+        value.put("provenance", duration.provenance());
         return value;
     }
 

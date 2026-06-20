@@ -10,6 +10,7 @@ import com.betx.application.DiagnosticsModel.RealBetDiagnosticRow;
 import com.betx.application.DiagnosticsModel.RealOddsSource;
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.domain.config.BetxConfig;
+import com.betx.domain.order.BetExecutionStatus;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.BetSettlementResult;
 import com.betx.domain.order.SelectionSide;
@@ -34,7 +35,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class DiagnosticsService implements GenerateDiagnosticsUseCase {
     private static final int SCALE = 8;
-    private static final Instant NEW_METADATA_CUTOFF = Instant.parse("2026-06-15T00:00:00Z");
 
     private final BetxConfigRepository configRepository;
     private final DiagnosticsRepository diagnosticsRepository;
@@ -73,6 +73,10 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         DiagnosticsPaperVsRealMetrics paperVsReal = paperVsRealMetrics(matches);
         DiagnosticsExecutionMetrics execution = executionMetrics(dataset.realBets(), matches, logs);
         DiagnosticsExecutionDataCoverage executionDataCoverage = executionDataCoverage(dataset.realBets());
+        DiagnosticsLogEventCoverage logEventCoverage = logEventCoverage(logs);
+        DiagnosticsPersistedExecutionCoverage persistedExecutionCoverage = persistedExecutionCoverage(dataset.realBets());
+        DiagnosticsPlaceOrdersResponseDuration placeOrdersResponseDuration = placeOrdersResponseDuration(dataset.realBets());
+        DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort = prospectiveRealBettingCohort(dataset.realBets());
         DiagnosticsDecisionFunnel funnel = decisionFunnel(dataset, logs);
         List<DiagnosticFinding> findings = integrityFindings(dataset, matches);
         List<String> limitations = limitations(logs);
@@ -90,7 +94,11 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             topFindings,
             matches,
             matchingGaps,
-            executionDataCoverage
+            executionDataCoverage,
+            logEventCoverage,
+            persistedExecutionCoverage,
+            placeOrdersResponseDuration,
+            prospectiveRealBettingCohort
         );
     }
 
@@ -345,6 +353,7 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
     }
 
     private DiagnosticsExecutionDataCoverage executionDataCoverage(List<RealBetDiagnosticRow> realBets) {
+        List<RealBetDiagnosticRow> prospective = prospective(realBets);
         return new DiagnosticsExecutionDataCoverage(
             realBets.size(),
             realBets.stream().filter(row -> row.evaluationId() != null).count(),
@@ -358,7 +367,95 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             realBets.stream().filter(row -> row.requestedStake() != null).count(),
             realBets.stream().filter(row -> row.matchedStake() != null).count(),
             realBets.stream().filter(row -> row.remainingStake() != null).count(),
-            realBets.stream().filter(row -> row.executionStatus() != null).count()
+            realBets.stream().filter(row -> row.executionStatus() != null).count(),
+            prospective.size(),
+            prospective.stream().filter(row -> row.selectionSide() != SelectionSide.UNKNOWN).count(),
+            prospective.stream().filter(row -> row.selectionSide() == SelectionSide.UNKNOWN).count(),
+            realBets.stream().filter(row -> row.evaluationId() == null)
+                .filter(row -> row.selectionSide() == SelectionSide.UNKNOWN)
+                .count(),
+            prospective.stream().filter(row -> !isMissing(row.strategyName())).count(),
+            prospective.stream().filter(row -> !isMissing(row.competitionName())).count(),
+            prospective.stream().filter(row -> row.requestedOdds() != null).count(),
+            prospective.stream().filter(row -> row.requestedStake() != null).count(),
+            prospective.stream().filter(row -> row.orderSubmittedAt() != null).count(),
+            prospective.stream().filter(row -> row.orderResponseAt() != null).count()
+        );
+    }
+
+    private DiagnosticsLogEventCoverage logEventCoverage(DiagnosticsLogSummary logs) {
+        return new DiagnosticsLogEventCoverage(
+            logCount(logs, "order.submitted"),
+            logCount(logs, "order.accepted"),
+            logCount(logs, "order.rejected"),
+            logCount(logs, "order.settled"),
+            logs.eventCounts().isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.LOG_CORRELATED
+        );
+    }
+
+    private DiagnosticsPersistedExecutionCoverage persistedExecutionCoverage(List<RealBetDiagnosticRow> realBets) {
+        return new DiagnosticsPersistedExecutionCoverage(
+            realBets.size(),
+            realBets.stream().filter(row -> row.orderSubmittedAt() != null).count(),
+            realBets.stream().filter(row -> row.executedAt() != null).count(),
+            realBets.stream().filter(row -> row.stage() == BetIntentStage.SETTLED).count(),
+            realBets.stream().filter(row -> row.executionStatus() == BetExecutionStatus.FULLY_MATCHED).count(),
+            realBets.stream().filter(row -> row.executionStatus() == BetExecutionStatus.PARTIALLY_MATCHED).count(),
+            realBets.stream().filter(row -> row.executionStatus() == BetExecutionStatus.UNMATCHED).count(),
+            realBets.stream().filter(row -> row.stage() == BetIntentStage.CANCELLED).count(),
+            realBets.isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.SQLITE_EXACT
+        );
+    }
+
+    private DiagnosticsPlaceOrdersResponseDuration placeOrdersResponseDuration(List<RealBetDiagnosticRow> realBets) {
+        List<RealBetDiagnosticRow> submitted = realBets.stream()
+            .filter(row -> row.orderSubmittedAt() != null)
+            .toList();
+        List<Duration> durations = submitted.stream()
+            .filter(row -> row.orderResponseAt() != null)
+            .filter(row -> !row.orderResponseAt().isBefore(row.orderSubmittedAt()))
+            .map(row -> Duration.between(row.orderSubmittedAt(), row.orderResponseAt()))
+            .sorted()
+            .toList();
+        return new DiagnosticsPlaceOrdersResponseDuration(
+            durations.size(),
+            durationAverage(durations),
+            durationPercentile(durations, 0.50),
+            durationPercentile(durations, 0.95),
+            durations.isEmpty() ? null : durations.getFirst(),
+            durations.isEmpty() ? null : durations.getLast(),
+            submitted.stream()
+                .filter(row -> row.orderResponseAt() != null && row.orderResponseAt().isBefore(row.orderSubmittedAt()))
+                .count(),
+            submitted.stream().filter(row -> row.orderResponseAt() == null).count(),
+            durations.stream().filter(duration -> duration.compareTo(Duration.ofSeconds(5)) > 0).count(),
+            durations.isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.SQLITE_EXACT
+        );
+    }
+
+    private DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort(List<RealBetDiagnosticRow> realBets) {
+        List<RealBetDiagnosticRow> prospective = prospective(realBets);
+        List<RealBetDiagnosticRow> settled = prospective.stream().filter(RealBetDiagnosticRow::settledWithPnl).toList();
+        BigDecimal turnover = sumReal(prospective, RealBetDiagnosticRow::selectedStake);
+        BigDecimal pnl = sumReal(settled, RealBetDiagnosticRow::realizedProfitLoss);
+        BigDecimal averageRequested = average(prospective.stream().map(RealBetDiagnosticRow::requestedOdds).filter(Objects::nonNull).toList());
+        BigDecimal averageExecuted = average(prospective.stream().map(RealBetDiagnosticRow::averageExecutedOdds).filter(Objects::nonNull).toList());
+        return new DiagnosticsProspectiveRealBettingCohort(
+            prospective.size(),
+            settled.size(),
+            prospective.stream().filter(row -> row.stage() != BetIntentStage.SETTLED).count(),
+            settled.stream().filter(row -> row.settlementResult() == BetSettlementResult.WIN).count(),
+            settled.stream().filter(row -> row.settlementResult() == BetSettlementResult.LOSE).count(),
+            money(turnover),
+            money(pnl),
+            rate(pnl, turnover),
+            averageRequested,
+            averageExecuted,
+            subtract(averageExecuted, averageRequested),
+            prospective.stream().filter(row -> row.executionStatus() == BetExecutionStatus.FULLY_MATCHED).count(),
+            prospective.stream().filter(row -> row.executionStatus() == BetExecutionStatus.PARTIALLY_MATCHED).count(),
+            prospective.stream().filter(row -> row.executionStatus() == BetExecutionStatus.UNMATCHED).count(),
+            prospective.isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.SQLITE_EXACT
         );
     }
 
@@ -398,18 +495,24 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
     }
 
     private DiagnosticsDecisionFunnel decisionFunnel(DiagnosticsDataset dataset, DiagnosticsLogSummary logs) {
+        long rejectedEvaluations = dataset.rejectionReasons().entrySet().stream()
+            .filter(entry -> !"ACCEPTED".equals(entry.getKey()))
+            .mapToLong(Map.Entry::getValue)
+            .sum();
         return new DiagnosticsDecisionFunnel(
             dataset.marketsScanned(),
             dataset.runnersAnalyzed(),
             dataset.signalRecommendations().values().stream().mapToLong(Long::longValue).sum(),
-            dataset.rejectionReasons().values().stream().mapToLong(Long::longValue).sum(),
+            rejectedEvaluations,
             logCount(logs, "risk.rejected"),
             logCount(logs, "confirmation.requested"),
             logCount(logs, "order.submitted"),
             logCount(logs, "order.accepted"),
             logCount(logs, "order.rejected"),
             logCount(logs, "order.settled"),
-            dataset.rejectionReasons()
+            dataset.rejectionReasons().entrySet().stream()
+                .filter(entry -> !"ACCEPTED".equals(entry.getKey()))
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue))
         );
     }
 
@@ -435,9 +538,33 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         addIfPositive(findings, "SETTLED_BETS_WITHOUT_SETTLED_AT", "Settled real bets without settled_at.", dataset.realBets().stream()
             .filter(row -> row.stage() == BetIntentStage.SETTLED && row.settledAt() == null)
             .count());
-        addIfPositive(findings, "MISSING_SELECTION_SIDE_NEW_RECORDS", "New real records missing selection_side.", dataset.realBets().stream()
-            .filter(this::isNewRecord)
+        addIfPositive(findings, "MISSING_SELECTION_SIDE_PROSPECTIVE_RECORDS", "Prospective real records missing selection_side.", dataset.realBets().stream()
+            .filter(this::isProspective)
             .filter(row -> row.selectionSide() == SelectionSide.UNKNOWN)
+            .count());
+        addIfPositive(findings, "MISSING_STRATEGY_NAME_PROSPECTIVE_RECORDS", "Prospective real records missing strategy_name.", dataset.realBets().stream()
+            .filter(this::isProspective)
+            .filter(row -> isMissing(row.strategyName()))
+            .count());
+        addIfPositive(findings, "MISSING_COMPETITION_NAME_PROSPECTIVE_RECORDS", "Prospective real records missing competition_name.", dataset.realBets().stream()
+            .filter(this::isProspective)
+            .filter(row -> isMissing(row.competitionName()))
+            .count());
+        addIfPositive(findings, "MISSING_REQUESTED_ODDS_PROSPECTIVE_RECORDS", "Prospective real records missing requested_odds.", dataset.realBets().stream()
+            .filter(this::isProspective)
+            .filter(row -> row.requestedOdds() == null)
+            .count());
+        addIfPositive(findings, "MISSING_REQUESTED_STAKE_PROSPECTIVE_RECORDS", "Prospective real records missing requested_stake.", dataset.realBets().stream()
+            .filter(this::isProspective)
+            .filter(row -> row.requestedStake() == null)
+            .count());
+        addIfPositive(findings, "MISSING_ORDER_SUBMITTED_AT_PROSPECTIVE_RECORDS", "Prospective real records missing order_submitted_at.", dataset.realBets().stream()
+            .filter(this::isProspective)
+            .filter(row -> row.orderSubmittedAt() == null)
+            .count());
+        addIfPositive(findings, "MISSING_ORDER_RESPONSE_AT_PROSPECTIVE_RECORDS", "Prospective real records missing order_response_at.", dataset.realBets().stream()
+            .filter(this::isProspective)
+            .filter(row -> row.orderResponseAt() == null)
             .count());
         addIfPositive(findings, "PAPER_REAL_RESULT_MISMATCH", "Matched settled paper and real results differ.", matches.stream()
             .filter(match -> match.matchStatus() == MatchStatus.MATCHED)
@@ -447,8 +574,8 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         return findings;
     }
 
-    private boolean isNewRecord(RealBetDiagnosticRow row) {
-        return row.createdAt() != null && !row.createdAt().isBefore(NEW_METADATA_CUTOFF);
+    private boolean isProspective(RealBetDiagnosticRow row) {
+        return row.evaluationId() != null && !row.evaluationId().isBlank();
     }
 
     private List<String> limitations(DiagnosticsLogSummary logs) {
@@ -503,8 +630,9 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             .values()
             .stream()
             .filter(count -> count > 1)
-            .count();
-        addIfPositive(findings, code, code.replace('_', ' ').toLowerCase(java.util.Locale.ROOT) + ".", duplicates);
+            .mapToLong(count -> count - 1)
+            .sum();
+        addIfPositive(findings, code, code.replace('_', ' ').toLowerCase(java.util.Locale.ROOT) + " extra rows.", duplicates);
     }
 
     private static void addIfPositive(List<DiagnosticFinding> findings, String code, String message, long observations) {
@@ -608,6 +736,16 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         return rows.stream().map(value).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
+    private static BigDecimal sumReal(List<RealBetDiagnosticRow> rows, Function<RealBetDiagnosticRow, BigDecimal> value) {
+        return rows.stream().map(value).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private static List<RealBetDiagnosticRow> prospective(List<RealBetDiagnosticRow> rows) {
+        return rows.stream()
+            .filter(row -> row.evaluationId() != null && !row.evaluationId().isBlank())
+            .toList();
+    }
+
     private static BigDecimal subtract(BigDecimal left, BigDecimal right) {
         return left == null || right == null ? null : decimal(left.subtract(right));
     }
@@ -637,6 +775,10 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
 
     private static String firstNonNull(String left, String right) {
         return left != null && !left.isBlank() ? left : right;
+    }
+
+    private static boolean isMissing(String value) {
+        return value == null || value.isBlank() || "N/A".equals(value);
     }
 
     private static String key(String exchange, String marketId, long selectionId) {

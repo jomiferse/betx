@@ -17,7 +17,11 @@ public record DiagnosticsReport(
     List<String> topFindings,
     List<DiagnosticsMatch> matchedPairs,
     Map<MatchGapReason, Long> matchingGaps,
-    DiagnosticsExecutionDataCoverage executionDataCoverage
+    DiagnosticsExecutionDataCoverage executionDataCoverage,
+    DiagnosticsLogEventCoverage logEventCoverage,
+    DiagnosticsPersistedExecutionCoverage persistedExecutionCoverage,
+    DiagnosticsPlaceOrdersResponseDuration placeOrdersResponseDuration,
+    DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort
 ) {
     public DiagnosticsReport(
         Instant generatedAt,
@@ -43,7 +47,38 @@ public record DiagnosticsReport(
             topFindings,
             matchedPairs,
             Map.of(),
-            new DiagnosticsExecutionDataCoverage(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            new DiagnosticsExecutionDataCoverage(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            new DiagnosticsLogEventCoverage(0, 0, 0, 0, DiagnosticsModel.DiagnosticsDataProvenance.UNAVAILABLE),
+            new DiagnosticsPersistedExecutionCoverage(0, 0, 0, 0, 0, 0, 0, 0, DiagnosticsModel.DiagnosticsDataProvenance.UNAVAILABLE),
+            new DiagnosticsPlaceOrdersResponseDuration(
+                0,
+                null,
+                null,
+                null,
+                null,
+                null,
+                0,
+                0,
+                0,
+                DiagnosticsModel.DiagnosticsDataProvenance.UNAVAILABLE
+            ),
+            new DiagnosticsProspectiveRealBettingCohort(
+                0,
+                0,
+                0,
+                0,
+                0,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                0,
+                0,
+                0,
+                DiagnosticsModel.DiagnosticsDataProvenance.UNAVAILABLE
+            )
         );
     }
 }

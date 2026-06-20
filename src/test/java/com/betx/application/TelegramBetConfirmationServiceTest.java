@@ -577,6 +577,50 @@ class TelegramBetConfirmationServiceTest {
     }
 
     @Test
+    void automaticBettingSkipsSelectionWithExistingSettledIntent() {
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        Instant previousBetAt = Instant.parse("2026-06-16T12:54:09Z");
+        intents.save("data.db", new BetIntent(
+            "settled-argentina-draw",
+            BetIntentSource.AUTOMATIC,
+            "betfair",
+            "1.251397469",
+            58805L,
+            "Argentina v Algeria",
+            "Match Odds",
+            "The Draw",
+            "liquidity_ok",
+            BigDecimal.valueOf(4.8),
+            BigDecimal.ONE,
+            BigDecimal.valueOf(12.5),
+            BigDecimal.ONE,
+            "Settled on exchange.",
+            "bet-123",
+            BetIntentStage.SETTLED,
+            previousBetAt,
+            previousBetAt
+        ));
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(1), BigDecimal.valueOf(25), 3, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            executionGateway
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signal("betfair", "1.251397469", 58805L, BigDecimal.valueOf(4.7), BigDecimal.ONE),
+            analysis("The Draw", "1.251397469", 58805L)
+        ));
+
+        assertThat(executionGateway.orders()).isEmpty();
+        assertThat(intents.saved()).hasSize(1);
+    }
+
+    @Test
     void automaticBettingReservesBalanceBetweenOrdersInSameExchangeCycle() {
         RecordingIntentRepository intents = new RecordingIntentRepository();
         RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
@@ -1987,6 +2031,37 @@ class TelegramBetConfirmationServiceTest {
                     && intent.selectionId() == selectionId
                     && intent.stage().isActive())
                 .findFirst();
+        }
+
+        @Override
+        public Optional<BetIntent> findDuplicateBlockingByKey(
+            String databasePath,
+            String exchange,
+            String marketId,
+            long selectionId,
+            BetSide side
+        ) {
+            return saved.stream()
+                .filter(intent -> intent.exchange().equals(exchange)
+                    && intent.marketId().equals(marketId)
+                    && intent.selectionId() == selectionId
+                    && intent.side() == side
+                    && (intent.stage() == BetIntentStage.AWAITING_CONFIRMATION
+                    || intent.stage() == BetIntentStage.AWAITING_STAKE
+                    || intent.stage() == BetIntentStage.EXECUTED
+                    || intent.stage() == BetIntentStage.SETTLED))
+                .findFirst();
+        }
+
+        @Override
+        public Optional<BetIntent> claimDuplicateProtectionKey(String databasePath, BetIntent intent) {
+            return findDuplicateBlockingByKey(
+                databasePath,
+                intent.exchange(),
+                intent.marketId(),
+                intent.selectionId(),
+                intent.side()
+            );
         }
 
         @Override

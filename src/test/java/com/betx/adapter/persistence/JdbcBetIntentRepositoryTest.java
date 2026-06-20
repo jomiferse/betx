@@ -139,6 +139,46 @@ class JdbcBetIntentRepositoryTest {
     }
 
     @Test
+    void claimsDuplicateProtectionKeyAtomicallyAndKeepsSettledIntentsBlocking() {
+        JdbcBetIntentRepository repository = new JdbcBetIntentRepository(tempDir.resolve("dedupe.db").toString());
+        String databasePath = tempDir.resolve("dedupe.db").toString();
+        BetIntent first = intent(
+            "first",
+            BetIntentSource.AUTOMATIC,
+            "1.1",
+            42L,
+            BetIntentStage.EXECUTED,
+            "accepted",
+            "bet-123",
+            "2026-06-05T09:00:00Z"
+        );
+        BetIntent duplicate = intent(
+            "duplicate",
+            BetIntentSource.AUTOMATIC,
+            "1.1",
+            42L,
+            BetIntentStage.EXECUTED,
+            "accepted",
+            "bet-456",
+            "2026-06-05T09:00:05Z"
+        );
+
+        assertThat(repository.claimDuplicateProtectionKey(databasePath, first)).isEmpty();
+        assertThat(repository.claimDuplicateProtectionKey(databasePath, duplicate))
+            .hasValueSatisfying(existing -> assertThat(existing.id()).isEqualTo("first"));
+        repository.save(databasePath, first.withSettlement(
+            BetIntentStage.SETTLED,
+            BetSettlementResult.LOSE,
+            BigDecimal.ONE.negate(),
+            Instant.parse("2026-06-05T18:30:00Z"),
+            "Settled on exchange."
+        ));
+
+        assertThat(repository.findDuplicateBlockingByKey(databasePath, "betfair", "1.1", 42L, BetSide.BACK))
+            .hasValueSatisfying(existing -> assertThat(existing.id()).isEqualTo("first"));
+    }
+
+    @Test
     void persistsAllNormalizedSelectionSidesAndReportMetadata() {
         JdbcBetIntentRepository repository = new JdbcBetIntentRepository(tempDir.resolve("selection-sides.db").toString());
         String databasePath = tempDir.resolve("selection-sides.db").toString();

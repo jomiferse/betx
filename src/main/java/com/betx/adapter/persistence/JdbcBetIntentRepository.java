@@ -71,6 +71,115 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
     }
 
     @Override
+    public Optional<BetIntent> findDuplicateBlockingByKey(
+        String databasePath,
+        String exchange,
+        String marketId,
+        long selectionId,
+        BetSide side
+    ) {
+        ensureSchemaInitialized(databasePath);
+        try (Connection connection = connection(databasePath)) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT *
+                FROM bet_intents
+                WHERE exchange = ? AND market_id = ? AND selection_id = ? AND side = ?
+                    AND stage IN ('AWAITING_CONFIRMATION', 'AWAITING_STAKE', 'EXECUTED', 'SETTLED')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """)) {
+                statement.setString(1, exchange);
+                statement.setString(2, marketId);
+                statement.setLong(3, selectionId);
+                statement.setString(4, side == null ? BetSide.BACK.name() : side.name());
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(map(resultSet));
+                }
+            }
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not read duplicate-blocking live bet intent.", exc);
+        }
+    }
+
+    @Override
+    public Optional<BetIntent> claimDuplicateProtectionKey(String databasePath, BetIntent intent) {
+        ensureSchemaInitialized(databasePath);
+        Optional<BetIntent> existing = findDuplicateBlockingByKey(
+            databasePath,
+            intent.exchange(),
+            intent.marketId(),
+            intent.selectionId(),
+            intent.side()
+        );
+        if (existing.isPresent()) {
+            return existing;
+        }
+        try (Connection connection = connection(databasePath)) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement insert = connection.prepareStatement("""
+                INSERT OR IGNORE INTO bet_intent_deduplication_keys (
+                    exchange, market_id, selection_id, side, bet_intent_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """)) {
+                insert.setString(1, intent.exchange());
+                insert.setString(2, intent.marketId());
+                insert.setLong(3, intent.selectionId());
+                insert.setString(4, intent.side().name());
+                insert.setString(5, intent.id());
+                insert.setString(6, intent.createdAt().toString());
+                int inserted = insert.executeUpdate();
+                if (inserted > 0) {
+                    connection.commit();
+                    return Optional.empty();
+                }
+            }
+            try (PreparedStatement select = connection.prepareStatement("""
+                SELECT bet_intent_id
+                FROM bet_intent_deduplication_keys
+                WHERE exchange = ? AND market_id = ? AND selection_id = ? AND side = ?
+                LIMIT 1
+                """)) {
+                select.setString(1, intent.exchange());
+                select.setString(2, intent.marketId());
+                select.setLong(3, intent.selectionId());
+                select.setString(4, intent.side().name());
+                try (ResultSet resultSet = select.executeQuery()) {
+                    connection.commit();
+                    if (resultSet.next()) {
+                        String existingId = resultSet.getString("bet_intent_id");
+                        return findById(databasePath, existingId).or(() -> Optional.of(intent.withId(existingId)));
+                    }
+                    return Optional.empty();
+                }
+            }
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not claim duplicate protection key.", exc);
+        }
+    }
+
+    @Override
+    public void releaseDuplicateProtectionKey(String databasePath, BetIntent intent) {
+        ensureSchemaInitialized(databasePath);
+        try (Connection connection = connection(databasePath);
+             PreparedStatement statement = connection.prepareStatement("""
+                 DELETE FROM bet_intent_deduplication_keys
+                 WHERE exchange = ? AND market_id = ? AND selection_id = ? AND side = ? AND bet_intent_id = ?
+                 """)) {
+            statement.setString(1, intent.exchange());
+            statement.setString(2, intent.marketId());
+            statement.setLong(3, intent.selectionId());
+            statement.setString(4, intent.side().name());
+            statement.setString(5, intent.id());
+            statement.executeUpdate();
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not release duplicate protection key.", exc);
+        }
+    }
+
+    @Override
     public Optional<BetIntent> findActiveByMarket(String databasePath, String exchange, String marketId) {
         ensureSchemaInitialized(databasePath);
         try (Connection connection = connection(databasePath)) {
@@ -569,6 +678,17 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
             statement.executeUpdate("""
                 CREATE INDEX IF NOT EXISTS idx_bet_intents_external_order_id
                 ON bet_intents(external_order_id)
+                """);
+            statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS bet_intent_deduplication_keys (
+                    exchange TEXT NOT NULL,
+                    market_id TEXT NOT NULL,
+                    selection_id INTEGER NOT NULL,
+                    side TEXT NOT NULL,
+                    bet_intent_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (exchange, market_id, selection_id, side)
+                )
                 """);
         }
     }

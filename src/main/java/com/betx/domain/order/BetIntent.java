@@ -529,6 +529,53 @@ public record BetIntent(
         return runnerName == null || runnerName.isBlank() ? String.valueOf(selectionId) : runnerName;
     }
 
+    public BetIntent withId(String newId) {
+        return new BetIntent(
+            newId,
+            source,
+            exchange,
+            marketId,
+            selectionId,
+            eventName,
+            marketName,
+            runnerName,
+            competitionName,
+            selectionSide,
+            strategyName,
+            side,
+            reason,
+            odds,
+            maxStake,
+            availableBalance,
+            effectiveAvailableBalance,
+            reservedBalance,
+            balanceSnapshotAt,
+            selectedStake,
+            resultMessage,
+            externalOrderId,
+            settledAt,
+            settlementResult,
+            realizedProfitLoss,
+            stage,
+            createdAt,
+            updatedAt,
+            evaluationId,
+            recommendationId,
+            recommendedAt,
+            recommendedOdds,
+            orderSubmittedAt,
+            orderResponseAt,
+            orderAcceptedAt,
+            executedAt,
+            requestedOdds,
+            averageExecutedOdds,
+            requestedStake,
+            matchedStake,
+            remainingStake,
+            executionStatus
+        );
+    }
+
     public BetIntent withEvaluationId(String newEvaluationId) {
         return copy(
             availableBalance,
@@ -674,22 +721,7 @@ public record BetIntent(
         String message,
         Instant updatedAt
     ) {
-        return new BetIntent(
-            id,
-            source,
-            exchange,
-            marketId,
-            selectionId,
-            eventName,
-            marketName,
-            runnerName,
-            competitionName,
-            selectionSide,
-            strategyName,
-            side,
-            reason,
-            odds,
-            maxStake,
+        return copy(
             balance,
             effectiveAvailableBalance,
             reservedBalance,
@@ -701,28 +733,26 @@ public record BetIntent(
             settlementResult,
             realizedProfitLoss,
             newStage,
-            createdAt,
-            updatedAt
+            updatedAt,
+            evaluationId,
+            recommendationId,
+            recommendedAt,
+            recommendedOdds,
+            orderSubmittedAt,
+            orderResponseAt,
+            orderAcceptedAt,
+            executedAt,
+            requestedOdds,
+            averageExecutedOdds,
+            requestedStake,
+            matchedStake,
+            remainingStake,
+            executionStatus
         );
     }
 
     public BetIntent withExternalOrderId(String newExternalOrderId) {
-        return new BetIntent(
-            id,
-            source,
-            exchange,
-            marketId,
-            selectionId,
-            eventName,
-            marketName,
-            runnerName,
-            competitionName,
-            selectionSide,
-            strategyName,
-            side,
-            reason,
-            odds,
-            maxStake,
+        return copy(
             availableBalance,
             effectiveAvailableBalance,
             reservedBalance,
@@ -734,8 +764,21 @@ public record BetIntent(
             settlementResult,
             realizedProfitLoss,
             stage,
-            createdAt,
-            updatedAt
+            updatedAt,
+            evaluationId,
+            recommendationId,
+            recommendedAt,
+            recommendedOdds,
+            orderSubmittedAt,
+            orderResponseAt,
+            orderAcceptedAt,
+            executedAt,
+            requestedOdds,
+            averageExecutedOdds,
+            requestedStake,
+            matchedStake,
+            remainingStake,
+            executionStatus
         );
     }
 

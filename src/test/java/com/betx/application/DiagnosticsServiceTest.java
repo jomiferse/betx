@@ -12,6 +12,7 @@ import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.StorageConfig;
+import com.betx.domain.order.BetExecutionStatus;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.BetSettlementResult;
 import com.betx.domain.order.SelectionSide;
@@ -114,6 +115,45 @@ class DiagnosticsServiceTest {
         assertThat(report.integrityFindings())
             .filteredOn(finding -> finding.severity() == DiagnosticFindingSeverity.ERROR)
             .isEmpty();
+    }
+
+    @Test
+    void doesNotFlagHistoricalUnknownSelectionSideAsProspectiveMissingMetadata() {
+        DiagnosticsReport report = service(dataset(
+            List.of(
+                recentHistoricalUnknown("historical-after-observability"),
+                prospective("prospective-ok", SelectionSide.DRAW)
+            ),
+            List.of()
+        ), DiagnosticsLogSummary.empty()).generate(request());
+
+        assertThat(report.integrityFindings()).extracting(DiagnosticFinding::code)
+            .doesNotContain("MISSING_SELECTION_SIDE_NEW_RECORDS", "MISSING_SELECTION_SIDE_PROSPECTIVE_RECORDS");
+        assertThat(report.executionDataCoverage().prospectiveOrders()).isEqualTo(1);
+        assertThat(report.executionDataCoverage().prospectiveWithSelectionSide()).isEqualTo(1);
+        assertThat(report.executionDataCoverage().historicalUnknownSelectionSide()).isEqualTo(1);
+    }
+
+    @Test
+    void formatterSeparatesLogEventsFromPersistedExecutionCoverage() {
+        DiagnosticsLogSummary logs = new DiagnosticsLogSummary(
+            Map.of("order.submitted", 9L, "order.accepted", 9L, "order.settled", 10L),
+            Map.of(),
+            0,
+            0,
+            List.of()
+        );
+        RealBetDiagnosticRow real = prospective("prospective-ok", SelectionSide.DRAW);
+
+        DiagnosticsReport report = service(dataset(List.of(real), List.of()), logs).generate(request());
+
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Operational events observed in logs")
+            .contains("Persisted records in SQLite")
+            .anySatisfy(line -> assertThat(line).contains("order.submitted events").contains("9"))
+            .anySatisfy(line -> assertThat(line).contains("order.accepted events").contains("9"))
+            .anySatisfy(line -> assertThat(line).contains("bets with order_submitted_at").contains("1 / 1"))
+            .noneSatisfy(line -> assertThat(line).contains("Recommendations generated"));
     }
 
     private static DiagnosticsService service(DiagnosticsDataset dataset, DiagnosticsLogSummary logs) {
@@ -220,6 +260,77 @@ class DiagnosticsServiceTest {
             null,
             null,
             null
+        );
+    }
+
+    private static RealBetDiagnosticRow recentHistoricalUnknown(String id) {
+        return new RealBetDiagnosticRow(
+            id,
+            "betfair",
+            "recent-historical",
+            99,
+            "Recent Historical Event",
+            "Match Odds",
+            "N/A",
+            SelectionSide.UNKNOWN,
+            "N/A",
+            "N/A",
+            BigDecimal.valueOf(2),
+            BigDecimal.ONE,
+            BetIntentStage.SETTLED,
+            BetSettlementResult.WIN,
+            BigDecimal.ONE,
+            null,
+            Instant.parse("2026-06-20T00:00:00Z"),
+            Instant.parse("2026-06-20T01:00:00Z"),
+            Instant.parse("2026-06-20T02:00:00Z"),
+            null,
+            null,
+            null,
+            null
+        );
+    }
+
+    private static RealBetDiagnosticRow prospective(String id, SelectionSide selectionSide) {
+        Instant createdAt = Instant.parse("2026-06-20T00:00:00Z");
+        return new RealBetDiagnosticRow(
+            id,
+            "betfair",
+            "prospective",
+            42,
+            "Prospective Event",
+            "Match Odds",
+            "The Draw",
+            selectionSide,
+            "League",
+            "value-football",
+            BigDecimal.valueOf(3),
+            BigDecimal.ONE,
+            BetIntentStage.EXECUTED,
+            null,
+            null,
+            "external-1",
+            createdAt,
+            null,
+            createdAt,
+            null,
+            null,
+            null,
+            null,
+            "eval-1",
+            null,
+            createdAt,
+            BigDecimal.valueOf(3),
+            createdAt,
+            createdAt.plusMillis(250),
+            null,
+            null,
+            BigDecimal.valueOf(3),
+            null,
+            BigDecimal.ONE,
+            null,
+            null,
+            BetExecutionStatus.UNMATCHED
         );
     }
 

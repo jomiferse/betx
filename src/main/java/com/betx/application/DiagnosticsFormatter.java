@@ -26,15 +26,49 @@ public class DiagnosticsFormatter {
             report.matchingGaps().forEach((reason, count) -> lines.add(line(reason.name(), count)));
         }
         lines.add("");
+        lines.add("Operational events observed in logs");
+        lines.add(line("Source", "STRUCTURED_LOGS"));
+        lines.add(line("order.submitted events", report.logEventCoverage().orderSubmittedEvents()));
+        lines.add(line("order.accepted events", report.logEventCoverage().orderAcceptedEvents()));
+        lines.add(line("order.rejected events", report.logEventCoverage().orderRejectedEvents()));
+        lines.add(line("order.settled events", report.logEventCoverage().orderSettledEvents()));
+        lines.add("");
+        lines.add("Persisted records in SQLite");
+        lines.add(line("Source", "SQLITE"));
+        lines.add(line("bets with order_submitted_at", coverage(
+            report.persistedExecutionCoverage().betsWithOrderSubmittedAt(),
+            report.persistedExecutionCoverage().realBets()
+        )));
+        lines.add(line("bets with executed_at", coverage(
+            report.persistedExecutionCoverage().betsWithExecutedAt(),
+            report.persistedExecutionCoverage().realBets()
+        )));
+        lines.add(line("settled real bets", report.persistedExecutionCoverage().settledRealBets()));
+        lines.add("");
         lines.add("Execution");
-        lines.add(line("Orders submitted", report.executionMetrics().ordersSubmitted()));
-        lines.add(line("Fully matched/recorded", report.executionMetrics().fullyMatched()));
-        lines.add(line("Rejected", report.executionMetrics().rejected()));
-        lines.add(line("Cancelled", report.executionMetrics().cancelled()));
+        lines.add(line("Fully matched/recorded", report.persistedExecutionCoverage().fullyMatched()));
+        lines.add(line("Partially matched/recorded", report.persistedExecutionCoverage().partiallyMatched()));
+        lines.add(line("Unmatched/recorded", report.persistedExecutionCoverage().unmatched()));
+        lines.add(line("Rejected events", report.logEventCoverage().orderRejectedEvents()));
+        lines.add(line("Cancelled", report.persistedExecutionCoverage().cancelled()));
         lines.add(line("Average execution latency", duration(report.executionMetrics().averageExecutionLatency())));
         lines.add(line("Median execution latency", duration(report.executionMetrics().medianExecutionLatency())));
         lines.add(line("P95 execution latency", duration(report.executionMetrics().p95ExecutionLatency())));
         lines.add(line("Latency provenance", report.executionMetrics().latencyProvenance()));
+        lines.add("");
+        lines.add("PlaceOrders response duration");
+        lines.add(line("Observations", report.placeOrdersResponseDuration().observations()));
+        lines.add(line("Average", duration(report.placeOrdersResponseDuration().average())));
+        lines.add(line("Median", duration(report.placeOrdersResponseDuration().median())));
+        lines.add(line("P95", duration(report.placeOrdersResponseDuration().p95())));
+        lines.add(line("Minimum", duration(report.placeOrdersResponseDuration().minimum())));
+        lines.add(line("Maximum", duration(report.placeOrdersResponseDuration().maximum())));
+        lines.add(line("ORDER_RESPONSE_BEFORE_SUBMISSION", report.placeOrdersResponseDuration().responseBeforeSubmission()));
+        lines.add(line("MISSING_ORDER_RESPONSE", report.placeOrdersResponseDuration().missingOrderResponse()));
+        lines.add(line("SLOW_PLACE_ORDER_RESPONSE", report.placeOrdersResponseDuration().slowResponses()));
+        lines.add(line("Provenance", report.placeOrdersResponseDuration().provenance()));
+        lines.add("");
+        lines.add("Legacy approximation");
         lines.add(line("Average real recorded vs paper odds difference", number(report.executionMetrics().averageRealRecordedVsPaperOddsDifference())));
         lines.add(line("Odds provenance", report.executionMetrics().oddsProvenance()));
         lines.add(line("Missing recorded odds", report.executionMetrics().missingRecordedOdds()));
@@ -54,6 +88,28 @@ public class DiagnosticsFormatter {
         lines.add(line("Orders with matched_stake", coverage(dataCoverage.withMatchedStake(), dataCoverage.totalOrders())));
         lines.add(line("Orders with remaining_stake", coverage(dataCoverage.withRemainingStake(), dataCoverage.totalOrders())));
         lines.add(line("Orders with execution_status", coverage(dataCoverage.withExecutionStatus(), dataCoverage.totalOrders())));
+        lines.add(line("Prospective bets", dataCoverage.prospectiveOrders()));
+        lines.add(line("Prospective with selection_side", dataCoverage.prospectiveWithSelectionSide()));
+        lines.add(line("Prospective missing selection_side", dataCoverage.prospectiveMissingSelectionSide()));
+        lines.add(line("Historical UNKNOWN selection_side", dataCoverage.historicalUnknownSelectionSide()));
+        lines.add("");
+        lines.add("Prospective real betting cohort");
+        DiagnosticsProspectiveRealBettingCohort cohort = report.prospectiveRealBettingCohort();
+        lines.add(line("Source", cohort.provenance()));
+        lines.add(line("Real bets", cohort.realBets()));
+        lines.add(line("Settled bets", cohort.settledBets()));
+        lines.add(line("Open bets", cohort.openBets()));
+        lines.add(line("Wins", cohort.wins()));
+        lines.add(line("Losses", cohort.losses()));
+        lines.add(line("Turnover", money(cohort.turnover())));
+        lines.add(line("Net realized PnL", money(cohort.netRealizedPnl())));
+        lines.add(line("ROI", number(cohort.roi())));
+        lines.add(line("Average requested odds", number(cohort.averageRequestedOdds())));
+        lines.add(line("Average executed odds", number(cohort.averageExecutedOdds())));
+        lines.add(line("Requested-to-executed odds difference", number(cohort.requestedToExecutedOddsDifference())));
+        lines.add(line("Fully matched", cohort.fullyMatched()));
+        lines.add(line("Partially matched", cohort.partiallyMatched()));
+        lines.add(line("Unmatched", cohort.unmatched()));
         lines.add("");
         lines.add("Paper vs real");
         lines.add(line("Settled matched pairs", report.paperVsRealMetrics().settledMatchedPairs()));
@@ -73,15 +129,16 @@ public class DiagnosticsFormatter {
         lines.add("");
         lines.add("Decision funnel");
         lines.add(line("Markets scanned", report.decisionFunnel().marketsScanned()));
-        lines.add(line("Runners analyzed", report.decisionFunnel().runnersAnalyzed()));
-        lines.add(line("Recommendations generated", report.decisionFunnel().recommendationsGenerated()));
-        lines.add(line("Strategy rejections", report.decisionFunnel().strategyRejections()));
+        lines.add(line("Runner evaluations", report.decisionFunnel().runnersAnalyzed()));
+        lines.add(line("Accepted evaluations", report.decisionFunnel().runnersAnalyzed() - report.decisionFunnel().strategyRejections()));
+        lines.add(line("Rejected evaluations", report.decisionFunnel().strategyRejections()));
+        lines.add(line("Signal generated events observed", report.decisionFunnel().recommendationsGenerated()));
         lines.add(line("Risk rejections", report.decisionFunnel().riskRejections()));
         lines.add(line("Confirmation requests", report.decisionFunnel().confirmationRequests()));
-        lines.add(line("Orders submitted", report.decisionFunnel().ordersSubmitted()));
-        lines.add(line("Orders matched", report.decisionFunnel().ordersMatched()));
-        lines.add(line("Orders rejected", report.decisionFunnel().ordersRejected()));
-        lines.add(line("Bets settled", report.decisionFunnel().betsSettled()));
+        lines.add(line("order.submitted events", report.decisionFunnel().ordersSubmitted()));
+        lines.add(line("order.accepted events", report.decisionFunnel().ordersMatched()));
+        lines.add(line("order.rejected events", report.decisionFunnel().ordersRejected()));
+        lines.add(line("order.settled events", report.decisionFunnel().betsSettled()));
         lines.add("");
         lines.add("Integrity");
         long warnings = report.integrityFindings().stream().filter(finding -> finding.severity().name().equals("WARNING")).count();
