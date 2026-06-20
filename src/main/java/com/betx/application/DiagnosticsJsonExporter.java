@@ -36,6 +36,8 @@ public class DiagnosticsJsonExporter {
         payload.put("coverage", report.coverage());
         payload.put("decisionFunnel", report.decisionFunnel());
         payload.put("executionMetrics", execution(report.executionMetrics()));
+        payload.put("executionDataCoverage", report.executionDataCoverage());
+        payload.put("matchingGaps", report.matchingGaps());
         payload.put("paperVsRealMetrics", report.paperVsRealMetrics());
         payload.put("integrityFindings", report.integrityFindings());
         payload.put("limitations", report.limitations());
@@ -66,6 +68,12 @@ public class DiagnosticsJsonExporter {
     private Map<String, Object> match(DiagnosticsMatch match) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("matchStatus", match.matchStatus());
+        value.put("matchProvenance", match.matchProvenance());
+        value.put("matchGapReason", match.matchGapReason());
+        value.put("candidateCount", match.candidateCount());
+        value.put("nearestCandidateTimeDifferenceMs", millis(match.nearestCandidateTimeDifference()));
+        value.put("recommendationId", match.recommendationId());
+        value.put("evaluationId", match.evaluationId());
         value.put("eventName", match.eventName());
         value.put("marketId", match.marketId());
         value.put("selectionId", match.selectionId());
@@ -77,6 +85,18 @@ public class DiagnosticsJsonExporter {
         value.put("paperExecutionTimestamp", instant(match.paperExecutionTimestamp()));
         value.put("realRecordedTimestamp", instant(match.realRecordedTimestamp()));
         value.put("recommendedOdds", match.recommendedOdds());
+        value.put("recommendedAt", instant(match.recommendedAt()));
+        value.put("exactRecommendedOdds", match.exactRecommendedOdds());
+        value.put("orderSubmittedAt", instant(match.orderSubmittedAt()));
+        value.put("orderResponseAt", instant(match.orderResponseAt()));
+        value.put("orderAcceptedAt", instant(match.orderAcceptedAt()));
+        value.put("executedAt", instant(match.executedAt()));
+        value.put("requestedOdds", match.requestedOdds());
+        value.put("averageExecutedOdds", match.averageExecutedOdds());
+        value.put("requestedStake", match.requestedStake());
+        value.put("matchedStake", match.matchedStake());
+        value.put("remainingStake", match.remainingStake());
+        value.put("executionStatus", match.executionStatus());
         value.put("paperOdds", match.paperOdds());
         value.put("realRecordedOdds", match.realRecordedOdds());
         value.put("realOddsSource", match.realOddsSource());

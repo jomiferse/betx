@@ -11,7 +11,8 @@ public record BetSignal(
     BigDecimal odds,
     BigDecimal stake,
     String reason,
-    String mode
+    String mode,
+    String evaluationId
 ) {
     public BetSignal {
         exchange = exchange == null || exchange.isBlank() ? "betfair" : exchange.strip().toLowerCase();
@@ -29,5 +30,19 @@ public record BetSignal(
         }
         reason = reason == null ? "" : reason;
         mode = mode == null || mode.isBlank() ? "dry-run" : mode;
+        evaluationId = evaluationId == null || evaluationId.isBlank() ? null : evaluationId.strip();
+    }
+
+    public BetSignal(
+        String exchange,
+        String marketId,
+        long selectionId,
+        BetSide side,
+        BigDecimal odds,
+        BigDecimal stake,
+        String reason,
+        String mode
+    ) {
+        this(exchange, marketId, selectionId, side, odds, stake, reason, mode, null);
     }
 }

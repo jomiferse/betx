@@ -382,7 +382,10 @@ public class BetfairRestGateway implements BetfairGateway {
                 order.path("selectionId").asLong(),
                 side,
                 stake.setScale(2, RoundingMode.HALF_UP),
-                risk.setScale(2, RoundingMode.HALF_UP)
+                risk.setScale(2, RoundingMode.HALF_UP),
+                matched.setScale(2, RoundingMode.HALF_UP),
+                remaining.setScale(2, RoundingMode.HALF_UP),
+                decimal(order, "averagePriceMatched")
             ));
         }
         return positions;

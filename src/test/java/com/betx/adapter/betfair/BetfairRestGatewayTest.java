@@ -382,7 +382,8 @@ class BetfairRestGatewayTest {
                         "side": "BACK",
                         "priceSize": {"price": 2.50, "size": 4.00},
                         "sizeMatched": 2.00,
-                        "sizeRemaining": 2.00
+                        "sizeRemaining": 2.00,
+                        "averagePriceMatched": 2.42
                       },
                       {
                         "betId": "manual-2",
@@ -391,7 +392,8 @@ class BetfairRestGatewayTest {
                         "side": "BACK",
                         "priceSize": {"price": 3.00, "size": 5.00},
                         "sizeMatched": 5.00,
-                        "sizeRemaining": 0.00
+                        "sizeRemaining": 0.00,
+                        "averagePriceMatched": 2.91
                       }
                     ]
                   },
@@ -444,6 +446,27 @@ class BetfairRestGatewayTest {
                 org.assertj.core.groups.Tuple.tuple("settled-2", new BigDecimal("1.25"))
             );
         assertThat(exposure.positions()).hasSize(2);
+        assertThat(exposure.positions())
+            .extracting(
+                com.betx.domain.exposure.ExchangeExposurePosition::externalOrderId,
+                com.betx.domain.exposure.ExchangeExposurePosition::matchedStake,
+                com.betx.domain.exposure.ExchangeExposurePosition::remainingStake,
+                com.betx.domain.exposure.ExchangeExposurePosition::averageExecutedOdds
+            )
+            .containsExactlyInAnyOrder(
+                org.assertj.core.groups.Tuple.tuple(
+                    "manual-1",
+                    new BigDecimal("2.00"),
+                    new BigDecimal("2.00"),
+                    new BigDecimal("2.42")
+                ),
+                org.assertj.core.groups.Tuple.tuple(
+                    "manual-2",
+                    new BigDecimal("5.00"),
+                    new BigDecimal("0.00"),
+                    new BigDecimal("2.91")
+                )
+            );
         server.verify();
     }
 

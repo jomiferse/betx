@@ -3,6 +3,7 @@ package com.betx.adapter.persistence;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.betx.domain.order.BetIntent;
+import com.betx.domain.order.BetExecutionStatus;
 import com.betx.domain.order.BetIntentSource;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.BetSettlementResult;
@@ -198,6 +199,104 @@ class JdbcBetIntentRepositoryTest {
                 assertThat(saved.effectiveAvailableBalance()).isEqualByComparingTo("16.70");
                 assertThat(saved.reservedBalance()).isEqualByComparingTo("1");
                 assertThat(saved.balanceSnapshotAt()).isEqualTo(snapshotAt);
+            });
+    }
+
+    @Test
+    void persistsProspectiveExecutionTraceFieldsAsNullableExactData() {
+        JdbcBetIntentRepository repository = new JdbcBetIntentRepository(tempDir.resolve("execution-trace.db").toString());
+        String databasePath = tempDir.resolve("execution-trace.db").toString();
+        BetIntent intent = intent(
+            "trace-1",
+            BetIntentSource.AUTOMATIC,
+            "1.1",
+            42L,
+            BetIntentStage.EXECUTED,
+            "Bet placed. BetId=bet-123",
+            "bet-123",
+            "2026-06-05T09:00:02Z"
+        ).withEvaluationId("eval-123")
+            .withOrderSubmitted(
+                Instant.parse("2026-06-05T09:00:00Z"),
+                new BigDecimal("2.50"),
+                new BigDecimal("5.00")
+            )
+            .withOrderResponse(
+                Instant.parse("2026-06-05T09:00:01Z"),
+                BetExecutionStatus.UNMATCHED
+            )
+            .withExchangeExecutionSnapshot(
+                Instant.parse("2026-06-05T09:00:30Z"),
+                new BigDecimal("2.48"),
+                new BigDecimal("2.00"),
+                new BigDecimal("3.00"),
+                BetExecutionStatus.PARTIALLY_MATCHED
+            );
+
+        repository.save(databasePath, intent);
+
+        assertThat(repository.findById(databasePath, "trace-1"))
+            .hasValueSatisfying(saved -> {
+                assertThat(saved.evaluationId()).isEqualTo("eval-123");
+                assertThat(saved.recommendationId()).isNull();
+                assertThat(saved.orderSubmittedAt()).isEqualTo(Instant.parse("2026-06-05T09:00:00Z"));
+                assertThat(saved.orderResponseAt()).isEqualTo(Instant.parse("2026-06-05T09:00:01Z"));
+                assertThat(saved.orderAcceptedAt()).isNull();
+                assertThat(saved.requestedOdds()).isEqualByComparingTo("2.50");
+                assertThat(saved.requestedStake()).isEqualByComparingTo("5.00");
+                assertThat(saved.averageExecutedOdds()).isEqualByComparingTo("2.48");
+                assertThat(saved.matchedStake()).isEqualByComparingTo("2.00");
+                assertThat(saved.remainingStake()).isEqualByComparingTo("3.00");
+                assertThat(saved.executedAt()).isEqualTo(Instant.parse("2026-06-05T09:00:30Z"));
+                assertThat(saved.executionStatus()).isEqualTo(BetExecutionStatus.PARTIALLY_MATCHED);
+            });
+    }
+
+    @Test
+    void migratesLegacyBetIntentTableWithNullableTraceColumns() throws Exception {
+        Path database = tempDir.resolve("legacy-trace.db");
+        try (var connection = DriverManager.getConnection("jdbc:sqlite:" + database);
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate("""
+                CREATE TABLE bet_intents (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    exchange TEXT NOT NULL,
+                    market_id TEXT NOT NULL,
+                    selection_id INTEGER NOT NULL,
+                    event_name TEXT,
+                    market_name TEXT,
+                    runner_name TEXT,
+                    reason TEXT,
+                    odds TEXT NOT NULL,
+                    max_stake TEXT NOT NULL,
+                    available_balance TEXT,
+                    selected_stake TEXT,
+                    stage TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """);
+        }
+
+        JdbcBetIntentRepository repository = new JdbcBetIntentRepository(database.toString());
+        repository.save(database.toString(), intent(
+            "legacy",
+            BetIntentSource.AUTOMATIC,
+            "1.1",
+            42L,
+            BetIntentStage.FAILED,
+            "blocked",
+            "2026-06-05T09:00:00Z"
+        ));
+
+        assertThat(repository.findById(database.toString(), "legacy"))
+            .hasValueSatisfying(saved -> {
+                assertThat(saved.evaluationId()).isNull();
+                assertThat(saved.recommendationId()).isNull();
+                assertThat(saved.orderSubmittedAt()).isNull();
+                assertThat(saved.orderResponseAt()).isNull();
+                assertThat(saved.executionStatus()).isNull();
             });
     }
 

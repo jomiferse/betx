@@ -37,7 +37,10 @@ class DiagnosticsExporterTest {
             .hasSize(2)
             .first()
             .asString()
-            .contains("match_status,market_id,selection_id,event_name");
+            .contains("match_status,match_provenance,match_gap_reason")
+            .contains("evaluation_id")
+            .contains("order_submitted_at")
+            .contains("average_executed_odds");
     }
 
     private static DiagnosticsReport report() {

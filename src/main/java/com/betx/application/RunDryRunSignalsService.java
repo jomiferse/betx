@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -345,12 +346,13 @@ public class RunDryRunSignalsService {
                         currentChange = changeDetector.compare(previous.get().snapshot(), snapshot);
                         currentChange.ifPresent(changes::add);
                     }
+                    String evaluationId = UUID.randomUUID().toString();
                     RunnerAnalysis analysis = analyzer.analyze(
                         snapshot,
                         recent,
                         strategyConfig.get(),
                         config.risk()
-                    );
+                    ).withEvaluationId(evaluationId);
                     runnerAnalyses.add(analysis);
                     logSignalDecision(cycleId, observedAt, analysis);
                     Optional<MatchIntelligenceAssessment> assessment = Optional.empty();
@@ -522,7 +524,8 @@ public class RunDryRunSignalsService {
             analysis.bestBackPrice(),
             config.risk().maxStake(),
             analysis.reason(),
-            "signal"
+            "signal",
+            analysis.evaluationId()
         );
     }
 
@@ -608,7 +611,8 @@ public class RunDryRunSignalsService {
             null,
             null,
             null,
-            null
+            null,
+            analysis.evaluationId()
         );
     }
 
@@ -730,6 +734,7 @@ public class RunDryRunSignalsService {
             .executionMode("scan")
             .result(accepted ? "accepted" : "rejected")
             .field("reason", analysis.reason())
+            .field("evaluationId", analysis.evaluationId())
             .field("odds", analysis.bestBackPrice())
             .field("liquidity", analysis.liquidity())
             .field("runner", analysis.displayRunner())

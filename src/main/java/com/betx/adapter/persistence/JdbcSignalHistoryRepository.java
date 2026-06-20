@@ -51,8 +51,9 @@ public class JdbcSignalHistoryRepository implements SignalHistoryRepository {
                     best_back_price, best_lay_price, spread, liquidity,
                     back_percentage_delta, lay_percentage_delta, liquidity_percentage_delta,
                     intelligence_decision, intelligence_confidence, intelligence_summary,
-                    bet_intent_id, external_order_id, order_stage, selected_stake, result_message, realized_profit_loss
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    bet_intent_id, external_order_id, order_stage, selected_stake, result_message, realized_profit_loss,
+                    evaluation_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(exchange, market_id, selection_id, observed_at) DO UPDATE SET
                     event_name = excluded.event_name,
                     market_name = excluded.market_name,
@@ -255,6 +256,7 @@ public class JdbcSignalHistoryRepository implements SignalHistoryRepository {
             addColumnIfMissing(connection, "selected_stake", "TEXT");
             addColumnIfMissing(connection, "result_message", "TEXT");
             addColumnIfMissing(connection, "realized_profit_loss", "TEXT");
+            addColumnIfMissing(connection, "evaluation_id", "TEXT");
             statement.executeUpdate("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_history_unique_decision
                 ON signal_history(exchange, market_id, selection_id, observed_at)
@@ -274,6 +276,10 @@ public class JdbcSignalHistoryRepository implements SignalHistoryRepository {
             statement.executeUpdate("""
                 CREATE INDEX IF NOT EXISTS idx_signal_history_external_order_id
                 ON signal_history(external_order_id)
+                """);
+            statement.executeUpdate("""
+                CREATE INDEX IF NOT EXISTS idx_signal_history_evaluation_id
+                ON signal_history(evaluation_id)
                 """);
         }
     }
@@ -323,6 +329,7 @@ public class JdbcSignalHistoryRepository implements SignalHistoryRepository {
         setDecimal(statement, 27, entry.selectedStake());
         statement.setString(28, entry.resultMessage());
         setDecimal(statement, 29, entry.realizedProfitLoss());
+        statement.setString(30, entry.evaluationId());
     }
 
     private void bindIntentFields(PreparedStatement statement, BetIntent intent, int startIndex) throws SQLException {
@@ -376,7 +383,8 @@ public class JdbcSignalHistoryRepository implements SignalHistoryRepository {
             resultSet.getString("order_stage"),
             decimal(resultSet, "selected_stake"),
             resultSet.getString("result_message"),
-            decimal(resultSet, "realized_profit_loss")
+            decimal(resultSet, "realized_profit_loss"),
+            resultSet.getString("evaluation_id")
         );
     }
 

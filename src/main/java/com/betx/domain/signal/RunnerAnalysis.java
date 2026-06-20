@@ -21,7 +21,8 @@ public record RunnerAnalysis(
     BigDecimal liquidity,
     RecommendationType recommendation,
     String reason,
-    SignalScore score
+    SignalScore score,
+    String evaluationId
 ) {
     public RunnerAnalysis {
         if (snapshotKeyMissing(exchange, marketId, selectionId)) {
@@ -34,6 +35,7 @@ public record RunnerAnalysis(
         strategyName = strategyName == null || strategyName.isBlank() ? "N/A" : strategyName.strip();
         reason = reason == null || reason.isBlank() ? "unspecified" : reason;
         score = score == null ? SignalScore.zero(reason) : score;
+        evaluationId = evaluationId == null || evaluationId.isBlank() ? null : evaluationId.strip();
     }
 
     public RunnerAnalysis(
@@ -69,7 +71,8 @@ public record RunnerAnalysis(
             liquidity,
             recommendation,
             reason,
-            SignalScore.zero(reason)
+            SignalScore.zero(reason),
+            null
         );
     }
 
@@ -107,7 +110,8 @@ public record RunnerAnalysis(
             liquidity,
             recommendation,
             reason,
-            score
+            score,
+            null
         );
     }
 
@@ -143,12 +147,36 @@ public record RunnerAnalysis(
             snapshot.liquidity(),
             recommendation,
             reason,
-            score
+            score,
+            null
         );
     }
 
     public String displayRunner() {
         return runnerName == null ? String.valueOf(selectionId) : runnerName;
+    }
+
+    public RunnerAnalysis withEvaluationId(String newEvaluationId) {
+        return new RunnerAnalysis(
+            exchange,
+            marketId,
+            marketName,
+            eventName,
+            competitionName,
+            marketStartTime,
+            selectionId,
+            runnerName,
+            runnerType,
+            strategyName,
+            bestBackPrice,
+            bestLayPrice,
+            spread,
+            liquidity,
+            recommendation,
+            reason,
+            score,
+            newEvaluationId
+        );
     }
 
     private static boolean snapshotKeyMissing(String exchange, String marketId, long selectionId) {

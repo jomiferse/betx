@@ -36,6 +36,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -389,7 +390,9 @@ public class RunPaperTradingService {
                     diagnostics.recordHistory(snapshot, recent);
                     diagnostics.recordRunnerClassification(snapshot);
                     runnersAnalyzed++;
-                    RunnerAnalysis analysis = analyzer.analyze(snapshot, recent, strategyConfig.get(), config.risk());
+                    String evaluationId = UUID.randomUUID().toString();
+                    RunnerAnalysis analysis = analyzer.analyze(snapshot, recent, strategyConfig.get(), config.risk())
+                        .withEvaluationId(evaluationId);
                     PaperTradeAnalyzerRejectionReason analyzerOutcome;
                     if (analysis.recommendation() == RecommendationType.BET
                         && runnerType(snapshot) == RunnerType.DRAW) {
@@ -398,16 +401,22 @@ public class RunPaperTradingService {
                         PaperTrade paperTrade = PaperTrade.recommended(snapshot, observedAt, config.risk().maxStake());
                         PaperTrade executed = executePaperTrade(observedAt, paperTrade, snapshot, oddsSlippageRate, slippageModel);
                         logPaperTrade("paper_trade.recommended", "recommended", paperTrade, cycleId)
+                            .field("evaluationId", analysis.evaluationId())
+                            .field("recommendationId", (String) null)
                             .field("requestedOdds", paperTrade.requestedOdds())
                             .emit();
                         if (executed.status() == PaperTradeStatus.EXECUTION_FAILED) {
                             executionFailures++;
                             logPaperTrade("paper_trade.execution_failed", "failed", executed, cycleId)
+                                .field("evaluationId", analysis.evaluationId())
+                                .field("recommendationId", (String) null)
                                 .field("reason", "insufficient_liquidity_or_invalid_odds")
                                 .emit();
                         } else {
                             recommendationsGenerated++;
                             logPaperTrade("paper_trade.executed", "executed", executed, cycleId)
+                                .field("evaluationId", analysis.evaluationId())
+                                .field("recommendationId", (String) null)
                                 .field("executionOdds", executed.executionOdds())
                                 .emit();
                         }
@@ -425,6 +434,7 @@ public class RunPaperTradingService {
                             .executionMode("paper")
                             .result("rejected")
                             .field("reason", analyzerOutcome)
+                            .field("evaluationId", analysis.evaluationId())
                             .field("odds", snapshot.bestBackPrice())
                             .field("liquidity", snapshot.liquidity())
                             .emit();
@@ -526,7 +536,9 @@ public class RunPaperTradingService {
             previous == null ? null : percentageDelta(previous.bestBackPrice(), snapshot.bestBackPrice()),
             previous == null ? null : percentageDelta(previous.bestLayPrice(), snapshot.bestLayPrice()),
             previous == null ? null : percentageDelta(previous.liquidity(), snapshot.liquidity()),
-            analyzerReason
+            analyzerReason,
+            analysis.evaluationId(),
+            null
         );
     }
 

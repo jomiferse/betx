@@ -18,6 +18,7 @@ import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.ExchangeConfig;
 import com.betx.domain.exposure.ExchangeExposure;
 import com.betx.domain.exposure.ExchangeSettledOrder;
+import com.betx.domain.order.BetExecutionStatus;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.BetSignal;
 import com.betx.domain.signal.BetSide;
@@ -1024,7 +1025,7 @@ class TelegramBetConfirmationServiceTest {
         );
 
         service.sync(CONFIG_PATH, resultOf(
-            signal("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5)),
+            signalWithEvaluationId("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "eval-123"),
             analysis("Team A")
         ));
 
@@ -1033,6 +1034,18 @@ class TelegramBetConfirmationServiceTest {
                 assertThat(intent.source()).isEqualTo(BetIntentSource.AUTOMATIC);
                 assertThat(intent.externalOrderId()).isEqualTo("bet-123");
                 assertThat(intent.availableBalance()).isEqualByComparingTo("12.5");
+                assertThat(intent.evaluationId()).isEqualTo("eval-123");
+                assertThat(intent.recommendationId()).isNull();
+                assertThat(intent.orderSubmittedAt()).isNotNull();
+                assertThat(intent.orderResponseAt()).isNotNull();
+                assertThat(intent.orderAcceptedAt()).isNull();
+                assertThat(intent.executedAt()).isNull();
+                assertThat(intent.requestedOdds()).isEqualByComparingTo("2.5");
+                assertThat(intent.requestedStake()).isEqualByComparingTo("3");
+                assertThat(intent.averageExecutedOdds()).isNull();
+                assertThat(intent.matchedStake()).isNull();
+                assertThat(intent.remainingStake()).isNull();
+                assertThat(intent.executionStatus()).isEqualTo(BetExecutionStatus.UNMATCHED);
             });
         assertThat(telegram.sentMessages()).singleElement()
             .satisfies(message -> assertThat(message.text())
@@ -1686,6 +1699,17 @@ class TelegramBetConfirmationServiceTest {
 
     private BetSignal signal(String exchange, String marketId, long selectionId, BigDecimal odds, BigDecimal stake) {
         return new BetSignal(exchange, marketId, selectionId, BetSide.BACK, odds, stake, "liquidity_ok", "live");
+    }
+
+    private BetSignal signalWithEvaluationId(
+        String exchange,
+        String marketId,
+        long selectionId,
+        BigDecimal odds,
+        BigDecimal stake,
+        String evaluationId
+    ) {
+        return new BetSignal(exchange, marketId, selectionId, BetSide.BACK, odds, stake, "liquidity_ok", "live", evaluationId);
     }
 
     private BetSignal signal(String exchange, String marketId, long selectionId, BigDecimal odds, BigDecimal stake, String reason) {

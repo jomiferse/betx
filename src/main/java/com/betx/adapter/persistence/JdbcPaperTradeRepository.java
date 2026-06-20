@@ -70,8 +70,8 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
                      runner_name, side, status, recommendation_timestamp, available_back_odds, requested_odds,
                      execution_timestamp, execution_odds, matched, closing_timestamp, closing_odds,
                      settlement_timestamp, result, stake, gross_pnl, commission, net_pnl,
-                     decimal_clv_ratio, implied_probability_change, paper_mode
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     decimal_clv_ratio, implied_probability_change, paper_mode, recommendation_id
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(id) DO UPDATE SET
                      event_name = excluded.event_name,
                      market_name = excluded.market_name,
@@ -96,7 +96,8 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
                      net_pnl = excluded.net_pnl,
                      decimal_clv_ratio = excluded.decimal_clv_ratio,
                      implied_probability_change = excluded.implied_probability_change,
-                     paper_mode = excluded.paper_mode
+                     paper_mode = excluded.paper_mode,
+                     recommendation_id = excluded.recommendation_id
                  """)) {
             bind(statement, trade);
             statement.executeUpdate();
@@ -195,13 +196,23 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
                     decimal_clv_ratio TEXT,
                     implied_probability_change TEXT,
                     paper_mode INTEGER NOT NULL,
+                    recommendation_id TEXT,
                     UNIQUE(exchange, market_id, selection_id)
                 )
                 """);
             ensureSideColumn(connection);
+            addColumnIfMissing(connection, "paper_trades", "recommendation_id", "TEXT");
             statement.executeUpdate("""
                 CREATE INDEX IF NOT EXISTS idx_paper_trades_status
                 ON paper_trades(status, market_start_time)
+                """);
+            statement.executeUpdate("""
+                CREATE INDEX IF NOT EXISTS idx_paper_trades_recommendation_id
+                ON paper_trades(recommendation_id)
+                """);
+            statement.executeUpdate("""
+                CREATE INDEX IF NOT EXISTS idx_paper_trades_match_key
+                ON paper_trades(exchange, market_id, selection_id, recommendation_timestamp)
                 """);
         }
     }
@@ -212,6 +223,15 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
         }
         try (Statement statement = connection.createStatement()) {
             statement.executeUpdate("ALTER TABLE paper_trades ADD COLUMN side TEXT NOT NULL DEFAULT 'BACK'");
+        }
+    }
+
+    private void addColumnIfMissing(Connection connection, String tableName, String columnName, String definition) throws SQLException {
+        if (hasColumn(connection, tableName, columnName)) {
+            return;
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("ALTER TABLE " + tableName + " ADD COLUMN " + columnName + " " + definition);
         }
     }
 
@@ -256,6 +276,7 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
         setDecimal(statement, 26, trade.decimalClvRatio());
         setDecimal(statement, 27, trade.impliedProbabilityChange());
         statement.setInt(28, trade.paperMode() ? 1 : 0);
+        statement.setString(29, trade.recommendationId());
     }
 
     private PaperTrade map(ResultSet resultSet) throws SQLException {
@@ -287,7 +308,8 @@ public class JdbcPaperTradeRepository implements PaperTradeRepository {
             decimal(resultSet, "net_pnl"),
             decimal(resultSet, "decimal_clv_ratio"),
             decimal(resultSet, "implied_probability_change"),
-            resultSet.getInt("paper_mode") == 1
+            resultSet.getInt("paper_mode") == 1,
+            resultSet.getString("recommendation_id")
         );
     }
 

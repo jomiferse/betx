@@ -35,7 +35,8 @@ public record PaperTrade(
     BigDecimal netPnl,
     BigDecimal decimalClvRatio,
     BigDecimal impliedProbabilityChange,
-    boolean paperMode
+    boolean paperMode,
+    String recommendationId
 ) {
     public PaperTrade {
         if (exchange == null || exchange.isBlank()) {
@@ -56,6 +57,70 @@ public record PaperTrade(
         grossPnl = grossPnl == null ? BigDecimal.ZERO : grossPnl;
         commission = commission == null ? BigDecimal.ZERO : commission;
         netPnl = netPnl == null ? BigDecimal.ZERO : netPnl;
+        recommendationId = recommendationId == null || recommendationId.isBlank() ? null : recommendationId.strip();
+    }
+
+    public PaperTrade(
+        String id,
+        String exchange,
+        String marketId,
+        long selectionId,
+        String eventName,
+        String marketName,
+        String league,
+        Instant marketStartTime,
+        String runnerName,
+        BetSide side,
+        PaperTradeStatus status,
+        Instant recommendationTimestamp,
+        BigDecimal availableBackOdds,
+        BigDecimal requestedOdds,
+        Instant executionTimestamp,
+        BigDecimal executionOdds,
+        boolean matched,
+        Instant closingTimestamp,
+        BigDecimal closingOdds,
+        Instant settlementTimestamp,
+        BacktestOutcome result,
+        BigDecimal stake,
+        BigDecimal grossPnl,
+        BigDecimal commission,
+        BigDecimal netPnl,
+        BigDecimal decimalClvRatio,
+        BigDecimal impliedProbabilityChange,
+        boolean paperMode
+    ) {
+        this(
+            id,
+            exchange,
+            marketId,
+            selectionId,
+            eventName,
+            marketName,
+            league,
+            marketStartTime,
+            runnerName,
+            side,
+            status,
+            recommendationTimestamp,
+            availableBackOdds,
+            requestedOdds,
+            executionTimestamp,
+            executionOdds,
+            matched,
+            closingTimestamp,
+            closingOdds,
+            settlementTimestamp,
+            result,
+            stake,
+            grossPnl,
+            commission,
+            netPnl,
+            decimalClvRatio,
+            impliedProbabilityChange,
+            paperMode,
+            null
+        );
     }
 
     public static PaperTrade recommended(MarketSnapshot snapshot, Instant observedAt, BigDecimal stake) {

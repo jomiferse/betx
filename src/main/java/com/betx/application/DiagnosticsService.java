@@ -3,6 +3,8 @@ package com.betx.application;
 import com.betx.application.DiagnosticsModel.DiagnosticsDataProvenance;
 import com.betx.application.DiagnosticsModel.DiagnosticsDataset;
 import com.betx.application.DiagnosticsModel.DiagnosticsRequest;
+import com.betx.application.DiagnosticsModel.MatchGapReason;
+import com.betx.application.DiagnosticsModel.MatchProvenance;
 import com.betx.application.DiagnosticsModel.MatchStatus;
 import com.betx.application.DiagnosticsModel.RealBetDiagnosticRow;
 import com.betx.application.DiagnosticsModel.RealOddsSource;
@@ -70,10 +72,12 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         DiagnosticsCoverage coverage = coverage(dataset, matches);
         DiagnosticsPaperVsRealMetrics paperVsReal = paperVsRealMetrics(matches);
         DiagnosticsExecutionMetrics execution = executionMetrics(dataset.realBets(), matches, logs);
+        DiagnosticsExecutionDataCoverage executionDataCoverage = executionDataCoverage(dataset.realBets());
         DiagnosticsDecisionFunnel funnel = decisionFunnel(dataset, logs);
         List<DiagnosticFinding> findings = integrityFindings(dataset, matches);
         List<String> limitations = limitations(logs);
         List<String> topFindings = topFindings(coverage, paperVsReal, execution, findings);
+        Map<MatchGapReason, Long> matchingGaps = matchingGaps(matches);
         return new DiagnosticsReport(
             Instant.now(clock),
             requestedPeriod,
@@ -84,7 +88,9 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             findings,
             limitations,
             topFindings,
-            matches
+            matches,
+            matchingGaps,
+            executionDataCoverage
         );
     }
 
@@ -112,9 +118,23 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             List<RealBetDiagnosticRow> reals = sortedReal(realByKey.getOrDefault(key, List.of()));
             List<PaperTrade> papers = sortedPaper(paperByKey.getOrDefault(key, List.of()));
             if (reals.isEmpty()) {
-                papers.forEach(paper -> matches.add(match(null, paper, MatchStatus.PAPER_ONLY)));
+                papers.forEach(paper -> matches.add(match(
+                    null,
+                    paper,
+                    MatchStatus.PAPER_ONLY,
+                    MatchGapReason.NO_REAL_WITH_SAME_MARKET_SELECTION,
+                    0,
+                    null
+                )));
             } else if (papers.isEmpty()) {
-                reals.forEach(real -> matches.add(match(real, null, MatchStatus.REAL_ONLY)));
+                reals.forEach(real -> matches.add(match(
+                    real,
+                    null,
+                    MatchStatus.REAL_ONLY,
+                    MatchGapReason.NO_PAPER_WITH_SAME_MARKET_SELECTION,
+                    0,
+                    null
+                )));
             } else if (reals.size() == 1 && papers.size() == 1 && withinWindow(reals.getFirst(), papers.getFirst(), window)) {
                 matches.add(match(reals.getFirst(), papers.getFirst(), MatchStatus.MATCHED));
             } else {
@@ -134,7 +154,14 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         List<DiagnosticsMatch> matches
     ) {
         if (reals.size() != papers.size()) {
-            matches.add(match(reals.getFirst(), papers.getFirst(), MatchStatus.AMBIGUOUS));
+            matches.add(match(
+                reals.getFirst(),
+                papers.getFirst(),
+                MatchStatus.AMBIGUOUS,
+                reals.size() > papers.size() ? MatchGapReason.MULTIPLE_REAL_CANDIDATES : MatchGapReason.MULTIPLE_PAPER_CANDIDATES,
+                reals.size() + papers.size(),
+                nearestDistance(reals, papers)
+            ));
             return;
         }
         Set<String> usedRealIds = new HashSet<>();
@@ -158,16 +185,62 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             .filter(paper -> !usedPaperIds.contains(paper.id()))
             .toList();
         if (!remainingReals.isEmpty() && !remainingPapers.isEmpty()) {
-            matches.add(match(remainingReals.getFirst(), remainingPapers.getFirst(), MatchStatus.AMBIGUOUS));
-            remainingReals.stream().skip(1).forEach(real -> matches.add(match(real, null, MatchStatus.REAL_ONLY)));
-            remainingPapers.stream().skip(1).forEach(paper -> matches.add(match(null, paper, MatchStatus.PAPER_ONLY)));
+            matches.add(match(
+                remainingReals.getFirst(),
+                remainingPapers.getFirst(),
+                MatchStatus.AMBIGUOUS,
+                MatchGapReason.MULTIPLE_VALID_CANDIDATES,
+                remainingReals.size() + remainingPapers.size(),
+                nearestDistance(remainingReals, remainingPapers)
+            ));
+            remainingReals.stream().skip(1).forEach(real -> matches.add(match(
+                real,
+                null,
+                MatchStatus.REAL_ONLY,
+                MatchGapReason.MULTIPLE_PAPER_CANDIDATES,
+                papers.size(),
+                nearestDistance(List.of(real), papers)
+            )));
+            remainingPapers.stream().skip(1).forEach(paper -> matches.add(match(
+                null,
+                paper,
+                MatchStatus.PAPER_ONLY,
+                MatchGapReason.MULTIPLE_REAL_CANDIDATES,
+                reals.size(),
+                nearestDistance(reals, List.of(paper))
+            )));
         } else {
-            remainingReals.forEach(real -> matches.add(match(real, null, MatchStatus.REAL_ONLY)));
-            remainingPapers.forEach(paper -> matches.add(match(null, paper, MatchStatus.PAPER_ONLY)));
+            remainingReals.forEach(real -> matches.add(match(
+                real,
+                null,
+                MatchStatus.REAL_ONLY,
+                MatchGapReason.OUTSIDE_MATCH_WINDOW,
+                papers.size(),
+                nearestDistance(List.of(real), papers)
+            )));
+            remainingPapers.forEach(paper -> matches.add(match(
+                null,
+                paper,
+                MatchStatus.PAPER_ONLY,
+                MatchGapReason.OUTSIDE_MATCH_WINDOW,
+                reals.size(),
+                nearestDistance(reals, List.of(paper))
+            )));
         }
     }
 
     private DiagnosticsMatch match(RealBetDiagnosticRow real, PaperTrade paper, MatchStatus status) {
+        return match(real, paper, status, null, null, null);
+    }
+
+    private DiagnosticsMatch match(
+        RealBetDiagnosticRow real,
+        PaperTrade paper,
+        MatchStatus status,
+        MatchGapReason gapReason,
+        Integer candidateCount,
+        Duration nearestCandidateTimeDifference
+    ) {
         BigDecimal paperPnl = paper == null ? null : paper.netPnl();
         BigDecimal realPnl = real == null ? null : real.realizedProfitLoss();
         BigDecimal paperPerUnit = perUnit(paperPnl, paper == null ? null : paper.stake());
@@ -198,7 +271,25 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             realPnl != null && paperPnl != null ? money(realPnl.subtract(paperPnl)) : null,
             paperPerUnit,
             realPerUnit,
-            realPerUnit != null && paperPerUnit != null ? decimal(realPerUnit.subtract(paperPerUnit)) : null
+            realPerUnit != null && paperPerUnit != null ? decimal(realPerUnit.subtract(paperPerUnit)) : null,
+            provenance(status),
+            gapReason,
+            candidateCount,
+            nearestCandidateTimeDifference,
+            firstNonNull(real == null ? null : real.recommendationId(), paper == null ? null : paper.recommendationId()),
+            real == null ? null : real.evaluationId(),
+            real == null ? null : real.recommendedAt(),
+            real == null ? null : real.recommendedOdds(),
+            real == null ? null : real.orderSubmittedAt(),
+            real == null ? null : real.orderResponseAt(),
+            real == null ? null : real.orderAcceptedAt(),
+            real == null ? null : real.executedAt(),
+            real == null ? null : real.requestedOdds(),
+            real == null ? null : real.averageExecutedOdds(),
+            real == null ? null : real.requestedStake(),
+            real == null ? null : real.matchedStake(),
+            real == null ? null : real.remainingStake(),
+            real == null || real.executionStatus() == null ? null : real.executionStatus().name()
         );
     }
 
@@ -248,8 +339,26 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             rate(realPnl, realStake),
             paperPerUnit != null && realPerUnit != null ? decimal(realPerUnit.subtract(paperPerUnit)) : null,
             settled.stream().filter(match -> !Objects.equals(match.paperResult(), match.realResult())).count(),
-            oddsDiffs.isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.APPROXIMATED,
+            oddsDiffs.isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.LEGACY_APPROXIMATION,
             settled.isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.SQLITE_EXACT
+        );
+    }
+
+    private DiagnosticsExecutionDataCoverage executionDataCoverage(List<RealBetDiagnosticRow> realBets) {
+        return new DiagnosticsExecutionDataCoverage(
+            realBets.size(),
+            realBets.stream().filter(row -> row.evaluationId() != null).count(),
+            realBets.stream().filter(row -> row.recommendationId() != null).count(),
+            realBets.stream().filter(row -> row.orderSubmittedAt() != null).count(),
+            realBets.stream().filter(row -> row.orderResponseAt() != null).count(),
+            realBets.stream().filter(row -> row.orderAcceptedAt() != null).count(),
+            realBets.stream().filter(row -> row.executedAt() != null).count(),
+            realBets.stream().filter(row -> row.requestedOdds() != null).count(),
+            realBets.stream().filter(row -> row.averageExecutedOdds() != null).count(),
+            realBets.stream().filter(row -> row.requestedStake() != null).count(),
+            realBets.stream().filter(row -> row.matchedStake() != null).count(),
+            realBets.stream().filter(row -> row.remainingStake() != null).count(),
+            realBets.stream().filter(row -> row.executionStatus() != null).count()
         );
     }
 
@@ -282,7 +391,7 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             durationPercentile(latencies, 0.95),
             latencies.isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.LOG_CORRELATED,
             average(oddsDiffs),
-            oddsDiffs.isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.APPROXIMATED,
+            oddsDiffs.isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.LEGACY_APPROXIMATION,
             realBets.stream().filter(row -> row.recordedOdds() == null).count(),
             realBets.stream().filter(row -> row.externalOrderId() == null || row.externalOrderId().isBlank()).count()
         );
@@ -346,7 +455,7 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         List<String> values = new ArrayList<>();
         values.add("bet_intents.odds is reported as realRecordedOdds with source BET_INTENT; diagnostics does not assume it is executed odds.");
         values.add("Real execution latency is calculated only from correlated order.submitted and order.accepted JSONL events.");
-        values.add("Fully matched, partially matched, unmatched, rejected, and cancelled execution counts are read from structured logs when available; SQLite bet_intents does not persist partial-fill detail.");
+        values.add("Exact persisted execution fields are used only when present; legacy rows may not include partial-fill detail.");
         values.add("paper_trades does not persist strategy_name, so strategy is not required for paper-real matching.");
         values.add("Real-vs-paper odds metrics are APPROXIMATED because the real persisted odds source is bet_intents, not a proven executed price.");
         values.addAll(logs.limitations());
@@ -406,6 +515,37 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
 
     private static int count(List<DiagnosticsMatch> matches, MatchStatus status) {
         return (int) matches.stream().filter(match -> match.matchStatus() == status).count();
+    }
+
+    private static Map<MatchGapReason, Long> matchingGaps(List<DiagnosticsMatch> matches) {
+        return matches.stream()
+            .map(DiagnosticsMatch::matchGapReason)
+            .filter(Objects::nonNull)
+            .collect(Collectors.groupingBy(Function.identity(), java.util.LinkedHashMap::new, Collectors.counting()));
+    }
+
+    private static MatchProvenance provenance(MatchStatus status) {
+        return switch (status) {
+            case MATCHED -> MatchProvenance.LEGACY_MARKET_SELECTION_TIME;
+            case AMBIGUOUS -> MatchProvenance.AMBIGUOUS;
+            case REAL_ONLY, PAPER_ONLY -> MatchProvenance.UNMATCHED;
+        };
+    }
+
+    private static Duration nearestDistance(List<RealBetDiagnosticRow> reals, List<PaperTrade> papers) {
+        Duration nearest = null;
+        for (RealBetDiagnosticRow real : reals) {
+            for (PaperTrade paper : papers) {
+                if (real.sortTimestamp() == null || paper.recommendationTimestamp() == null) {
+                    continue;
+                }
+                Duration distance = Duration.between(paper.recommendationTimestamp(), real.sortTimestamp()).abs();
+                if (nearest == null || distance.compareTo(nearest) < 0) {
+                    nearest = distance;
+                }
+            }
+        }
+        return nearest;
     }
 
     private static List<RealBetDiagnosticRow> sortedReal(List<RealBetDiagnosticRow> rows) {

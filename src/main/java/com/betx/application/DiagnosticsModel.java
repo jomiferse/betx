@@ -4,6 +4,7 @@ import com.betx.domain.config.ConfigPath;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.BetSettlementResult;
 import com.betx.domain.order.SelectionSide;
+import com.betx.domain.order.BetExecutionStatus;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -26,8 +27,30 @@ public final class DiagnosticsModel {
     public enum DiagnosticsDataProvenance {
         SQLITE_EXACT,
         LOG_CORRELATED,
+        LEGACY_APPROXIMATION,
         APPROXIMATED,
         UNAVAILABLE
+    }
+
+    public enum MatchGapReason {
+        NO_PAPER_WITH_SAME_MARKET_SELECTION,
+        NO_REAL_WITH_SAME_MARKET_SELECTION,
+        OUTSIDE_MATCH_WINDOW,
+        MULTIPLE_PAPER_CANDIDATES,
+        MULTIPLE_REAL_CANDIDATES,
+        MULTIPLE_VALID_CANDIDATES,
+        MISSING_CORRELATION_FIELDS,
+        MISSING_TIMESTAMP,
+        DIFFERENT_EXCHANGE,
+        DIRECT_RECOMMENDATION_ID_MISMATCH,
+        UNKNOWN
+    }
+
+    public enum MatchProvenance {
+        DIRECT_RECOMMENDATION_ID,
+        LEGACY_MARKET_SELECTION_TIME,
+        UNMATCHED,
+        AMBIGUOUS
     }
 
     public enum DiagnosticFindingSeverity {
@@ -94,7 +117,21 @@ public final class DiagnosticsModel {
         BigDecimal availableBalance,
         BigDecimal effectiveAvailableBalance,
         BigDecimal reservedBalance,
-        Instant balanceSnapshotAt
+        Instant balanceSnapshotAt,
+        String evaluationId,
+        String recommendationId,
+        Instant recommendedAt,
+        BigDecimal recommendedOdds,
+        Instant orderSubmittedAt,
+        Instant orderResponseAt,
+        Instant orderAcceptedAt,
+        Instant executedAt,
+        BigDecimal requestedOdds,
+        BigDecimal averageExecutedOdds,
+        BigDecimal requestedStake,
+        BigDecimal matchedStake,
+        BigDecimal remainingStake,
+        BetExecutionStatus executionStatus
     ) {
         public RealBetDiagnosticRow {
             exchange = blankToNull(exchange);
@@ -119,6 +156,72 @@ public final class DiagnosticsModel {
                 return updatedAt;
             }
             return settledAt;
+        }
+
+        public RealBetDiagnosticRow(
+            String id,
+            String exchange,
+            String marketId,
+            long selectionId,
+            String eventName,
+            String marketName,
+            String runnerName,
+            SelectionSide selectionSide,
+            String competitionName,
+            String strategyName,
+            BigDecimal recordedOdds,
+            BigDecimal selectedStake,
+            BetIntentStage stage,
+            BetSettlementResult settlementResult,
+            BigDecimal realizedProfitLoss,
+            String externalOrderId,
+            Instant createdAt,
+            Instant settledAt,
+            Instant updatedAt,
+            BigDecimal availableBalance,
+            BigDecimal effectiveAvailableBalance,
+            BigDecimal reservedBalance,
+            Instant balanceSnapshotAt
+        ) {
+            this(
+                id,
+                exchange,
+                marketId,
+                selectionId,
+                eventName,
+                marketName,
+                runnerName,
+                selectionSide,
+                competitionName,
+                strategyName,
+                recordedOdds,
+                selectedStake,
+                stage,
+                settlementResult,
+                realizedProfitLoss,
+                externalOrderId,
+                createdAt,
+                settledAt,
+                updatedAt,
+                availableBalance,
+                effectiveAvailableBalance,
+                reservedBalance,
+                balanceSnapshotAt,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            );
         }
     }
 

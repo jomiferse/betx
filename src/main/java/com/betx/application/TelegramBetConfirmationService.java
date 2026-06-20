@@ -17,7 +17,9 @@ import com.betx.domain.betfair.BetfairAutoBettingConfig;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.exposure.ExchangeExposure;
+import com.betx.domain.exposure.ExchangeExposurePosition;
 import com.betx.domain.exposure.ExchangeSettledOrder;
+import com.betx.domain.order.BetExecutionStatus;
 import com.betx.domain.order.BetExecutionResult;
 import com.betx.domain.order.BetOrder;
 import com.betx.domain.order.BetIntentSource;
@@ -329,17 +331,42 @@ public class TelegramBetConfirmationService {
                     + " | exchange=" + exchange.name());
                 return;
             }
+            List<BetIntent> executedIntents = intentRepository.listByStages(
+                config.storage().path(),
+                List.of(BetIntentStage.EXECUTED),
+                EXECUTED_INTENT_RECONCILIATION_LIMIT
+            );
+            Map<String, ExchangeExposurePosition> openPositionsById = exposure.positions().stream()
+                .filter(position -> position.externalOrderId() != null && !position.externalOrderId().isBlank())
+                .collect(Collectors.toMap(ExchangeExposurePosition::externalOrderId, Function.identity(), (left, right) -> left));
+            Instant executionSnapshotAt = Instant.now(clock);
+            executedIntents.stream()
+                .filter(intent -> intent.externalOrderId() != null)
+                .filter(intent -> openPositionsById.containsKey(intent.externalOrderId()))
+                .forEach(intent -> {
+                    ExchangeExposurePosition position = openPositionsById.get(intent.externalOrderId());
+                    BetIntent updated = intent.withExchangeExecutionSnapshot(
+                        executionSnapshotAt,
+                        position.averageExecutedOdds(),
+                        position.matchedStake(),
+                        position.remainingStake(),
+                        executionStatus(position)
+                    );
+                    intentRepository.update(config.storage().path(), updated);
+                    safeUpdateSignalHistory(config, updated);
+                    logIntentEvent("order.execution_snapshot", BetxEventCategory.AUDIT, "observed", updated)
+                        .field("matchedStake", updated.matchedStake())
+                        .field("remainingStake", updated.remainingStake())
+                        .field("averageExecutedOdds", updated.averageExecutedOdds())
+                        .emit();
+                });
             if (exposure.settledOrders().isEmpty()) {
                 return;
             }
             Map<String, ExchangeSettledOrder> settledOrdersById = exposure.settledOrders().stream()
                 .filter(order -> order.externalOrderId() != null && !order.externalOrderId().isBlank())
                 .collect(Collectors.toMap(ExchangeSettledOrder::externalOrderId, Function.identity(), (left, right) -> left));
-            intentRepository.listByStages(
-                    config.storage().path(),
-                    List.of(BetIntentStage.EXECUTED),
-                    EXECUTED_INTENT_RECONCILIATION_LIMIT
-                ).stream()
+            executedIntents.stream()
                 .filter(intent -> intent.externalOrderId() != null)
                 .filter(intent -> settledOrdersById.containsKey(intent.externalOrderId()))
                 .forEach(intent -> {
@@ -474,7 +501,7 @@ public class TelegramBetConfirmationService {
                 BetIntentStage.AWAITING_CONFIRMATION,
                 now,
                 now
-            );
+            ).withEvaluationId(signal.evaluationId());
             boolean sent = safeTelegramSend(
                 configPath,
                 telegramBetAlertFormatter.formatLiveConfirmation(
@@ -669,6 +696,8 @@ public class TelegramBetConfirmationService {
                 stake
             );
             BetExecutionResult execution;
+            Instant orderSubmittedAt = null;
+            Instant orderResponseAt = null;
             try {
                 eventLogger.info(BetxEventCategory.AUDIT, "order.submitted")
                     .correlationId(signalCorrelationId(signal))
@@ -678,10 +707,14 @@ public class TelegramBetConfirmationService {
                     .strategy("value-football")
                     .executionMode("automatic")
                     .result("submitted")
+                    .field("evaluationId", signal.evaluationId())
+                    .field("recommendationId", (String) null)
                     .field("stake", stake)
                     .field("odds", signal.odds())
                     .emit();
+                orderSubmittedAt = Instant.now(clock);
                 execution = executionGateway.execute(configPath, order);
+                orderResponseAt = Instant.now(clock);
             } catch (RuntimeException exc) {
                 execution = BetExecutionResult.rejected("Order execution failed: " + safeMessage(exc));
                 dependencyError("betfair", "place_order", exc);
@@ -712,7 +745,9 @@ public class TelegramBetConfirmationService {
                 execution.accepted() ? BetIntentStage.EXECUTED : BetIntentStage.FAILED,
                 now,
                 now
-            );
+            ).withEvaluationId(signal.evaluationId())
+                .withOrderSubmitted(orderSubmittedAt, signal.odds(), stake)
+                .withOrderResponse(orderResponseAt, execution.accepted() ? BetExecutionStatus.UNMATCHED : BetExecutionStatus.REJECTED);
             intentRepository.save(config.storage().path(), intent);
             linkHistoryForSignal(config, historyByKey, signal, intent);
             safeUpdateSignalHistory(config, intent);
@@ -967,17 +1002,23 @@ public class TelegramBetConfirmationService {
             .strategy("value-football")
             .executionMode("telegram_confirmation")
             .result("submitted")
+            .field("evaluationId", intent.evaluationId())
+            .field("recommendationId", intent.recommendationId())
             .field("stake", amount)
             .field("odds", intent.odds())
             .emit();
+        Instant orderSubmittedAt = Instant.now(clock);
         var result = executionGateway.execute(configPath, order);
+        Instant orderResponseAt = Instant.now(clock);
         BetIntent updated = intent.withStageAt(
             result.accepted() ? BetIntentStage.EXECUTED : BetIntentStage.FAILED,
             intent.availableBalance(),
             amount,
             result.message(),
             Instant.now(clock)
-        ).withExternalOrderId(result.externalOrderId());
+        ).withExternalOrderId(result.externalOrderId())
+            .withOrderSubmitted(orderSubmittedAt, intent.odds(), amount)
+            .withOrderResponse(orderResponseAt, result.accepted() ? BetExecutionStatus.UNMATCHED : BetExecutionStatus.REJECTED);
         intentRepository.update(config.storage().path(), updated);
         safeUpdateSignalHistory(config, updated);
         if (result.accepted()) {
@@ -1141,7 +1182,7 @@ public class TelegramBetConfirmationService {
             BetIntentStage.FAILED,
             now,
             now
-        );
+        ).withEvaluationId(signal.evaluationId());
         intentRepository.save(config.storage().path(), intent);
         return intent;
     }
@@ -1180,7 +1221,7 @@ public class TelegramBetConfirmationService {
             BetIntentStage.FAILED,
             now,
             now
-        );
+        ).withEvaluationId(signal.evaluationId());
         intentRepository.save(config.storage().path(), intent);
         return intent;
     }
@@ -1466,7 +1507,33 @@ public class TelegramBetConfirmationService {
             .field("availableBalance", intent.availableBalance())
             .field("effectiveAvailableBalance", intent.effectiveAvailableBalance())
             .field("reservedBalance", intent.reservedBalance())
+            .field("evaluationId", intent.evaluationId())
+            .field("recommendationId", intent.recommendationId())
+            .field("recommendedAt", intent.recommendedAt())
+            .field("recommendedOdds", intent.recommendedOdds())
+            .field("orderSubmittedAt", intent.orderSubmittedAt())
+            .field("orderResponseAt", intent.orderResponseAt())
+            .field("orderAcceptedAt", intent.orderAcceptedAt())
+            .field("executedAt", intent.executedAt())
+            .field("requestedOdds", intent.requestedOdds())
+            .field("averageExecutedOdds", intent.averageExecutedOdds())
+            .field("requestedStake", intent.requestedStake())
+            .field("matchedStake", intent.matchedStake())
+            .field("remainingStake", intent.remainingStake())
+            .field("executionStatus", intent.executionStatus())
             .field("externalOrderId", intent.externalOrderId());
+    }
+
+    private static BetExecutionStatus executionStatus(ExchangeExposurePosition position) {
+        boolean matched = position.matchedStake().compareTo(BigDecimal.ZERO) > 0;
+        boolean remaining = position.remainingStake().compareTo(BigDecimal.ZERO) > 0;
+        if (matched && remaining) {
+            return BetExecutionStatus.PARTIALLY_MATCHED;
+        }
+        if (matched) {
+            return BetExecutionStatus.FULLY_MATCHED;
+        }
+        return BetExecutionStatus.UNMATCHED;
     }
 
     private String signalCorrelationId(BetSignal signal) {

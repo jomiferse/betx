@@ -9,6 +9,7 @@ import com.betx.application.PaperTrade;
 import com.betx.application.PaperTradeStatus;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.BetSettlementResult;
+import com.betx.domain.order.BetExecutionStatus;
 import com.betx.domain.order.SelectionSide;
 import com.betx.domain.signal.BetSide;
 import java.math.BigDecimal;
@@ -95,11 +96,31 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             SELECT id, source, exchange, market_id, selection_id, event_name, market_name, runner_name,
                    competition_name, selection_side, strategy_name, odds, selected_stake, stage,
                    settlement_result, realized_profit_loss, external_order_id, created_at, settled_at, updated_at,
-                   available_balance, effective_available_balance, reserved_balance, balance_snapshot_at
+                   available_balance, effective_available_balance, reserved_balance, balance_snapshot_at,
+                   %s AS evaluation_id, %s AS recommendation_id, %s AS recommended_at, %s AS recommended_odds,
+                   %s AS order_submitted_at, %s AS order_response_at, %s AS order_accepted_at, %s AS executed_at,
+                   %s AS requested_odds, %s AS average_executed_odds, %s AS requested_stake, %s AS matched_stake,
+                   %s AS remaining_stake, %s AS execution_status
             FROM bet_intents
             WHERE (%s)
             ORDER BY created_at ASC, id ASC
-            """.formatted(periodPredicate(List.of("created_at", "updated_at", "settled_at")));
+            """.formatted(
+                columnOrNull(connection, "bet_intents", "evaluation_id"),
+                columnOrNull(connection, "bet_intents", "recommendation_id"),
+                columnOrNull(connection, "bet_intents", "recommended_at"),
+                columnOrNull(connection, "bet_intents", "recommended_odds"),
+                columnOrNull(connection, "bet_intents", "order_submitted_at"),
+                columnOrNull(connection, "bet_intents", "order_response_at"),
+                columnOrNull(connection, "bet_intents", "order_accepted_at"),
+                columnOrNull(connection, "bet_intents", "executed_at"),
+                columnOrNull(connection, "bet_intents", "requested_odds"),
+                columnOrNull(connection, "bet_intents", "average_executed_odds"),
+                columnOrNull(connection, "bet_intents", "requested_stake"),
+                columnOrNull(connection, "bet_intents", "matched_stake"),
+                columnOrNull(connection, "bet_intents", "remaining_stake"),
+                columnOrNull(connection, "bet_intents", "execution_status"),
+                periodPredicate(List.of("created_at", "updated_at", "settled_at"))
+            );
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             bindPeriod(statement, from, to, 3);
             try (ResultSet resultSet = statement.executeQuery()) {
@@ -128,7 +149,21 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
                         decimal(resultSet, "available_balance"),
                         decimal(resultSet, "effective_available_balance"),
                         decimal(resultSet, "reserved_balance"),
-                        instant(resultSet, "balance_snapshot_at")
+                        instant(resultSet, "balance_snapshot_at"),
+                        resultSet.getString("evaluation_id"),
+                        resultSet.getString("recommendation_id"),
+                        instant(resultSet, "recommended_at"),
+                        decimal(resultSet, "recommended_odds"),
+                        instant(resultSet, "order_submitted_at"),
+                        instant(resultSet, "order_response_at"),
+                        instant(resultSet, "order_accepted_at"),
+                        instant(resultSet, "executed_at"),
+                        decimal(resultSet, "requested_odds"),
+                        decimal(resultSet, "average_executed_odds"),
+                        decimal(resultSet, "requested_stake"),
+                        decimal(resultSet, "matched_stake"),
+                        decimal(resultSet, "remaining_stake"),
+                        executionStatus(resultSet.getString("execution_status"))
                     ));
                 }
                 return rows;
@@ -148,7 +183,7 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             try (ResultSet resultSet = statement.executeQuery()) {
                 List<PaperTrade> rows = new ArrayList<>();
                 while (resultSet.next()) {
-                    rows.add(new PaperTrade(
+            rows.add(new PaperTrade(
                         resultSet.getString("id"),
                         resultSet.getString("exchange"),
                         resultSet.getString("market_id"),
@@ -176,7 +211,8 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
                         decimal(resultSet, "net_pnl"),
                         decimal(resultSet, "decimal_clv_ratio"),
                         decimal(resultSet, "implied_probability_change"),
-                        resultSet.getInt("paper_mode") == 1
+                        resultSet.getInt("paper_mode") == 1,
+                        hasColumn(connection, "paper_trades", "recommendation_id") ? resultSet.getString("recommendation_id") : null
                     ));
                 }
                 return rows;
@@ -276,6 +312,16 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
         }
     }
 
+    private static String columnOrNull(Connection connection, String table, String column) throws SQLException {
+        return hasColumn(connection, table, column) ? column : "NULL";
+    }
+
+    private static boolean hasColumn(Connection connection, String table, String column) throws SQLException {
+        try (ResultSet resultSet = connection.getMetaData().getColumns(null, null, table, column)) {
+            return resultSet.next();
+        }
+    }
+
     private static Path database(String databasePath) {
         return Path.of(databasePath == null || databasePath.isBlank() ? DEFAULT_DATABASE_PATH : databasePath)
             .toAbsolutePath()
@@ -298,6 +344,10 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
 
     private static BetSettlementResult settlement(String value) {
         return value == null || value.isBlank() ? null : BetSettlementResult.valueOf(value);
+    }
+
+    private static BetExecutionStatus executionStatus(String value) {
+        return value == null || value.isBlank() ? null : BetExecutionStatus.valueOf(value);
     }
 
     private static SelectionSide selectionSide(String value) {

@@ -33,7 +33,21 @@ public record BetIntent(
     BigDecimal realizedProfitLoss,
     BetIntentStage stage,
     Instant createdAt,
-    Instant updatedAt
+    Instant updatedAt,
+    String evaluationId,
+    String recommendationId,
+    Instant recommendedAt,
+    BigDecimal recommendedOdds,
+    Instant orderSubmittedAt,
+    Instant orderResponseAt,
+    Instant orderAcceptedAt,
+    Instant executedAt,
+    BigDecimal requestedOdds,
+    BigDecimal averageExecutedOdds,
+    BigDecimal requestedStake,
+    BigDecimal matchedStake,
+    BigDecimal remainingStake,
+    BetExecutionStatus executionStatus
 ) {
     public BetIntent {
         id = id == null ? null : id.strip();
@@ -54,6 +68,8 @@ public record BetIntent(
         reason = reason == null ? null : reason.strip();
         resultMessage = resultMessage == null ? null : resultMessage.strip();
         externalOrderId = externalOrderId == null ? null : externalOrderId.strip();
+        evaluationId = evaluationId == null || evaluationId.isBlank() ? null : evaluationId.strip();
+        recommendationId = recommendationId == null || recommendationId.isBlank() ? null : recommendationId.strip();
         if (stage == null) {
             stage = BetIntentStage.AWAITING_CONFIRMATION;
         }
@@ -112,7 +128,21 @@ public record BetIntent(
             null,
             stage,
             createdAt,
-            updatedAt
+            updatedAt,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
         );
     }
 
@@ -292,7 +322,21 @@ public record BetIntent(
             null,
             stage,
             createdAt,
-            updatedAt
+            updatedAt,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
         );
     }
 
@@ -402,11 +446,217 @@ public record BetIntent(
             stage,
             createdAt,
             updatedAt
+        );
+    }
+
+    public BetIntent(
+        String id,
+        BetIntentSource source,
+        String exchange,
+        String marketId,
+        long selectionId,
+        String eventName,
+        String marketName,
+        String runnerName,
+        String competitionName,
+        SelectionSide selectionSide,
+        String strategyName,
+        BetSide side,
+        String reason,
+        BigDecimal odds,
+        BigDecimal maxStake,
+        BigDecimal availableBalance,
+        BigDecimal effectiveAvailableBalance,
+        BigDecimal reservedBalance,
+        Instant balanceSnapshotAt,
+        BigDecimal selectedStake,
+        String resultMessage,
+        String externalOrderId,
+        Instant settledAt,
+        BetSettlementResult settlementResult,
+        BigDecimal realizedProfitLoss,
+        BetIntentStage stage,
+        Instant createdAt,
+        Instant updatedAt
+    ) {
+        this(
+            id,
+            source,
+            exchange,
+            marketId,
+            selectionId,
+            eventName,
+            marketName,
+            runnerName,
+            competitionName,
+            selectionSide,
+            strategyName,
+            side,
+            reason,
+            odds,
+            maxStake,
+            availableBalance,
+            effectiveAvailableBalance,
+            reservedBalance,
+            balanceSnapshotAt,
+            selectedStake,
+            resultMessage,
+            externalOrderId,
+            settledAt,
+            settlementResult,
+            realizedProfitLoss,
+            stage,
+            createdAt,
+            updatedAt,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
         );
     }
 
     public String displayRunner() {
         return runnerName == null || runnerName.isBlank() ? String.valueOf(selectionId) : runnerName;
+    }
+
+    public BetIntent withEvaluationId(String newEvaluationId) {
+        return copy(
+            availableBalance,
+            effectiveAvailableBalance,
+            reservedBalance,
+            balanceSnapshotAt,
+            selectedStake,
+            resultMessage,
+            externalOrderId,
+            settledAt,
+            settlementResult,
+            realizedProfitLoss,
+            stage,
+            updatedAt,
+            newEvaluationId,
+            recommendationId,
+            recommendedAt,
+            recommendedOdds,
+            orderSubmittedAt,
+            orderResponseAt,
+            orderAcceptedAt,
+            executedAt,
+            requestedOdds,
+            averageExecutedOdds,
+            requestedStake,
+            matchedStake,
+            remainingStake,
+            executionStatus
+        );
+    }
+
+    public BetIntent withOrderSubmitted(Instant submittedAt, BigDecimal newRequestedOdds, BigDecimal newRequestedStake) {
+        return copy(
+            availableBalance,
+            effectiveAvailableBalance,
+            reservedBalance,
+            balanceSnapshotAt,
+            selectedStake,
+            resultMessage,
+            externalOrderId,
+            settledAt,
+            settlementResult,
+            realizedProfitLoss,
+            stage,
+            updatedAt,
+            evaluationId,
+            recommendationId,
+            recommendedAt,
+            recommendedOdds,
+            submittedAt,
+            orderResponseAt,
+            orderAcceptedAt,
+            executedAt,
+            newRequestedOdds,
+            averageExecutedOdds,
+            newRequestedStake,
+            matchedStake,
+            remainingStake,
+            BetExecutionStatus.SUBMITTED
+        );
+    }
+
+    public BetIntent withOrderResponse(Instant responseAt, BetExecutionStatus newExecutionStatus) {
+        return copy(
+            availableBalance,
+            effectiveAvailableBalance,
+            reservedBalance,
+            balanceSnapshotAt,
+            selectedStake,
+            resultMessage,
+            externalOrderId,
+            settledAt,
+            settlementResult,
+            realizedProfitLoss,
+            stage,
+            updatedAt,
+            evaluationId,
+            recommendationId,
+            recommendedAt,
+            recommendedOdds,
+            orderSubmittedAt,
+            responseAt,
+            orderAcceptedAt,
+            executedAt,
+            requestedOdds,
+            averageExecutedOdds,
+            requestedStake,
+            matchedStake,
+            remainingStake,
+            newExecutionStatus
+        );
+    }
+
+    public BetIntent withExchangeExecutionSnapshot(
+        Instant newExecutedAt,
+        BigDecimal newAverageExecutedOdds,
+        BigDecimal newMatchedStake,
+        BigDecimal newRemainingStake,
+        BetExecutionStatus newExecutionStatus
+    ) {
+        return copy(
+            availableBalance,
+            effectiveAvailableBalance,
+            reservedBalance,
+            balanceSnapshotAt,
+            selectedStake,
+            resultMessage,
+            externalOrderId,
+            settledAt,
+            settlementResult,
+            realizedProfitLoss,
+            stage,
+            updatedAt,
+            evaluationId,
+            recommendationId,
+            recommendedAt,
+            recommendedOdds,
+            orderSubmittedAt,
+            orderResponseAt,
+            orderAcceptedAt,
+            newMatchedStake == null || newMatchedStake.compareTo(BigDecimal.ZERO) <= 0 ? null : newExecutedAt,
+            requestedOdds,
+            newAverageExecutedOdds,
+            requestedStake,
+            newMatchedStake,
+            newRemainingStake,
+            newExecutionStatus
+        );
     }
 
     public BetIntent withStage(BetIntentStage newStage, BigDecimal balance, BigDecimal stake) {
@@ -524,7 +774,21 @@ public record BetIntent(
             newRealizedProfitLoss,
             newStage,
             createdAt,
-            newSettledAt == null ? Instant.now() : newSettledAt
+            newSettledAt == null ? Instant.now() : newSettledAt,
+            evaluationId,
+            recommendationId,
+            recommendedAt,
+            recommendedOdds,
+            orderSubmittedAt,
+            orderResponseAt,
+            orderAcceptedAt,
+            executedAt,
+            requestedOdds,
+            averageExecutedOdds,
+            requestedStake,
+            matchedStake,
+            remainingStake,
+            BetExecutionStatus.SETTLED
         );
     }
 
@@ -561,7 +825,95 @@ public record BetIntent(
             realizedProfitLoss,
             stage,
             createdAt,
-            updatedAt
+            updatedAt,
+            evaluationId,
+            recommendationId,
+            recommendedAt,
+            recommendedOdds,
+            orderSubmittedAt,
+            orderResponseAt,
+            orderAcceptedAt,
+            executedAt,
+            requestedOdds,
+            averageExecutedOdds,
+            requestedStake,
+            matchedStake,
+            remainingStake,
+            executionStatus
+        );
+    }
+
+    private BetIntent copy(
+        BigDecimal newAvailableBalance,
+        BigDecimal newEffectiveAvailableBalance,
+        BigDecimal newReservedBalance,
+        Instant newBalanceSnapshotAt,
+        BigDecimal newSelectedStake,
+        String newResultMessage,
+        String newExternalOrderId,
+        Instant newSettledAt,
+        BetSettlementResult newSettlementResult,
+        BigDecimal newRealizedProfitLoss,
+        BetIntentStage newStage,
+        Instant newUpdatedAt,
+        String newEvaluationId,
+        String newRecommendationId,
+        Instant newRecommendedAt,
+        BigDecimal newRecommendedOdds,
+        Instant newOrderSubmittedAt,
+        Instant newOrderResponseAt,
+        Instant newOrderAcceptedAt,
+        Instant newExecutedAt,
+        BigDecimal newRequestedOdds,
+        BigDecimal newAverageExecutedOdds,
+        BigDecimal newRequestedStake,
+        BigDecimal newMatchedStake,
+        BigDecimal newRemainingStake,
+        BetExecutionStatus newExecutionStatus
+    ) {
+        return new BetIntent(
+            id,
+            source,
+            exchange,
+            marketId,
+            selectionId,
+            eventName,
+            marketName,
+            runnerName,
+            competitionName,
+            selectionSide,
+            strategyName,
+            side,
+            reason,
+            odds,
+            maxStake,
+            newAvailableBalance,
+            newEffectiveAvailableBalance,
+            newReservedBalance,
+            newBalanceSnapshotAt,
+            newSelectedStake,
+            newResultMessage,
+            newExternalOrderId,
+            newSettledAt,
+            newSettlementResult,
+            newRealizedProfitLoss,
+            newStage,
+            createdAt,
+            newUpdatedAt,
+            newEvaluationId,
+            newRecommendationId,
+            newRecommendedAt,
+            newRecommendedOdds,
+            newOrderSubmittedAt,
+            newOrderResponseAt,
+            newOrderAcceptedAt,
+            newExecutedAt,
+            newRequestedOdds,
+            newAverageExecutedOdds,
+            newRequestedStake,
+            newMatchedStake,
+            newRemainingStake,
+            newExecutionStatus
         );
     }
 }

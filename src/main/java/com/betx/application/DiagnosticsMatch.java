@@ -1,8 +1,11 @@
 package com.betx.application;
 
 import com.betx.application.DiagnosticsModel.MatchStatus;
+import com.betx.application.DiagnosticsModel.MatchGapReason;
+import com.betx.application.DiagnosticsModel.MatchProvenance;
 import com.betx.application.DiagnosticsModel.RealOddsSource;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 
 public record DiagnosticsMatch(
@@ -31,6 +34,99 @@ public record DiagnosticsMatch(
     BigDecimal executionPnlDifference,
     BigDecimal paperPnlPerUnitStake,
     BigDecimal realPnlPerUnitStake,
-    BigDecimal normalizedExecutionDifference
+    BigDecimal normalizedExecutionDifference,
+    MatchProvenance matchProvenance,
+    MatchGapReason matchGapReason,
+    Integer candidateCount,
+    Duration nearestCandidateTimeDifference,
+    String recommendationId,
+    String evaluationId,
+    Instant recommendedAt,
+    BigDecimal exactRecommendedOdds,
+    Instant orderSubmittedAt,
+    Instant orderResponseAt,
+    Instant orderAcceptedAt,
+    Instant executedAt,
+    BigDecimal requestedOdds,
+    BigDecimal averageExecutedOdds,
+    BigDecimal requestedStake,
+    BigDecimal matchedStake,
+    BigDecimal remainingStake,
+    String executionStatus
 ) {
+    public DiagnosticsMatch(
+        MatchStatus matchStatus,
+        String eventName,
+        String marketId,
+        Long selectionId,
+        String runnerName,
+        String selectionSide,
+        String competitionName,
+        String strategyName,
+        Instant recommendationTimestamp,
+        Instant paperExecutionTimestamp,
+        Instant realRecordedTimestamp,
+        BigDecimal recommendedOdds,
+        BigDecimal paperOdds,
+        BigDecimal realRecordedOdds,
+        RealOddsSource realOddsSource,
+        BigDecimal closingOdds,
+        BigDecimal paperStake,
+        BigDecimal realStake,
+        String paperResult,
+        String realResult,
+        BigDecimal paperPnl,
+        BigDecimal realPnl,
+        BigDecimal executionPnlDifference,
+        BigDecimal paperPnlPerUnitStake,
+        BigDecimal realPnlPerUnitStake,
+        BigDecimal normalizedExecutionDifference
+    ) {
+        this(
+            matchStatus,
+            eventName,
+            marketId,
+            selectionId,
+            runnerName,
+            selectionSide,
+            competitionName,
+            strategyName,
+            recommendationTimestamp,
+            paperExecutionTimestamp,
+            realRecordedTimestamp,
+            recommendedOdds,
+            paperOdds,
+            realRecordedOdds,
+            realOddsSource,
+            closingOdds,
+            paperStake,
+            realStake,
+            paperResult,
+            realResult,
+            paperPnl,
+            realPnl,
+            executionPnlDifference,
+            paperPnlPerUnitStake,
+            realPnlPerUnitStake,
+            normalizedExecutionDifference,
+            matchStatus == MatchStatus.MATCHED ? MatchProvenance.LEGACY_MARKET_SELECTION_TIME : MatchProvenance.UNMATCHED,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+    }
 }

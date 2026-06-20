@@ -12,6 +12,12 @@ import java.util.List;
 public class DiagnosticsCsvExporter {
     private static final String HEADER = String.join(",",
         "match_status",
+        "match_provenance",
+        "match_gap_reason",
+        "recommendation_id",
+        "evaluation_id",
+        "candidate_count",
+        "nearest_candidate_time_difference_seconds",
         "market_id",
         "selection_id",
         "event_name",
@@ -19,7 +25,19 @@ public class DiagnosticsCsvExporter {
         "selection_side",
         "competition_name",
         "strategy_name",
+        "recommended_at",
         "recommended_odds",
+        "exact_recommended_odds",
+        "order_submitted_at",
+        "order_response_at",
+        "order_accepted_at",
+        "executed_at",
+        "requested_odds",
+        "average_executed_odds",
+        "requested_stake",
+        "matched_stake",
+        "remaining_stake",
+        "execution_status",
         "paper_odds",
         "real_recorded_odds",
         "real_odds_source",
@@ -55,6 +73,12 @@ public class DiagnosticsCsvExporter {
         for (DiagnosticsMatch match : report.matchedPairs()) {
             lines.add(String.join(",",
                 csv(match.matchStatus().name()),
+                csv(match.matchProvenance()),
+                csv(match.matchGapReason()),
+                csv(match.recommendationId()),
+                csv(match.evaluationId()),
+                csv(match.candidateCount()),
+                csv(seconds(match.nearestCandidateTimeDifference())),
                 csv(match.marketId()),
                 csv(match.selectionId()),
                 csv(match.eventName()),
@@ -62,7 +86,19 @@ public class DiagnosticsCsvExporter {
                 csv(match.selectionSide()),
                 csv(match.competitionName()),
                 csv(match.strategyName()),
+                csv(match.recommendedAt()),
                 csv(match.recommendedOdds()),
+                csv(match.exactRecommendedOdds()),
+                csv(match.orderSubmittedAt()),
+                csv(match.orderResponseAt()),
+                csv(match.orderAcceptedAt()),
+                csv(match.executedAt()),
+                csv(match.requestedOdds()),
+                csv(match.averageExecutedOdds()),
+                csv(match.requestedStake()),
+                csv(match.matchedStake()),
+                csv(match.remainingStake()),
+                csv(match.executionStatus()),
                 csv(match.paperOdds()),
                 csv(match.realRecordedOdds()),
                 csv(match.realOddsSource()),
@@ -92,5 +128,9 @@ public class DiagnosticsCsvExporter {
             return "\"" + text.replace("\"", "\"\"") + "\"";
         }
         return text;
+    }
+
+    private static Long seconds(java.time.Duration value) {
+        return value == null ? null : value.toSeconds();
     }
 }

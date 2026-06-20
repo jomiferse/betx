@@ -47,8 +47,9 @@ public class JdbcPaperSignalEvaluationRepository implements PaperSignalEvaluatio
                      observed_at, exchange, market_id, market_name, event_name, competition_name, market_start_time,
                      selection_id, runner_name, runner_type, recommendation, score, confidence_label, reason,
                      best_back_price, best_lay_price, spread, liquidity,
-                     back_percentage_delta, lay_percentage_delta, liquidity_percentage_delta, analyzer_reason
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     back_percentage_delta, lay_percentage_delta, liquidity_percentage_delta, analyzer_reason,
+                     evaluation_id, recommendation_id
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  """)) {
             bind(statement, evaluation);
             statement.executeUpdate();
@@ -145,9 +146,13 @@ public class JdbcPaperSignalEvaluationRepository implements PaperSignalEvaluatio
                     back_percentage_delta TEXT,
                     lay_percentage_delta TEXT,
                     liquidity_percentage_delta TEXT,
-                    analyzer_reason TEXT NOT NULL
+                    analyzer_reason TEXT NOT NULL,
+                    evaluation_id TEXT,
+                    recommendation_id TEXT
                 )
                 """);
+            addColumnIfMissing(connection, "evaluation_id", "TEXT");
+            addColumnIfMissing(connection, "recommendation_id", "TEXT");
             statement.executeUpdate("""
                 CREATE INDEX IF NOT EXISTS idx_paper_signal_evaluations_observed
                 ON paper_signal_evaluations(observed_at DESC)
@@ -156,6 +161,25 @@ public class JdbcPaperSignalEvaluationRepository implements PaperSignalEvaluatio
                 CREATE INDEX IF NOT EXISTS idx_paper_signal_evaluations_reason
                 ON paper_signal_evaluations(analyzer_reason, competition_name, runner_type)
                 """);
+            statement.executeUpdate("""
+                CREATE INDEX IF NOT EXISTS idx_paper_signal_evaluations_evaluation_id
+                ON paper_signal_evaluations(evaluation_id)
+                """);
+            statement.executeUpdate("""
+                CREATE INDEX IF NOT EXISTS idx_paper_signal_evaluations_recommendation_id
+                ON paper_signal_evaluations(recommendation_id)
+                """);
+        }
+    }
+
+    private void addColumnIfMissing(Connection connection, String column, String definition) throws SQLException {
+        try (ResultSet columns = connection.getMetaData().getColumns(null, null, "paper_signal_evaluations", column)) {
+            if (columns.next()) {
+                return;
+            }
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("ALTER TABLE paper_signal_evaluations ADD COLUMN " + column + " " + definition);
         }
     }
 
@@ -182,6 +206,8 @@ public class JdbcPaperSignalEvaluationRepository implements PaperSignalEvaluatio
         setDecimal(statement, 20, evaluation.layPercentageDelta());
         setDecimal(statement, 21, evaluation.liquidityPercentageDelta());
         statement.setString(22, evaluation.analyzerReason().name());
+        statement.setString(23, evaluation.evaluationId());
+        statement.setString(24, evaluation.recommendationId());
     }
 
     private PaperSignalEvaluation map(ResultSet resultSet) throws SQLException {
@@ -207,7 +233,9 @@ public class JdbcPaperSignalEvaluationRepository implements PaperSignalEvaluatio
             decimal(resultSet, "back_percentage_delta"),
             decimal(resultSet, "lay_percentage_delta"),
             decimal(resultSet, "liquidity_percentage_delta"),
-            PaperTradeAnalyzerRejectionReason.valueOf(resultSet.getString("analyzer_reason"))
+            PaperTradeAnalyzerRejectionReason.valueOf(resultSet.getString("analyzer_reason")),
+            resultSet.getString("evaluation_id"),
+            resultSet.getString("recommendation_id")
         );
     }
 

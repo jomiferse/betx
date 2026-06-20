@@ -19,6 +19,13 @@ public class DiagnosticsFormatter {
         lines.add(line("Paper-only", report.coverage().paperOnly()));
         lines.add(line("Ambiguous", report.coverage().ambiguous()));
         lines.add("");
+        lines.add("Matching gaps");
+        if (report.matchingGaps().isEmpty()) {
+            lines.add(line("None", 0));
+        } else {
+            report.matchingGaps().forEach((reason, count) -> lines.add(line(reason.name(), count)));
+        }
+        lines.add("");
         lines.add("Execution");
         lines.add(line("Orders submitted", report.executionMetrics().ordersSubmitted()));
         lines.add(line("Fully matched/recorded", report.executionMetrics().fullyMatched()));
@@ -32,6 +39,21 @@ public class DiagnosticsFormatter {
         lines.add(line("Odds provenance", report.executionMetrics().oddsProvenance()));
         lines.add(line("Missing recorded odds", report.executionMetrics().missingRecordedOdds()));
         lines.add(line("Missing exchange order id", report.executionMetrics().missingExchangeOrderId()));
+        lines.add("");
+        lines.add("Execution data coverage");
+        DiagnosticsExecutionDataCoverage dataCoverage = report.executionDataCoverage();
+        lines.add(line("Orders with evaluation_id", coverage(dataCoverage.withEvaluationId(), dataCoverage.totalOrders())));
+        lines.add(line("Orders with recommendation_id", coverage(dataCoverage.withRecommendationId(), dataCoverage.totalOrders())));
+        lines.add(line("Orders with order_submitted_at", coverage(dataCoverage.withOrderSubmittedAt(), dataCoverage.totalOrders())));
+        lines.add(line("Orders with order_response_at", coverage(dataCoverage.withOrderResponseAt(), dataCoverage.totalOrders())));
+        lines.add(line("Orders with order_accepted_at", coverage(dataCoverage.withOrderAcceptedAt(), dataCoverage.totalOrders())));
+        lines.add(line("Orders with executed_at", coverage(dataCoverage.withExecutedAt(), dataCoverage.totalOrders())));
+        lines.add(line("Orders with requested_odds", coverage(dataCoverage.withRequestedOdds(), dataCoverage.totalOrders())));
+        lines.add(line("Orders with average_executed_odds", coverage(dataCoverage.withAverageExecutedOdds(), dataCoverage.totalOrders())));
+        lines.add(line("Orders with requested_stake", coverage(dataCoverage.withRequestedStake(), dataCoverage.totalOrders())));
+        lines.add(line("Orders with matched_stake", coverage(dataCoverage.withMatchedStake(), dataCoverage.totalOrders())));
+        lines.add(line("Orders with remaining_stake", coverage(dataCoverage.withRemainingStake(), dataCoverage.totalOrders())));
+        lines.add(line("Orders with execution_status", coverage(dataCoverage.withExecutionStatus(), dataCoverage.totalOrders())));
         lines.add("");
         lines.add("Paper vs real");
         lines.add(line("Settled matched pairs", report.paperVsRealMetrics().settledMatchedPairs()));
@@ -94,5 +116,9 @@ public class DiagnosticsFormatter {
             return "N/A";
         }
         return value.toMillis() + " ms";
+    }
+
+    private static String coverage(long value, long total) {
+        return value + " / " + total;
     }
 }
