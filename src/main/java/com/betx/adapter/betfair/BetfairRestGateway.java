@@ -25,8 +25,10 @@ import java.net.URI;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -259,6 +261,15 @@ public class BetfairRestGateway implements BetfairGateway {
         }
         JsonNode clearedOrders = invoke(session, "SportsAPING/v1.0/listClearedOrders", clearedParams)
             .path("clearedOrders");
+        ObjectNode cancelledParams = mapper.createObjectNode();
+        cancelledParams.put("betStatus", "CANCELLED");
+        cancelledParams.put("groupBy", "BET");
+        if (settledSince != null) {
+            ObjectNode settledDateRange = cancelledParams.putObject("settledDateRange");
+            settledDateRange.put("from", settledSince.toString());
+        }
+        JsonNode cancelledOrders = invoke(session, "SportsAPING/v1.0/listClearedOrders", cancelledParams)
+            .path("clearedOrders");
 
         List<ExchangeExposurePosition> positions = parseExposurePositions(currentOrders);
         BigDecimal currentExposure = positions.stream()
@@ -270,8 +281,9 @@ public class BetfairRestGateway implements BetfairGateway {
             .map(ExchangeSettledOrder::realizedProfitLoss)
             .reduce(BigDecimal.ZERO, BigDecimal::add)
             .setScale(2, RoundingMode.HALF_UP);
+        Set<String> cancelledExternalOrderIds = parseExternalOrderIds(cancelledOrders);
 
-        return new ExchangeExposure(true, positions.size(), currentExposure, realizedProfitLoss, positions, settledOrders, null);
+        return new ExchangeExposure(true, positions.size(), currentExposure, realizedProfitLoss, positions, settledOrders, cancelledExternalOrderIds, null);
     }
 
     private Map<Long, String> parseRunnerNames(JsonNode runnersNode) {
@@ -412,6 +424,20 @@ public class BetfairRestGateway implements BetfairGateway {
             ));
         }
         return orders;
+    }
+
+    private Set<String> parseExternalOrderIds(JsonNode ordersNode) {
+        if (ordersNode == null || !ordersNode.isArray()) {
+            return Set.of();
+        }
+        Set<String> ids = new LinkedHashSet<>();
+        for (JsonNode order : ordersNode) {
+            String betId = text(order, "betId");
+            if (!betId.isBlank()) {
+                ids.add(betId);
+            }
+        }
+        return ids;
     }
 
     private BigDecimal bestPrice(JsonNode prices) {

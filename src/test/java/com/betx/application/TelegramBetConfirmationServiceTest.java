@@ -1182,6 +1182,52 @@ class TelegramBetConfirmationServiceTest {
     }
 
     @Test
+    void reconcilesExecutedIntentToCancelledWhenBetfairReportsCancellation() {
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        intents.save("data.db", new BetIntent(
+            "executed-1",
+            "betfair",
+            "1.1",
+            42L,
+            "Team A v Team B",
+            "Match Odds",
+            "Team A",
+            "liquidity_ok",
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            null,
+            BigDecimal.valueOf(5),
+            "accepted",
+            "bet-123",
+            BetIntentStage.EXECUTED,
+            Instant.parse("2026-06-01T10:00:00Z"),
+            Instant.parse("2026-06-01T10:01:00Z")
+        ));
+        RecordingMarketSnapshotRepository snapshots = new RecordingMarketSnapshotRepository();
+        TelegramBetConfirmationService service = service(
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.availableCancelled("bet-123"),
+            snapshots,
+            new RecordingExecutionGateway()
+        );
+
+        service.sync(CONFIG_PATH, resultOf());
+
+        assertThat(intents.updated()).singleElement().satisfies(intent -> {
+            assertThat(intent.id()).isEqualTo("executed-1");
+            assertThat(intent.stage()).isEqualTo(BetIntentStage.CANCELLED);
+            assertThat(intent.externalOrderId()).isEqualTo("bet-123");
+            assertThat(intent.resultMessage()).isEqualTo("Cancelled on exchange.");
+            assertThat(intent.settlementResult()).isNull();
+            assertThat(intent.realizedProfitLoss()).isNull();
+        });
+        assertThat(snapshots.deletedMarkets()).containsExactly("./data/betx.db|betfair|1.1");
+    }
+
+    @Test
     void linksSignalHistoryWhenCreatingConfirmationIntent() {
         RecordingIntentRepository intents = new RecordingIntentRepository();
         RecordingSignalHistoryRepository history = new RecordingSignalHistoryRepository();
@@ -2173,6 +2219,19 @@ class TelegramBetConfirmationServiceTest {
                 realizedProfitLoss,
                 List.of(),
                 orders,
+                null
+            ));
+        }
+
+        static StaticExposureGateway availableCancelled(String... externalOrderIds) {
+            return new StaticExposureGateway(new ExchangeExposure(
+                true,
+                0,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                List.of(),
+                List.of(),
+                Set.of(externalOrderIds),
                 null
             ));
         }

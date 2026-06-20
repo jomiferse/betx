@@ -360,12 +360,46 @@ public class TelegramBetConfirmationService {
                         .field("averageExecutedOdds", updated.averageExecutedOdds())
                         .emit();
                 });
-            if (exposure.settledOrders().isEmpty()) {
-                return;
-            }
             Map<String, ExchangeSettledOrder> settledOrdersById = exposure.settledOrders().stream()
                 .filter(order -> order.externalOrderId() != null && !order.externalOrderId().isBlank())
                 .collect(Collectors.toMap(ExchangeSettledOrder::externalOrderId, Function.identity(), (left, right) -> left));
+            if (!exposure.cancelledExternalOrderIds().isEmpty()) {
+                executedIntents.stream()
+                    .filter(intent -> intent.externalOrderId() != null)
+                    .filter(intent -> exposure.cancelledExternalOrderIds().contains(intent.externalOrderId()))
+                    .filter(intent -> !openPositionsById.containsKey(intent.externalOrderId()))
+                    .filter(intent -> !settledOrdersById.containsKey(intent.externalOrderId()))
+                    .forEach(intent -> {
+                        BetIntent cancelled = intent.withStageAt(
+                            BetIntentStage.CANCELLED,
+                            intent.availableBalance(),
+                            intent.selectedStake(),
+                            "Cancelled on exchange.",
+                            Instant.now(clock)
+                        );
+                        intentRepository.update(config.storage().path(), cancelled);
+                        safeUpdateSignalHistory(config, cancelled);
+                        int deletedSnapshots = config.storage().cleanupMarketSnapshotsEnabled()
+                            ? snapshotRepository.deleteMarket(config.storage().path(), cancelled.exchange(), cancelled.marketId())
+                            : 0;
+                        emit("BET INTENT CANCELLED | id=" + cancelled.id()
+                            + " | exchange=" + cancelled.exchange()
+                            + " | marketId=" + cancelled.marketId()
+                            + " | selectionId=" + cancelled.selectionId());
+                        logIntentEvent("order.cancelled", BetxEventCategory.AUDIT, "cancelled", cancelled)
+                            .field("reason", "exchange_cancelled")
+                            .emit();
+                        if (deletedSnapshots > 0) {
+                            emit("MARKET SNAPSHOTS CLEANED | reason=cancelled"
+                                + " | deleted=" + deletedSnapshots
+                                + " | exchange=" + cancelled.exchange()
+                                + " | marketId=" + cancelled.marketId());
+                        }
+                    });
+            }
+            if (settledOrdersById.isEmpty()) {
+                return;
+            }
             executedIntents.stream()
                 .filter(intent -> intent.externalOrderId() != null)
                 .filter(intent -> settledOrdersById.containsKey(intent.externalOrderId()))

@@ -425,6 +425,31 @@ class BetfairRestGatewayTest {
                   "id": 1
                 }
                 """, APPLICATION_JSON));
+        server.expect(requestTo("https://api.betfair.com/exchange/betting/json-rpc/v1"))
+            .andExpect(content().json("""
+                {
+                  "method": "SportsAPING/v1.0/listClearedOrders",
+                  "params": {
+                    "betStatus": "CANCELLED",
+                    "groupBy": "BET",
+                    "settledDateRange": {
+                      "from": "2026-06-05T00:00:00Z"
+                    }
+                  }
+                }
+                """))
+            .andRespond(withSuccess("""
+                {
+                  "jsonrpc": "2.0",
+                  "result": {
+                    "clearedOrders": [
+                      {"betId": "cancelled-1"},
+                      {"betId": "cancelled-2"}
+                    ]
+                  },
+                  "id": 1
+                }
+                """, APPLICATION_JSON));
 
         var exposure = gateway.readExposure(
             new BetfairSession("session-token", "app-key"),
@@ -436,6 +461,7 @@ class BetfairRestGatewayTest {
         assertThat(exposure.currentExposure()).isEqualByComparingTo("9.00");
         assertThat(exposure.realizedProfitLoss()).isEqualByComparingTo("-2.25");
         assertThat(exposure.settledExternalOrderIds()).containsExactlyInAnyOrder("settled-1", "settled-2");
+        assertThat(exposure.cancelledExternalOrderIds()).containsExactlyInAnyOrder("cancelled-1", "cancelled-2");
         assertThat(exposure.settledOrders())
             .extracting(
                 com.betx.domain.exposure.ExchangeSettledOrder::externalOrderId,

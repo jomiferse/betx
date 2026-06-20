@@ -12,6 +12,7 @@ public record ExchangeExposure(
     BigDecimal realizedProfitLoss,
     List<ExchangeExposurePosition> positions,
     List<ExchangeSettledOrder> settledOrders,
+    Set<String> cancelledExternalOrderIds,
     String unavailableReason
 ) {
     public ExchangeExposure {
@@ -19,7 +20,20 @@ public record ExchangeExposure(
         realizedProfitLoss = realizedProfitLoss == null ? BigDecimal.ZERO : realizedProfitLoss;
         positions = positions == null ? List.of() : List.copyOf(positions);
         settledOrders = settledOrders == null ? List.of() : List.copyOf(settledOrders);
+        cancelledExternalOrderIds = normalizedIds(cancelledExternalOrderIds);
         unavailableReason = unavailableReason == null ? null : unavailableReason.strip();
+    }
+
+    public ExchangeExposure(
+        boolean available,
+        int openPositions,
+        BigDecimal currentExposure,
+        BigDecimal realizedProfitLoss,
+        List<ExchangeExposurePosition> positions,
+        List<ExchangeSettledOrder> settledOrders,
+        String unavailableReason
+    ) {
+        this(available, openPositions, currentExposure, realizedProfitLoss, positions, settledOrders, Set.of(), unavailableReason);
     }
 
     public ExchangeExposure(
@@ -38,6 +52,7 @@ public record ExchangeExposure(
             realizedProfitLoss,
             positions,
             settledOrders(settledExternalOrderIds),
+            Set.of(),
             unavailableReason
         );
     }
@@ -50,11 +65,11 @@ public record ExchangeExposure(
         List<ExchangeExposurePosition> positions,
         String unavailableReason
     ) {
-        this(available, openPositions, currentExposure, realizedProfitLoss, positions, List.of(), unavailableReason);
+        this(available, openPositions, currentExposure, realizedProfitLoss, positions, List.of(), Set.of(), unavailableReason);
     }
 
     public static ExchangeExposure unavailable(String reason) {
-        return new ExchangeExposure(false, 0, BigDecimal.ZERO, BigDecimal.ZERO, List.of(), List.of(), reason);
+        return new ExchangeExposure(false, 0, BigDecimal.ZERO, BigDecimal.ZERO, List.of(), List.of(), Set.of(), reason);
     }
 
     public Set<String> settledExternalOrderIds() {
@@ -71,5 +86,15 @@ public record ExchangeExposure(
         return settledExternalOrderIds.stream()
             .map(id -> new ExchangeSettledOrder(id, "", 0L, null, BigDecimal.ZERO, null))
             .toList();
+    }
+
+    private static Set<String> normalizedIds(Set<String> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Set.of();
+        }
+        return ids.stream()
+            .filter(id -> id != null && !id.isBlank())
+            .map(String::strip)
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 }
