@@ -2,6 +2,7 @@ package com.betx.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.betx.adapter.logging.JsonlStructuredEventSink;
 import com.betx.application.port.out.BetExecutionGateway;
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.ExchangeAccountGateway;
@@ -19,6 +20,8 @@ import com.betx.domain.betfair.BetfairConfig;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.ExchangeConfig;
+import com.betx.domain.config.AppConfig;
+import com.betx.domain.config.StructuredLogsConfig;
 import com.betx.domain.exposure.ExchangeExposure;
 import com.betx.domain.exposure.ExchangeSettledOrder;
 import com.betx.domain.order.BetExecutionStatus;
@@ -33,10 +36,15 @@ import com.betx.domain.order.BetIntent;
 import com.betx.domain.order.BetIntentSource;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.BetSettlementResult;
+import com.betx.domain.order.BetExecutionResult;
+import com.betx.domain.order.BetOrder;
 import com.betx.domain.order.SelectionSide;
 import com.betx.domain.telegram.TelegramConnectionContext;
 import com.betx.domain.telegram.TelegramUpdate;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
@@ -49,9 +57,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class TelegramBetConfirmationServiceTest {
     private static final ConfigPath CONFIG_PATH = new ConfigPath(Path.of("betx.yml"));
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     @Test
     void offersConfirmationButtonsForNewBetSignals() {
@@ -843,6 +853,93 @@ class TelegramBetConfirmationServiceTest {
             assertThat((BigDecimal) event.fields().get("requestedStake")).isEqualByComparingTo("3");
             assertThat(event.fields()).containsEntry("executionStatus", BetExecutionStatus.UNMATCHED);
         });
+    }
+
+    @Test
+    void automaticBettingWritesPlaceOrderResponseToJsonl(@TempDir Path tempDir) throws Exception {
+        Clock clock = Clock.fixed(Instant.parse("2026-06-21T19:30:36Z"), ZoneOffset.UTC);
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        BetxConfig config = withStructuredLogsDirectory(
+            configWithAutoBetting(BigDecimal.valueOf(3), BigDecimal.valueOf(25), 3, true, false),
+            tempDir.resolve("events")
+        );
+        JsonlStructuredEventSink sink = new JsonlStructuredEventSink(tempDir.resolve("events"), 30, clock);
+        TelegramBetConfirmationService service = service(
+            config,
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            new RecordingMarketSnapshotRepository(),
+            new RecordingSignalHistoryRepository(),
+            new RecordingExecutionGateway("bet-jsonl-123"),
+            clock,
+            sink
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signalWithEvaluationId("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "eval-jsonl"),
+            analysis("Team A")
+        ));
+
+        List<JsonNode> events = Files.readAllLines(tempDir.resolve("events").resolve("audit_2026-06-21.jsonl")).stream()
+            .map(line -> readJson(line))
+            .toList();
+        assertThat(events).anySatisfy(event -> {
+            assertThat(event.path("event").asText()).isEqualTo("order.response");
+            assertThat(event.path("exchange").asText()).isEqualTo("betfair");
+            assertThat(event.path("marketId").asText()).isEqualTo("1.1");
+            assertThat(event.path("selectionId").asLong()).isEqualTo(42L);
+            assertThat(event.path("fields").path("evaluationId").asText()).isEqualTo("eval-jsonl");
+            assertThat(event.path("fields").path("betIntentId").asText()).isEqualTo(intents.saved().getFirst().id());
+            assertThat(event.path("fields").path("externalOrderId").asText()).isEqualTo("bet-jsonl-123");
+            assertThat(event.path("fields").path("side").asText()).isEqualTo("BACK");
+            assertThat(event.path("fields").path("strategyName").asText()).isNotBlank();
+            assertThat(event.path("fields").path("eventName").asText()).isEqualTo("Team A v Team B");
+            assertThat(event.path("fields").path("runnerName").asText()).isEqualTo("Team A");
+            assertThat(event.path("fields").path("requestedOdds").decimalValue()).isEqualByComparingTo("2.5");
+            assertThat(event.path("fields").path("requestedStake").decimalValue()).isEqualByComparingTo("3");
+            assertThat(event.path("fields").path("executionStatus").asText()).isEqualTo("UNMATCHED");
+            assertThat(event.path("fields").path("orderSubmittedAt").asText()).isEqualTo("2026-06-21T19:30:36Z");
+            assertThat(event.path("fields").path("orderResponseAt").asText()).isEqualTo("2026-06-21T19:30:36Z");
+        });
+    }
+
+    @Test
+    void automaticBettingLogsRejectedPlaceOrderResponseWithReason() {
+        BetExecutionResult rejected = BetExecutionResult.rejected("INSUFFICIENT_FUNDS");
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway(rejected);
+        RecordingStructuredEventSink sink = new RecordingStructuredEventSink();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(3), BigDecimal.valueOf(25), 3, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            new RecordingIntentRepository(),
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            new RecordingMarketSnapshotRepository(),
+            new RecordingSignalHistoryRepository(),
+            executionGateway,
+            Clock.systemUTC(),
+            sink
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signalWithEvaluationId("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "eval-rejected"),
+            analysis("Team A")
+        ));
+
+        assertThat(sink.events().stream().filter(event -> "order.response".equals(event.event())).toList()).singleElement()
+            .satisfies(event -> {
+                assertThat(event.fields()).containsEntry("evaluationId", "eval-rejected");
+                assertThat(event.fields()).containsEntry("executionStatus", BetExecutionStatus.REJECTED);
+                assertThat(event.fields()).containsEntry("resultMessage", "INSUFFICIENT_FUNDS");
+                assertThat(event.fields()).containsEntry("side", BetSide.BACK);
+            });
+        assertThat(sink.events()).extracting(BetxEvent::event)
+            .contains("order.response", "order.rejected")
+            .doesNotContain("order.accepted");
     }
 
     @Test
@@ -1893,6 +1990,14 @@ class TelegramBetConfirmationServiceTest {
         );
     }
 
+    private static JsonNode readJson(String line) {
+        try {
+            return JSON.readTree(line);
+        } catch (Exception exc) {
+            throw new AssertionError("Invalid JSON line: " + line, exc);
+        }
+    }
+
     private DryRunSignalsResult resultOf(BetSignal signal, RunnerAnalysis analysis) {
         return new DryRunSignalsResult(
             List.of(signal),
@@ -2117,6 +2222,20 @@ class TelegramBetConfirmationServiceTest {
             defaults.risk(),
             defaults.strategies(),
             defaults.ml()
+        );
+    }
+
+    private BetxConfig withStructuredLogsDirectory(BetxConfig config, Path directory) {
+        return new BetxConfig(
+            new AppConfig("info", new StructuredLogsConfig(true, directory.toString(), 30)),
+            config.telegram(),
+            config.betfair(),
+            config.exchanges(),
+            config.marketData(),
+            config.storage(),
+            config.risk(),
+            config.strategies(),
+            config.ml()
         );
     }
 
@@ -2620,24 +2739,28 @@ class TelegramBetConfirmationServiceTest {
     }
 
     private static final class RecordingExecutionGateway implements BetExecutionGateway {
-        private final List<com.betx.domain.order.BetOrder> orders = new ArrayList<>();
-        private final String externalOrderId;
+        private final List<BetOrder> orders = new ArrayList<>();
+        private final BetExecutionResult result;
 
         private RecordingExecutionGateway() {
-            this(null);
+            this((String) null);
         }
 
         private RecordingExecutionGateway(String externalOrderId) {
-            this.externalOrderId = externalOrderId;
+            this(new BetExecutionResult(true, "accepted", externalOrderId));
+        }
+
+        private RecordingExecutionGateway(BetExecutionResult result) {
+            this.result = result;
         }
 
         @Override
-        public com.betx.domain.order.BetExecutionResult execute(com.betx.domain.order.BetOrder order) {
+        public BetExecutionResult execute(BetOrder order) {
             orders.add(order);
-            return new com.betx.domain.order.BetExecutionResult(true, "accepted", externalOrderId);
+            return result;
         }
 
-        List<com.betx.domain.order.BetOrder> orders() {
+        List<BetOrder> orders() {
             return orders;
         }
     }

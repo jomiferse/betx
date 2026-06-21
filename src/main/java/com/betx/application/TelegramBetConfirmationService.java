@@ -1654,6 +1654,8 @@ public class TelegramBetConfirmationService {
             .field("eventName", intent.eventName())
             .field("runnerName", intent.runnerName())
             .field("strategyName", intent.strategyName())
+            .field("side", intent.side())
+            .field("resultMessage", intent.resultMessage())
             .field("odds", intent.odds())
             .field("selectedStake", intent.selectedStake())
             .field("availableBalance", intent.availableBalance())

@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.time.temporal.TemporalAccessor;
 
 public class SensitiveFieldSanitizer {
     private static final String REDACTED = "[REDACTED]";
@@ -40,6 +41,12 @@ public class SensitiveFieldSanitizer {
         }
         if (value instanceof Collection<?> collection) {
             return collection.stream().map(this::sanitizeValue).toList();
+        }
+        if (value instanceof TemporalAccessor) {
+            return value.toString();
+        }
+        if (value instanceof Enum<?> enumValue) {
+            return enumValue.name();
         }
         return value;
     }

@@ -284,6 +284,8 @@ Structured logs are split by purpose:
 
 Each line is one JSON object with `schemaVersion: 1`, UTC `timestamp`, `level`, `category`, `event`, optional correlation fields (`correlationId`, `cycleId`, `marketId`, `selectionId`), execution context, result, and event-specific `fields`.
 
+Real order audit events use `order.submitted` before sending a request to the exchange and `order.response` immediately after the exchange call returns. New logs do not use `order.accepted` unless a future exchange adapter can prove semantic acceptance; diagnostics still reads historical `order.accepted` entries for compatibility. Order response fields include the BetX intent/evaluation identifiers, exchange and market identifiers, requested odds/stake, response timestamps, execution status, and external order id when available.
+
 Example:
 
 ```json

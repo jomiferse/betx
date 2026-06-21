@@ -6,8 +6,11 @@ import com.betx.application.observability.BetxEvent;
 import com.betx.application.observability.BetxEventCategory;
 import com.betx.application.observability.BetxEventLevel;
 import com.betx.domain.config.StructuredLogsConfig;
+import com.betx.domain.order.BetExecutionStatus;
+import com.betx.domain.order.BetIntentStage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -82,6 +85,43 @@ class JsonlStructuredEventSinkTest {
         sink.emit(event());
 
         assertThat(tempDir.resolve("custom").resolve("operational_2026-06-18.jsonl")).exists();
+    }
+
+    @Test
+    void writesJsonSafeOrderResponseFields(@TempDir Path tempDir) throws Exception {
+        JsonlStructuredEventSink sink = new JsonlStructuredEventSink(tempDir.resolve("events"), 30, CLOCK);
+
+        sink.emit(new BetxEvent(
+            1,
+            Instant.parse("2026-06-18T18:20:31Z"),
+            BetxEventLevel.INFO,
+            BetxEventCategory.AUDIT,
+            "order.response",
+            "intent-1",
+            null,
+            "betfair",
+            "1.234",
+            42L,
+            "value-football",
+            "automatic",
+            "response",
+            Map.of(
+                "orderSubmittedAt", Instant.parse("2026-06-18T18:20:30Z"),
+                "orderResponseAt", Instant.parse("2026-06-18T18:20:31Z"),
+                "stage", BetIntentStage.EXECUTED,
+                "executionStatus", BetExecutionStatus.UNMATCHED,
+                "requestedOdds", BigDecimal.valueOf(2.5)
+            )
+        ));
+
+        Path file = tempDir.resolve("events").resolve("audit_2026-06-18.jsonl");
+        JsonNode node = new ObjectMapper().readTree(Files.readString(file).strip());
+        assertThat(node.path("event").asText()).isEqualTo("order.response");
+        assertThat(node.path("fields").path("orderSubmittedAt").asText()).isEqualTo("2026-06-18T18:20:30Z");
+        assertThat(node.path("fields").path("orderResponseAt").asText()).isEqualTo("2026-06-18T18:20:31Z");
+        assertThat(node.path("fields").path("stage").asText()).isEqualTo("EXECUTED");
+        assertThat(node.path("fields").path("executionStatus").asText()).isEqualTo("UNMATCHED");
+        assertThat(node.path("fields").path("requestedOdds").decimalValue()).isEqualByComparingTo("2.5");
     }
 
     private BetxEvent event() {
