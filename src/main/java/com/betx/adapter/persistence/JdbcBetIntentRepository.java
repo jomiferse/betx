@@ -84,7 +84,14 @@ public class JdbcBetIntentRepository implements BetIntentRepository {
                 SELECT *
                 FROM bet_intents
                 WHERE exchange = ? AND market_id = ? AND selection_id = ? AND side = ?
-                    AND stage IN ('AWAITING_CONFIRMATION', 'AWAITING_STAKE', 'EXECUTED', 'SETTLED')
+                    AND (
+                        stage IN ('AWAITING_CONFIRMATION', 'AWAITING_STAKE', 'EXECUTED', 'SETTLED')
+                        OR (
+                            external_order_id IS NOT NULL
+                            AND TRIM(external_order_id) <> ''
+                            AND COALESCE(execution_status, '') NOT IN ('REJECTED', 'CANCELLED')
+                        )
+                    )
                 ORDER BY created_at DESC
                 LIMIT 1
                 """)) {

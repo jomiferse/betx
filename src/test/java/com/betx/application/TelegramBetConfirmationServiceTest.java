@@ -9,6 +9,9 @@ import com.betx.application.port.out.ExchangeExposureGateway;
 import com.betx.application.port.out.MarketSnapshotRepository;
 import com.betx.application.port.out.SignalHistoryRepository;
 import com.betx.application.port.out.BetIntentRepository;
+import com.betx.application.observability.BetxEvent;
+import com.betx.application.observability.BetxEventLogger;
+import com.betx.application.port.out.StructuredEventSink;
 import com.betx.application.port.out.TelegramStateRepository;
 import com.betx.application.port.out.TelegramBotGateway;
 import com.betx.domain.betfair.BetfairAutoBettingConfig;
@@ -30,6 +33,7 @@ import com.betx.domain.order.BetIntent;
 import com.betx.domain.order.BetIntentSource;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.BetSettlementResult;
+import com.betx.domain.order.SelectionSide;
 import com.betx.domain.telegram.TelegramConnectionContext;
 import com.betx.domain.telegram.TelegramUpdate;
 import java.math.BigDecimal;
@@ -99,6 +103,95 @@ class TelegramBetConfirmationServiceTest {
         assertThat(intents.saved()).hasSize(1);
         assertThat(intents.saved().getFirst().stage()).isEqualTo(BetIntentStage.AWAITING_CONFIRMATION);
         assertThat(intents.saved().getFirst().source()).isEqualTo(BetIntentSource.TELEGRAM_CONFIRMATION);
+    }
+
+    @Test
+    void confirmationSkipsCoveredSelectionAsActiveMarketIntentInsteadOfAtomicDuplicate() {
+        RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        Instant previousBetAt = Instant.parse("2026-06-16T12:54:09Z");
+        BetIntent existing = new BetIntent(
+            "existing-covered-selection",
+            BetIntentSource.AUTOMATIC,
+            "betfair",
+            "1.1",
+            42L,
+            "Team A v Team B",
+            "Match Odds",
+            "Team A",
+            null,
+            SelectionSide.HOME,
+            "value-football",
+            BetSide.BACK,
+            "liquidity_ok",
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            null,
+            null,
+            null,
+            null,
+            BigDecimal.valueOf(5),
+            "Already matched.",
+            "bet-123",
+            previousBetAt.plusMillis(200),
+            BetSettlementResult.WIN,
+            BigDecimal.ONE,
+            BetIntentStage.SETTLED,
+            previousBetAt,
+            previousBetAt.plusMillis(200),
+            null,
+            null,
+            null,
+            BigDecimal.valueOf(2.5),
+            previousBetAt,
+            previousBetAt.plusMillis(100),
+            null,
+            previousBetAt.plusMillis(200),
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            BigDecimal.valueOf(5),
+            BigDecimal.ZERO,
+            BetExecutionStatus.FULLY_MATCHED
+        );
+        intents.save("data.db", existing);
+        RecordingStructuredEventSink sink = new RecordingStructuredEventSink();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3, true, true),
+            telegram,
+            gateway,
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            new RecordingMarketSnapshotRepository(),
+            new RecordingSignalHistoryRepository(),
+            new RecordingExecutionGateway(),
+            Clock.systemUTC(),
+            sink
+        );
+
+        service.sync(CONFIG_PATH, resultOf(signalWithEvaluationId(
+            "betfair",
+            "1.1",
+            42L,
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            "evaluation-confirmation-skip"
+        ), analysis("Team A")));
+
+        assertThat(telegram.sentMessages()).isEmpty();
+        assertThat(intents.saved()).containsExactly(existing);
+        assertThat(intents.claimDuplicateProtectionCalls()).isZero();
+        assertThat(sink.events()).noneSatisfy(event ->
+            assertThat(event.fields()).containsEntry("reason", "DUPLICATE_REAL_BET"));
+        assertThat(sink.events()).anySatisfy(event -> {
+            assertThat(event.event()).isEqualTo("bet_signal.skipped");
+            assertThat(event.executionMode()).isEqualTo("telegram_confirmation");
+            assertThat(event.fields()).containsEntry("reason", "ACTIVE_MARKET_INTENT_EXISTS");
+            assertThat(event.fields()).containsEntry("existingBetIntentId", "existing-covered-selection");
+            assertThat(event.fields()).containsEntry("evaluationId", "evaluation-confirmation-skip");
+        });
     }
 
     @Test
@@ -577,6 +670,100 @@ class TelegramBetConfirmationServiceTest {
     }
 
     @Test
+    void automaticBettingSkipsCoveredSelectionBeforeRiskClaimAndExecution() {
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        Instant previousBetAt = Instant.parse("2026-06-16T12:54:09Z");
+        BetIntent existing = new BetIntent(
+            "existing-covered-selection",
+            BetIntentSource.AUTOMATIC,
+            "betfair",
+            "1.251397469",
+            58805L,
+            "Argentina v Algeria",
+            "Match Odds",
+            "The Draw",
+            "Competition",
+            com.betx.domain.order.SelectionSide.DRAW,
+            "value-football",
+            BetSide.BACK,
+            "liquidity_ok",
+            BigDecimal.valueOf(4.8),
+            BigDecimal.ONE,
+            BigDecimal.valueOf(12.5),
+            BigDecimal.valueOf(12.5),
+            BigDecimal.ZERO,
+            previousBetAt,
+            BigDecimal.ONE,
+            "accepted",
+            "bet-123",
+            null,
+            null,
+            null,
+            BetIntentStage.EXECUTED,
+            previousBetAt,
+            previousBetAt,
+            "existing-evaluation",
+            null,
+            null,
+            BigDecimal.valueOf(4.8),
+            previousBetAt,
+            previousBetAt.plusMillis(200),
+            null,
+            previousBetAt.plusMillis(200),
+            BigDecimal.valueOf(4.8),
+            BigDecimal.valueOf(4.8),
+            BigDecimal.ONE,
+            BigDecimal.ONE,
+            BigDecimal.ZERO,
+            BetExecutionStatus.FULLY_MATCHED
+        );
+        intents.save("data.db", existing);
+        CountingExposureGateway exposureGateway = new CountingExposureGateway(new ExchangeExposure(
+            true,
+            0,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            List.of(),
+            Set.of(),
+            null
+        ));
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        RecordingStructuredEventSink sink = new RecordingStructuredEventSink();
+        CountingAccountGateway accountGateway = new CountingAccountGateway(BigDecimal.valueOf(12.5));
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(1), BigDecimal.valueOf(25), 3, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            accountGateway,
+            exposureGateway,
+            new RecordingMarketSnapshotRepository(),
+            new RecordingSignalHistoryRepository(),
+            executionGateway,
+            Clock.systemUTC(),
+            sink
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signalWithEvaluationId("betfair", "1.251397469", 58805L, BigDecimal.valueOf(4.7), BigDecimal.ONE, "new-evaluation"),
+            analysis("The Draw", "1.251397469", 58805L)
+        ));
+
+        assertThat(accountGateway.calls()).isZero();
+        assertThat(executionGateway.orders()).isEmpty();
+        assertThat(intents.saved()).containsExactly(existing);
+        assertThat(intents.claimDuplicateProtectionCalls()).isZero();
+        assertThat(sink.events()).extracting(BetxEvent::event).doesNotContain("risk.approved");
+        assertThat(sink.events()).anySatisfy(event -> {
+            assertThat(event.event()).isEqualTo("bet_signal.skipped");
+            assertThat(event.fields()).containsEntry("reason", "ACTIVE_MARKET_INTENT_EXISTS");
+            assertThat(event.fields()).containsEntry("existingBetIntentId", "existing-covered-selection");
+            assertThat(event.fields()).containsEntry("evaluationId", "new-evaluation");
+            assertThat(event.fields()).containsEntry("existingExecutionStatus", BetExecutionStatus.FULLY_MATCHED);
+        });
+    }
+
+    @Test
     void automaticBettingSkipsSelectionWithExistingSettledIntent() {
         RecordingIntentRepository intents = new RecordingIntentRepository();
         Instant previousBetAt = Instant.parse("2026-06-16T12:54:09Z");
@@ -618,6 +805,44 @@ class TelegramBetConfirmationServiceTest {
 
         assertThat(executionGateway.orders()).isEmpty();
         assertThat(intents.saved()).hasSize(1);
+    }
+
+    @Test
+    void automaticBettingLogsPlaceOrderResponseInsteadOfAccepted() {
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway("bet-123");
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        RecordingStructuredEventSink sink = new RecordingStructuredEventSink();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(3), BigDecimal.valueOf(25), 3, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            new RecordingMarketSnapshotRepository(),
+            new RecordingSignalHistoryRepository(),
+            executionGateway,
+            Clock.systemUTC(),
+            sink
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signalWithEvaluationId("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "eval-123"),
+            analysis("Team A")
+        ));
+
+        assertThat(sink.events()).extracting(BetxEvent::event)
+            .contains("order.submitted", "order.response", "order.unmatched")
+            .doesNotContain("order.accepted");
+        assertThat(sink.events().stream().filter(event -> "order.response".equals(event.event())).toList()).singleElement()
+            .satisfies(event -> {
+            assertThat(event.fields()).containsEntry("evaluationId", "eval-123");
+            assertThat(event.fields()).containsEntry("betIntentId", intents.saved().getFirst().id());
+            assertThat(event.fields()).containsEntry("externalOrderId", "bet-123");
+            assertThat(event.fields()).containsEntry("requestedOdds", BigDecimal.valueOf(2.5));
+            assertThat((BigDecimal) event.fields().get("requestedStake")).isEqualByComparingTo("3");
+            assertThat(event.fields()).containsEntry("executionStatus", BetExecutionStatus.UNMATCHED);
+        });
     }
 
     @Test
@@ -1524,6 +1749,7 @@ class TelegramBetConfirmationServiceTest {
             telegram,
             gateway,
             intents,
+            new RecordingTelegramStateRepository(),
             accountGateway,
             exposureGateway,
             new RecordingMarketSnapshotRepository(),
@@ -1628,12 +1854,42 @@ class TelegramBetConfirmationServiceTest {
             telegram,
             gateway,
             intents,
+            new RecordingTelegramStateRepository(),
             accountGateway,
             exposureGateway,
             snapshotRepository,
             historyRepository,
             executionGateway,
             clock
+        );
+    }
+
+    private TelegramBetConfirmationService service(
+        BetxConfig config,
+        RecordingTelegramConnectionService telegram,
+        RecordingTelegramGateway gateway,
+        RecordingIntentRepository intents,
+        ExchangeAccountGateway accountGateway,
+        ExchangeExposureGateway exposureGateway,
+        MarketSnapshotRepository snapshotRepository,
+        SignalHistoryRepository historyRepository,
+        BetExecutionGateway executionGateway,
+        Clock clock,
+        StructuredEventSink eventSink
+    ) {
+        return new TelegramBetConfirmationService(
+            new StaticConfigRepository(config),
+            telegram,
+            gateway,
+            intents,
+            new RecordingTelegramStateRepository(),
+            accountGateway,
+            exposureGateway,
+            snapshotRepository,
+            historyRepository,
+            executionGateway,
+            clock,
+            new BetxEventLogger(eventSink, clock)
         );
     }
 
@@ -2022,6 +2278,7 @@ class TelegramBetConfirmationServiceTest {
     private static final class RecordingIntentRepository implements BetIntentRepository {
         private final List<BetIntent> saved = new ArrayList<>();
         private final List<BetIntent> updated = new ArrayList<>();
+        private int claimDuplicateProtectionCalls;
 
         @Override
         public Optional<BetIntent> findActiveByKey(String databasePath, String exchange, String marketId, long selectionId) {
@@ -2049,12 +2306,17 @@ class TelegramBetConfirmationServiceTest {
                     && (intent.stage() == BetIntentStage.AWAITING_CONFIRMATION
                     || intent.stage() == BetIntentStage.AWAITING_STAKE
                     || intent.stage() == BetIntentStage.EXECUTED
-                    || intent.stage() == BetIntentStage.SETTLED))
+                    || intent.stage() == BetIntentStage.SETTLED
+                    || (intent.externalOrderId() != null
+                    && !intent.externalOrderId().isBlank()
+                    && intent.executionStatus() != BetExecutionStatus.REJECTED
+                    && intent.executionStatus() != BetExecutionStatus.CANCELLED)))
                 .findFirst();
         }
 
         @Override
         public Optional<BetIntent> claimDuplicateProtectionKey(String databasePath, BetIntent intent) {
+            claimDuplicateProtectionCalls++;
             return findDuplicateBlockingByKey(
                 databasePath,
                 intent.exchange(),
@@ -2177,6 +2439,23 @@ class TelegramBetConfirmationServiceTest {
 
         List<BetIntent> updated() {
             return updated;
+        }
+
+        int claimDuplicateProtectionCalls() {
+            return claimDuplicateProtectionCalls;
+        }
+    }
+
+    private static final class RecordingStructuredEventSink implements StructuredEventSink {
+        private final List<BetxEvent> events = new ArrayList<>();
+
+        @Override
+        public void emit(BetxEvent event) {
+            events.add(event);
+        }
+
+        List<BetxEvent> events() {
+            return events;
         }
     }
 

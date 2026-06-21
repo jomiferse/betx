@@ -2,6 +2,7 @@ package com.betx.adapter.logging;
 
 import com.betx.application.DiagnosticsLogReader;
 import com.betx.application.DiagnosticsLogSummary;
+import com.betx.application.DiagnosticsSkippedMarket;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.BufferedReader;
@@ -38,6 +39,7 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
         Map<String, Long> counts = new LinkedHashMap<>();
         Map<String, Instant> submittedByExternalOrderId = new HashMap<>();
         Map<String, Duration> acceptedLatenciesByExternalOrderId = new HashMap<>();
+        Map<String, SkippedMarketAccumulator> skippedMarkets = new HashMap<>();
         List<String> limitations = new ArrayList<>();
         long invalidLines = 0;
         long ignoredLines = 0;
@@ -56,6 +58,14 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
                             continue;
                         }
                         counts.merge(event.event(), 1L, Long::sum);
+                        if (event.reason() != null) {
+                            counts.merge(event.event() + ":" + event.reason(), 1L, Long::sum);
+                        }
+                        if ("bet_signal.skipped".equals(event.event())
+                            && "ACTIVE_MARKET_INTENT_EXISTS".equals(event.reason())) {
+                            skippedMarkets.computeIfAbsent(event.skipKey(), ignored -> new SkippedMarketAccumulator(event))
+                                .increment();
+                        }
                         String externalOrderId = event.externalOrderId();
                         if (externalOrderId == null) {
                             continue;
@@ -74,7 +84,14 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
         } catch (IOException exc) {
             limitations.add("Could not read all structured logs: " + exc.getMessage() + ".");
         }
-        return new DiagnosticsLogSummary(counts, acceptedLatenciesByExternalOrderId, invalidLines, ignoredLines, limitations);
+        return new DiagnosticsLogSummary(
+            counts,
+            acceptedLatenciesByExternalOrderId,
+            topSkippedMarkets(skippedMarkets),
+            invalidLines,
+            ignoredLines,
+            limitations
+        );
     }
 
     private ParsedEvent parse(String line) {
@@ -93,11 +110,34 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
             return new ParsedEvent(
                 Instant.parse(String.valueOf(timestamp)),
                 String.valueOf(event),
-                externalOrderId(json, fields)
+                externalOrderId(json, fields),
+                string(fields.get("reason")),
+                string(json.get("marketId")),
+                longValue(json.get("selectionId")),
+                string(fields.get("side")),
+                string(fields.get("existingBetIntentId")),
+                string(fields.get("eventName")),
+                string(fields.get("runnerName")),
+                string(fields.get("existingExecutionStatus"))
             );
         } catch (RuntimeException | IOException exc) {
             return null;
         }
+    }
+
+    private static List<DiagnosticsSkippedMarket> topSkippedMarkets(Map<String, SkippedMarketAccumulator> skippedMarkets) {
+        return skippedMarkets.values().stream()
+            .sorted((left, right) -> Long.compare(right.attempts, left.attempts))
+            .limit(10)
+            .map(SkippedMarketAccumulator::toSkippedMarket)
+            .toList();
+    }
+
+    private static String string(Object value) {
+        if (value == null || String.valueOf(value).isBlank()) {
+            return null;
+        }
+        return String.valueOf(value);
     }
 
     private static String externalOrderId(Map<String, Object> json, Map<String, Object> fields) {
@@ -114,6 +154,16 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
         return null;
     }
 
+    private static long longValue(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null || String.valueOf(value).isBlank()) {
+            return 0L;
+        }
+        return Long.parseLong(String.valueOf(value));
+    }
+
     private static boolean inPeriod(Instant timestamp, Instant from, Instant to) {
         if (timestamp == null) {
             return false;
@@ -121,6 +171,53 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
         return (from == null || !timestamp.isBefore(from)) && (to == null || !timestamp.isAfter(to));
     }
 
-    private record ParsedEvent(Instant timestamp, String event, String externalOrderId) {
+    private record ParsedEvent(
+        Instant timestamp,
+        String event,
+        String externalOrderId,
+        String reason,
+        String marketId,
+        long selectionId,
+        String side,
+        String existingBetIntentId,
+        String eventName,
+        String runnerName,
+        String existingExecutionStatus
+    ) {
+        private String skipKey() {
+            return String.join(
+                "|",
+                marketId == null ? "" : marketId,
+                Long.toString(selectionId),
+                side == null ? "" : side,
+                existingBetIntentId == null ? "" : existingBetIntentId
+            );
+        }
+    }
+
+    private static final class SkippedMarketAccumulator {
+        private final ParsedEvent first;
+        private long attempts;
+
+        private SkippedMarketAccumulator(ParsedEvent first) {
+            this.first = first;
+        }
+
+        private void increment() {
+            attempts++;
+        }
+
+        private DiagnosticsSkippedMarket toSkippedMarket() {
+            return new DiagnosticsSkippedMarket(
+                first.eventName(),
+                first.runnerName(),
+                first.marketId(),
+                first.selectionId(),
+                first.side(),
+                first.existingBetIntentId(),
+                first.existingExecutionStatus(),
+                attempts
+            );
+        }
     }
 }

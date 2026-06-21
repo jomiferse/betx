@@ -137,8 +137,27 @@ class DiagnosticsServiceTest {
     @Test
     void formatterSeparatesLogEventsFromPersistedExecutionCoverage() {
         DiagnosticsLogSummary logs = new DiagnosticsLogSummary(
-            Map.of("order.submitted", 9L, "order.accepted", 9L, "order.settled", 10L),
+            Map.of(
+                "order.submitted", 9L,
+                "order.response", 8L,
+                "order.accepted", 1L,
+                "order.unmatched", 2L,
+                "order.matched", 5L,
+                "order.settled", 10L,
+                "bet_signal.skipped:ACTIVE_MARKET_INTENT_EXISTS", 34L,
+                "bet_intent.skipped:DUPLICATE_REAL_BET", 1L
+            ),
             Map.of(),
+            List.of(new DiagnosticsSkippedMarket(
+                "Team A v Team B",
+                "Team A",
+                "1.1",
+                42L,
+                "BACK",
+                "intent-1",
+                "FULLY_MATCHED",
+                34L
+            )),
             0,
             0,
             List.of()
@@ -151,7 +170,13 @@ class DiagnosticsServiceTest {
             .contains("Operational events observed in logs")
             .contains("Persisted records in SQLite")
             .anySatisfy(line -> assertThat(line).contains("order.submitted events").contains("9"))
-            .anySatisfy(line -> assertThat(line).contains("order.accepted events").contains("9"))
+            .anySatisfy(line -> assertThat(line).contains("order.response events").contains("8"))
+            .anySatisfy(line -> assertThat(line).contains("legacy order.accepted events").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("order.unmatched events").contains("2"))
+            .anySatisfy(line -> assertThat(line).contains("order.matched events").contains("5"))
+            .anySatisfy(line -> assertThat(line).contains("Early active-market skips").contains("34"))
+            .anySatisfy(line -> assertThat(line).contains("Atomic duplicate blocks").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("Team A v Team B / Team A / attempts 34"))
             .anySatisfy(line -> assertThat(line).contains("bets with order_submitted_at").contains("1 / 1"))
             .noneSatisfy(line -> assertThat(line).contains("Recommendations generated"));
     }

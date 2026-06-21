@@ -79,7 +79,7 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort = prospectiveRealBettingCohort(dataset.realBets());
         DiagnosticsDecisionFunnel funnel = decisionFunnel(dataset, logs);
         List<DiagnosticFinding> findings = integrityFindings(dataset, matches);
-        List<String> limitations = limitations(logs);
+        List<String> limitations = limitations(logs, persistedExecutionCoverage, logEventCoverage);
         List<String> topFindings = topFindings(coverage, paperVsReal, execution, findings);
         Map<MatchGapReason, Long> matchingGaps = matchingGaps(matches);
         return new DiagnosticsReport(
@@ -98,7 +98,8 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             logEventCoverage,
             persistedExecutionCoverage,
             placeOrdersResponseDuration,
-            prospectiveRealBettingCohort
+            prospectiveRealBettingCohort,
+            logs.topSkippedMarkets()
         );
     }
 
@@ -386,9 +387,15 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
     private DiagnosticsLogEventCoverage logEventCoverage(DiagnosticsLogSummary logs) {
         return new DiagnosticsLogEventCoverage(
             logCount(logs, "order.submitted"),
+            logCount(logs, "order.response"),
             logCount(logs, "order.accepted"),
             logCount(logs, "order.rejected"),
+            logCount(logs, "order.unmatched"),
+            logCount(logs, "order.partially_matched"),
+            logCount(logs, "order.matched"),
             logCount(logs, "order.settled"),
+            logCount(logs, "bet_signal.skipped:ACTIVE_MARKET_INTENT_EXISTS"),
+            logCount(logs, "bet_intent.skipped:DUPLICATE_REAL_BET"),
             logs.eventCounts().isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.LOG_CORRELATED
         );
     }
@@ -478,9 +485,9 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             .toList();
         return new DiagnosticsExecutionMetrics(
             logCount(logs, "order.submitted"),
-            logCount(logs, "order.accepted"),
-            0,
-            realBets.stream().filter(row -> row.stage() == BetIntentStage.FAILED).count(),
+            logCount(logs, "order.matched"),
+            logCount(logs, "order.partially_matched"),
+            logCount(logs, "order.unmatched"),
             logCount(logs, "order.rejected"),
             realBets.stream().filter(row -> row.stage() == BetIntentStage.CANCELLED).count(),
             durationAverage(latencies),
@@ -507,7 +514,7 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             logCount(logs, "risk.rejected"),
             logCount(logs, "confirmation.requested"),
             logCount(logs, "order.submitted"),
-            logCount(logs, "order.accepted"),
+            logCount(logs, "order.response") + logCount(logs, "order.accepted"),
             logCount(logs, "order.rejected"),
             logCount(logs, "order.settled"),
             dataset.rejectionReasons().entrySet().stream()
@@ -578,13 +585,24 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         return row.evaluationId() != null && !row.evaluationId().isBlank();
     }
 
-    private List<String> limitations(DiagnosticsLogSummary logs) {
+    private List<String> limitations(
+        DiagnosticsLogSummary logs,
+        DiagnosticsPersistedExecutionCoverage persistedExecutionCoverage,
+        DiagnosticsLogEventCoverage logEventCoverage
+    ) {
         List<String> values = new ArrayList<>();
         values.add("bet_intents.odds is reported as realRecordedOdds with source BET_INTENT; diagnostics does not assume it is executed odds.");
-        values.add("Real execution latency is calculated only from correlated order.submitted and order.accepted JSONL events.");
+        values.add("Real execution latency is unavailable for new order.response logs; legacy order.accepted correlations are kept only for historical compatibility.");
         values.add("Exact persisted execution fields are used only when present; legacy rows may not include partial-fill detail.");
         values.add("paper_trades does not persist strategy_name, so strategy is not required for paper-real matching.");
         values.add("Real-vs-paper odds metrics are APPROXIMATED because the real persisted odds source is bet_intents, not a proven executed price.");
+        if (persistedExecutionCoverage.betsWithOrderSubmittedAt() > logEventCoverage.orderSubmittedEvents()) {
+            values.add("LOG_SQLITE_ORDER_EVENT_COVERAGE_MISMATCH: SQLite orders with order_submitted_at: "
+                + persistedExecutionCoverage.betsWithOrderSubmittedAt()
+                + "; log order.submitted events: "
+                + logEventCoverage.orderSubmittedEvents()
+                + ".");
+        }
         values.addAll(logs.limitations());
         if (logs.invalidLines() > 0) {
             values.add("Ignored invalid JSONL lines: " + logs.invalidLines() + ".");

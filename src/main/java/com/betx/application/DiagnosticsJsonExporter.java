@@ -41,6 +41,7 @@ public class DiagnosticsJsonExporter {
         payload.put("placeOrdersResponseDuration", placeOrdersResponseDuration(report.placeOrdersResponseDuration()));
         payload.put("prospectiveRealBettingCohort", report.prospectiveRealBettingCohort());
         payload.put("executionDataCoverage", report.executionDataCoverage());
+        payload.put("topSkippedMarkets", report.topSkippedMarkets());
         payload.put("matchingGaps", report.matchingGaps());
         payload.put("paperVsRealMetrics", report.paperVsRealMetrics());
         payload.put("integrityFindings", report.integrityFindings());

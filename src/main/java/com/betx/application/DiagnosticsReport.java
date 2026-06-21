@@ -21,7 +21,8 @@ public record DiagnosticsReport(
     DiagnosticsLogEventCoverage logEventCoverage,
     DiagnosticsPersistedExecutionCoverage persistedExecutionCoverage,
     DiagnosticsPlaceOrdersResponseDuration placeOrdersResponseDuration,
-    DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort
+    DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort,
+    List<DiagnosticsSkippedMarket> topSkippedMarkets
 ) {
     public DiagnosticsReport(
         Instant generatedAt,
@@ -48,7 +49,7 @@ public record DiagnosticsReport(
             matchedPairs,
             Map.of(),
             new DiagnosticsExecutionDataCoverage(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-            new DiagnosticsLogEventCoverage(0, 0, 0, 0, DiagnosticsModel.DiagnosticsDataProvenance.UNAVAILABLE),
+            new DiagnosticsLogEventCoverage(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, DiagnosticsModel.DiagnosticsDataProvenance.UNAVAILABLE),
             new DiagnosticsPersistedExecutionCoverage(0, 0, 0, 0, 0, 0, 0, 0, DiagnosticsModel.DiagnosticsDataProvenance.UNAVAILABLE),
             new DiagnosticsPlaceOrdersResponseDuration(
                 0,
@@ -78,7 +79,8 @@ public record DiagnosticsReport(
                 0,
                 0,
                 DiagnosticsModel.DiagnosticsDataProvenance.UNAVAILABLE
-            )
+            ),
+            List.of()
         );
     }
 }

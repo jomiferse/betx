@@ -359,6 +359,7 @@ public class TelegramBetConfirmationService {
                         .field("remainingStake", updated.remainingStake())
                         .field("averageExecutedOdds", updated.averageExecutedOdds())
                         .emit();
+                    logOrderExecutionStatus(updated);
                 });
             Map<String, ExchangeSettledOrder> settledOrdersById = exposure.settledOrders().stream()
                 .filter(order -> order.externalOrderId() != null && !order.externalOrderId().isBlank())
@@ -494,7 +495,7 @@ public class TelegramBetConfirmationService {
                 signal.side()
             );
             if (existingDuplicate.isPresent()) {
-                logDuplicateSkipped(signal, existingDuplicate.get());
+                logActiveMarketIntentSkipped(signal, analysis, existingDuplicate.get(), "telegram_confirmation");
                 continue;
             }
             if (intentRepository.findActiveByKey(config.storage().path(), signal.exchange(), signal.marketId(), signal.selectionId()).isPresent()) {
@@ -611,7 +612,7 @@ public class TelegramBetConfirmationService {
                 signal.side()
             );
             if (existingDuplicate.isPresent()) {
-                logDuplicateSkipped(signal, existingDuplicate.get());
+                logActiveMarketIntentSkipped(signal, analysis, existingDuplicate.get(), "automatic");
                 continue;
             }
             if (intentRepository.findActiveByMarket(config.storage().path(), signal.exchange(), signal.marketId()).isPresent()) {
@@ -803,8 +804,13 @@ public class TelegramBetConfirmationService {
                     .result("submitted")
                     .field("evaluationId", signal.evaluationId())
                     .field("recommendationId", (String) null)
-                    .field("stake", stake)
-                    .field("odds", signal.odds())
+                    .field("betIntentId", intent.id())
+                    .field("eventName", intent.eventName())
+                    .field("runnerName", intent.runnerName())
+                    .field("strategyName", intent.strategyName())
+                    .field("side", signal.side())
+                    .field("requestedStake", stake)
+                    .field("requestedOdds", signal.odds())
                     .emit();
                 orderSubmittedAt = Instant.now(clock);
                 execution = executionGateway.execute(configPath, order);
@@ -830,12 +836,10 @@ public class TelegramBetConfirmationService {
             }
             linkHistoryForSignal(config, historyByKey, signal, intent);
             safeUpdateSignalHistory(config, intent);
+            logIntentEvent("order.response", BetxEventCategory.AUDIT, "response", intent).emit();
             if (execution.accepted()) {
                 exchangeState.recordAcceptedOrder();
-                logIntentEvent("order.accepted", BetxEventCategory.AUDIT, "accepted", intent)
-                    .field("stake", stake)
-                    .field("externalOrderId", execution.externalOrderId())
-                    .emit();
+                logOrderExecutionStatus(intent);
                 emit("AUTO BET ORDER ACCEPTED | id=" + intent.id()
                     + " | stake=" + stake
                     + " | exchange=" + intent.exchange()
@@ -1083,8 +1087,13 @@ public class TelegramBetConfirmationService {
             .result("submitted")
             .field("evaluationId", intent.evaluationId())
             .field("recommendationId", intent.recommendationId())
-            .field("stake", amount)
-            .field("odds", intent.odds())
+            .field("betIntentId", intent.id())
+            .field("eventName", intent.eventName())
+            .field("runnerName", intent.runnerName())
+            .field("strategyName", intent.strategyName())
+            .field("side", intent.side())
+            .field("requestedStake", amount)
+            .field("requestedOdds", intent.odds())
             .emit();
         Instant orderSubmittedAt = Instant.now(clock);
         var result = executionGateway.execute(configPath, order);
@@ -1100,11 +1109,9 @@ public class TelegramBetConfirmationService {
             .withOrderResponse(orderResponseAt, result.accepted() ? BetExecutionStatus.UNMATCHED : BetExecutionStatus.REJECTED);
         intentRepository.update(config.storage().path(), updated);
         safeUpdateSignalHistory(config, updated);
+        logIntentEvent("order.response", BetxEventCategory.AUDIT, "response", updated).emit();
         if (result.accepted()) {
-            logIntentEvent("order.accepted", BetxEventCategory.AUDIT, "accepted", updated)
-                .field("stake", amount)
-                .field("externalOrderId", result.externalOrderId())
-                .emit();
+            logOrderExecutionStatus(updated);
             emit("TELEGRAM BET ORDER ACCEPTED | id=" + updated.id()
                 + " | stake=" + amount
                 + " | exchange=" + updated.exchange()
@@ -1576,6 +1583,50 @@ public class TelegramBetConfirmationService {
             + " | selectionId=" + signal.selectionId());
     }
 
+    private void logActiveMarketIntentSkipped(
+        BetSignal signal,
+        RunnerAnalysis analysis,
+        BetIntent existing,
+        String executionMode
+    ) {
+        eventLogger.info(BetxEventCategory.AUDIT, "bet_signal.skipped")
+            .correlationId(signalCorrelationId(signal))
+            .exchange(signal.exchange())
+            .marketId(signal.marketId())
+            .selectionId(signal.selectionId())
+            .strategy("value-football")
+            .executionMode(executionMode)
+            .result("skipped")
+            .field("reason", "ACTIVE_MARKET_INTENT_EXISTS")
+            .field("existingBetIntentId", existing.id())
+            .field("side", signal.side())
+            .field("eventName", analysis.eventName())
+            .field("runnerName", analysis.displayRunner())
+            .field("strategyName", analysis.strategyName())
+            .field("evaluationId", signal.evaluationId())
+            .field("existingExecutionStatus", existing.executionStatus())
+            .emit();
+        emit("BET SIGNAL SKIPPED | reason=ACTIVE_MARKET_INTENT_EXISTS"
+            + " | existingBetIntentId=" + existing.id()
+            + " | exchange=" + signal.exchange()
+            + " | marketId=" + signal.marketId()
+            + " | selectionId=" + signal.selectionId());
+    }
+
+    private void logOrderExecutionStatus(BetIntent intent) {
+        if (intent.executionStatus() == BetExecutionStatus.PARTIALLY_MATCHED) {
+            logIntentEvent("order.partially_matched", BetxEventCategory.AUDIT, "partially_matched", intent).emit();
+            return;
+        }
+        if (intent.executionStatus() == BetExecutionStatus.FULLY_MATCHED) {
+            logIntentEvent("order.matched", BetxEventCategory.AUDIT, "matched", intent).emit();
+            return;
+        }
+        if (intent.executionStatus() == BetExecutionStatus.UNMATCHED) {
+            logIntentEvent("order.unmatched", BetxEventCategory.AUDIT, "unmatched", intent).emit();
+        }
+    }
+
     private void auditTelegramFailure(String action, RuntimeException exc) {
         String message = exc.getMessage();
         dependencyError("telegram", action, exc);
@@ -1600,6 +1651,9 @@ public class TelegramBetConfirmationService {
             .field("betIntentId", intent.id())
             .field("source", intent.source())
             .field("stage", intent.stage())
+            .field("eventName", intent.eventName())
+            .field("runnerName", intent.runnerName())
+            .field("strategyName", intent.strategyName())
             .field("odds", intent.odds())
             .field("selectedStake", intent.selectedStake())
             .field("availableBalance", intent.availableBalance())

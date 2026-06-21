@@ -17,8 +17,11 @@ class JsonlDiagnosticsLogReaderTest {
     void readsJsonlIncrementallyAndIgnoresInvalidLines() throws Exception {
         Files.writeString(tempDir.resolve("audit_2026-06-01.jsonl"), """
             {"timestamp":"2026-06-01T10:00:00Z","event":"order.submitted","fields":{"externalOrderId":"abc"}}
+            {"timestamp":"2026-06-01T10:00:00.500Z","event":"order.response","fields":{"externalOrderId":"abc"}}
             invalid
             {"timestamp":"2026-06-01T10:00:01Z","event":"order.accepted","fields":{"externalOrderId":"abc"}}
+            {"timestamp":"2026-06-01T10:00:02Z","event":"bet_signal.skipped","marketId":"1.1","selectionId":42,"fields":{"reason":"ACTIVE_MARKET_INTENT_EXISTS","side":"BACK","existingBetIntentId":"intent-1","eventName":"Team A v Team B","runnerName":"Team A","existingExecutionStatus":"FULLY_MATCHED"}}
+            {"timestamp":"2026-06-01T10:00:03Z","event":"bet_intent.skipped","fields":{"reason":"DUPLICATE_REAL_BET"}}
             {"timestamp":"2026-05-01T10:00:01Z","event":"order.accepted","fields":{"externalOrderId":"old"}}
             """);
 
@@ -28,8 +31,22 @@ class JsonlDiagnosticsLogReaderTest {
             Instant.parse("2026-06-02T00:00:00Z")
         );
 
-        assertThat(summary.eventCounts()).containsEntry("order.submitted", 1L).containsEntry("order.accepted", 1L);
+        assertThat(summary.eventCounts())
+            .containsEntry("order.submitted", 1L)
+            .containsEntry("order.response", 1L)
+            .containsEntry("order.accepted", 1L)
+            .containsEntry("bet_signal.skipped:ACTIVE_MARKET_INTENT_EXISTS", 1L)
+            .containsEntry("bet_intent.skipped:DUPLICATE_REAL_BET", 1L);
         assertThat(summary.acceptedLatenciesByExternalOrderId().get("abc").toMillis()).isEqualTo(1000);
+        assertThat(summary.topSkippedMarkets()).singleElement().satisfies(market -> {
+            assertThat(market.eventName()).isEqualTo("Team A v Team B");
+            assertThat(market.runnerName()).isEqualTo("Team A");
+            assertThat(market.marketId()).isEqualTo("1.1");
+            assertThat(market.selectionId()).isEqualTo(42L);
+            assertThat(market.existingBetIntentId()).isEqualTo("intent-1");
+            assertThat(market.existingExecutionStatus()).isEqualTo("FULLY_MATCHED");
+            assertThat(market.attempts()).isEqualTo(1L);
+        });
         assertThat(summary.invalidLines()).isEqualTo(1);
         assertThat(summary.ignoredLines()).isEqualTo(1);
     }

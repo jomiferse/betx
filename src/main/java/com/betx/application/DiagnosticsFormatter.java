@@ -29,9 +29,30 @@ public class DiagnosticsFormatter {
         lines.add("Operational events observed in logs");
         lines.add(line("Source", "STRUCTURED_LOGS"));
         lines.add(line("order.submitted events", report.logEventCoverage().orderSubmittedEvents()));
-        lines.add(line("order.accepted events", report.logEventCoverage().orderAcceptedEvents()));
+        lines.add(line("order.response events", report.logEventCoverage().orderResponseEvents()));
+        lines.add(line("legacy order.accepted events", report.logEventCoverage().orderAcceptedEvents()));
         lines.add(line("order.rejected events", report.logEventCoverage().orderRejectedEvents()));
+        lines.add(line("order.unmatched events", report.logEventCoverage().orderUnmatchedEvents()));
+        lines.add(line("order.partially_matched events", report.logEventCoverage().orderPartiallyMatchedEvents()));
+        lines.add(line("order.matched events", report.logEventCoverage().orderMatchedEvents()));
         lines.add(line("order.settled events", report.logEventCoverage().orderSettledEvents()));
+        lines.add("");
+        lines.add("Duplicate prevention");
+        lines.add(line("Early active-market skips", report.logEventCoverage().activeMarketSkips()));
+        lines.add(line("Atomic duplicate blocks", report.logEventCoverage().atomicDuplicateBlocks()));
+        if (!report.topSkippedMarkets().isEmpty()) {
+            lines.add("Top skipped markets:");
+            report.topSkippedMarkets().forEach(market -> lines.add("- "
+                + text(market.eventName())
+                + " / "
+                + text(market.runnerName())
+                + " / attempts "
+                + market.attempts()
+                + " / existingBetIntentId "
+                + text(market.existingBetIntentId())
+                + " / status "
+                + text(market.existingExecutionStatus())));
+        }
         lines.add("");
         lines.add("Persisted records in SQLite");
         lines.add(line("Source", "SQLITE"));
@@ -136,7 +157,7 @@ public class DiagnosticsFormatter {
         lines.add(line("Risk rejections", report.decisionFunnel().riskRejections()));
         lines.add(line("Confirmation requests", report.decisionFunnel().confirmationRequests()));
         lines.add(line("order.submitted events", report.decisionFunnel().ordersSubmitted()));
-        lines.add(line("order.accepted events", report.decisionFunnel().ordersMatched()));
+        lines.add(line("order.response/legacy accepted events", report.decisionFunnel().ordersMatched()));
         lines.add(line("order.rejected events", report.decisionFunnel().ordersRejected()));
         lines.add(line("order.settled events", report.decisionFunnel().betsSettled()));
         lines.add("");
@@ -177,5 +198,9 @@ public class DiagnosticsFormatter {
 
     private static String coverage(long value, long total) {
         return value + " / " + total;
+    }
+
+    private static String text(String value) {
+        return value == null || value.isBlank() ? "N/A" : value;
     }
 }

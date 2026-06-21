@@ -179,6 +179,47 @@ class JdbcBetIntentRepositoryTest {
     }
 
     @Test
+    void duplicateBlockingAllowsFailedCancelledOrRejectedRetryOnlyWithoutActiveExternalOrder() {
+        JdbcBetIntentRepository repository = new JdbcBetIntentRepository(tempDir.resolve("retry-dedupe.db").toString());
+        String databasePath = tempDir.resolve("retry-dedupe.db").toString();
+        repository.save(databasePath, intent(
+            "failed-without-external-order",
+            BetIntentSource.AUTOMATIC,
+            "1.1",
+            42L,
+            BetIntentStage.FAILED,
+            "Order execution failed.",
+            null,
+            "2026-06-05T09:00:00Z"
+        ).withOrderResponse(Instant.parse("2026-06-05T09:00:01Z"), BetExecutionStatus.REJECTED));
+        repository.save(databasePath, intent(
+            "cancelled-with-exchange-cancelled-status",
+            BetIntentSource.AUTOMATIC,
+            "1.2",
+            43L,
+            BetIntentStage.CANCELLED,
+            "Cancelled on exchange.",
+            "bet-cancelled",
+            "2026-06-05T09:01:00Z"
+        ).withOrderResponse(Instant.parse("2026-06-05T09:01:01Z"), BetExecutionStatus.CANCELLED));
+        repository.save(databasePath, intent(
+            "failed-with-active-external-order",
+            BetIntentSource.AUTOMATIC,
+            "1.3",
+            44L,
+            BetIntentStage.FAILED,
+            "Response state unclear.",
+            "bet-active",
+            "2026-06-05T09:02:00Z"
+        ));
+
+        assertThat(repository.findDuplicateBlockingByKey(databasePath, "betfair", "1.1", 42L, BetSide.BACK)).isEmpty();
+        assertThat(repository.findDuplicateBlockingByKey(databasePath, "betfair", "1.2", 43L, BetSide.BACK)).isEmpty();
+        assertThat(repository.findDuplicateBlockingByKey(databasePath, "betfair", "1.3", 44L, BetSide.BACK))
+            .hasValueSatisfying(existing -> assertThat(existing.id()).isEqualTo("failed-with-active-external-order"));
+    }
+
+    @Test
     void persistsAllNormalizedSelectionSidesAndReportMetadata() {
         JdbcBetIntentRepository repository = new JdbcBetIntentRepository(tempDir.resolve("selection-sides.db").toString());
         String databasePath = tempDir.resolve("selection-sides.db").toString();

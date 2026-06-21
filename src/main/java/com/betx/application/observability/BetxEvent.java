@@ -1,6 +1,7 @@
 package com.betx.application.observability;
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -30,7 +31,7 @@ public record BetxEvent(
         level = level == null ? BetxEventLevel.INFO : level;
         category = category == null ? BetxEventCategory.OPERATIONAL : category;
         event = event == null || event.isBlank() ? "unknown" : event;
-        fields = fields == null ? Map.of() : Map.copyOf(fields);
+        fields = fields == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(fields));
     }
 
     public static Builder builder(Instant timestamp, BetxEventLevel level, BetxEventCategory category, String event) {
