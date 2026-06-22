@@ -3,6 +3,7 @@ package com.betx.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.betx.application.port.out.BetxConfigRepository;
+import com.betx.application.port.out.BetRecommendationRepository;
 import com.betx.application.port.out.ExchangeMarketDataGateway;
 import com.betx.application.port.out.MarketSnapshotRepository;
 import com.betx.application.port.out.PaperSignalEvaluationRepository;
@@ -88,6 +89,48 @@ class RunPaperTradingServiceTest {
     }
 
     @Test
+    void shadowPersistsRecommendationForNewPaperRecommendationWithoutLinkingPaperTrade() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        PaperSignalEvaluationRepositoryStub evaluations = new PaperSignalEvaluationRepositoryStub();
+        BetRecommendationRepositoryStub recommendations = new BetRecommendationRepositoryStub();
+        repository.recent.add(new ObservedMarketSnapshot(
+            observedAt.minusSeconds(3600),
+            snapshot(2L, "Draw", "3.70")
+        ));
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(snapshot(2L, "Draw", "3.70")))),
+            repository,
+            paperTrades,
+            evaluations,
+            recommendations,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC)
+        );
+
+        PaperTradingResult result = service.run(
+            new ConfigPath(Path.of("betx.yml")),
+            new BigDecimal("0.02"),
+            BacktestSlippageModel.PROFIT_HAIRCUT
+        );
+
+        assertThat(result.recommendationsGenerated()).isEqualTo(1);
+        assertThat(recommendations.saved).singleElement().satisfies(recommendation -> {
+            assertThat(recommendation.evaluationId()).isEqualTo(evaluations.saved.getFirst().evaluationId());
+            assertThat(recommendation.selectionSide()).isEqualTo(com.betx.domain.order.SelectionSide.DRAW);
+            assertThat(recommendation.strategyName()).isEqualTo("value-football");
+            assertThat(recommendation.source()).isEqualTo(BetRecommendationSource.SHADOW);
+            assertThat(recommendation.recommendedOdds()).isEqualByComparingTo("3.70");
+        });
+        assertThat(paperTrades.saved).singleElement()
+            .satisfies(trade -> assertThat(trade.recommendationId()).isNull());
+        assertThat(evaluations.saved).singleElement()
+            .satisfies(evaluation -> assertThat(evaluation.recommendationId()).isNull());
+    }
+
+    @Test
     void skipsTestMarketsBeforeSavingSnapshotsOrEvaluations() {
         Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
         MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
@@ -141,6 +184,33 @@ class RunPaperTradingServiceTest {
         assertThat(result.recommendationsGenerated()).isZero();
         assertThat(result.duplicatesSkipped()).isEqualTo(1);
         assertThat(paperTrades.saved).hasSize(1);
+    }
+
+    @Test
+    void doesNotCreateShadowRecommendationWhenPaperTradeAlreadyCoversSelection() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        BetRecommendationRepositoryStub recommendations = new BetRecommendationRepositoryStub();
+        MarketSnapshot draw = snapshot(2L, "Draw", "3.70");
+        repository.recent.add(new ObservedMarketSnapshot(observedAt.minusSeconds(3600), draw));
+        paperTrades.saved.add(PaperTrade.recommended(draw, observedAt.minusSeconds(60), BigDecimal.valueOf(5)));
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(draw))),
+            repository,
+            paperTrades,
+            new PaperSignalEvaluationRepositoryStub(),
+            recommendations,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC)
+        );
+
+        service.run(new ConfigPath(Path.of("betx.yml")), BigDecimal.ZERO, BacktestSlippageModel.PROFIT_HAIRCUT);
+
+        assertThat(recommendations.saved).isEmpty();
+        assertThat(paperTrades.saved).singleElement()
+            .satisfies(trade -> assertThat(trade.recommendationId()).isNull());
     }
 
     @Test
@@ -717,6 +787,27 @@ class RunPaperTradingServiceTest {
         @Override
         public List<PaperSignalEvaluation> listLatest(String databasePath, int limit) {
             return List.copyOf(saved);
+        }
+    }
+
+    private static final class BetRecommendationRepositoryStub implements BetRecommendationRepository {
+        private final List<BetRecommendation> saved = new ArrayList<>();
+
+        @Override
+        public void save(String databasePath, BetRecommendation recommendation) {
+            saved.add(recommendation);
+        }
+
+        @Override
+        public Optional<BetRecommendation> findById(String databasePath, String id) {
+            return saved.stream().filter(recommendation -> recommendation.id().equals(id)).findFirst();
+        }
+
+        @Override
+        public List<BetRecommendation> findByEvaluationId(String databasePath, String evaluationId) {
+            return saved.stream()
+                .filter(recommendation -> java.util.Objects.equals(recommendation.evaluationId(), evaluationId))
+                .toList();
         }
     }
 

@@ -19,6 +19,27 @@ public class DiagnosticsFormatter {
         lines.add(line("Paper-only", report.coverage().paperOnly()));
         lines.add(line("Ambiguous", report.coverage().ambiguous()));
         lines.add("");
+        lines.add("Bet recommendations");
+        DiagnosticsBetRecommendationsSummary recommendations = report.betRecommendations();
+        lines.add(line("Total recommendations", recommendations.totalRecommendations()));
+        lines.add(line("Recommendations with evaluation_id", coverage(
+            recommendations.withEvaluationId(),
+            recommendations.totalRecommendations()
+        )));
+        lines.add(line("Recommendations with strategy_name", coverage(
+            recommendations.withStrategyName(),
+            recommendations.totalRecommendations()
+        )));
+        lines.add(line("Recommendations with selection_side", coverage(
+            recommendations.withSelectionSide(),
+            recommendations.totalRecommendations()
+        )));
+        lines.add(line("Recommendations created in period", recommendations.createdInPeriod()));
+        lines.add(line("Orphan recommendations", recommendations.orphanRecommendations()));
+        addGrouped(lines, "Recommendations by strategy", recommendations.byStrategy());
+        addGrouped(lines, "Recommendations by selection side", recommendations.bySelectionSide());
+        addGrouped(lines, "Recommendations by competition", recommendations.byCompetition());
+        lines.add("");
         lines.add("Matching gaps");
         if (report.matchingGaps().isEmpty()) {
             lines.add(line("None", 0));
@@ -202,5 +223,14 @@ public class DiagnosticsFormatter {
 
     private static String text(String value) {
         return value == null || value.isBlank() ? "N/A" : value;
+    }
+
+    private static void addGrouped(List<String> lines, String title, java.util.Map<String, Long> values) {
+        lines.add(title + ":");
+        if (values == null || values.isEmpty()) {
+            lines.add("- None: 0");
+            return;
+        }
+        values.forEach((name, count) -> lines.add("- " + text(name) + ": " + count));
     }
 }

@@ -84,13 +84,34 @@ public final class DiagnosticsModel {
         long marketsScanned,
         long runnersAnalyzed,
         Map<String, Long> signalRecommendations,
-        Map<String, Long> rejectionReasons
+        Map<String, Long> rejectionReasons,
+        DiagnosticsBetRecommendationsSummary betRecommendations
     ) {
+        public DiagnosticsDataset(
+            List<RealBetDiagnosticRow> realBets,
+            List<PaperTrade> paperTrades,
+            long marketsScanned,
+            long runnersAnalyzed,
+            Map<String, Long> signalRecommendations,
+            Map<String, Long> rejectionReasons
+        ) {
+            this(
+                realBets,
+                paperTrades,
+                marketsScanned,
+                runnersAnalyzed,
+                signalRecommendations,
+                rejectionReasons,
+                DiagnosticsBetRecommendationsSummary.empty()
+            );
+        }
+
         public DiagnosticsDataset {
             realBets = realBets == null ? List.of() : List.copyOf(realBets);
             paperTrades = paperTrades == null ? List.of() : List.copyOf(paperTrades);
             signalRecommendations = signalRecommendations == null ? Map.of() : Map.copyOf(signalRecommendations);
             rejectionReasons = rejectionReasons == null ? Map.of() : Map.copyOf(rejectionReasons);
+            betRecommendations = betRecommendations == null ? DiagnosticsBetRecommendationsSummary.empty() : betRecommendations;
         }
     }
 

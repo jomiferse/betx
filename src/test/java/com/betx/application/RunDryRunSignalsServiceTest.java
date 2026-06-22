@@ -4,11 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.BetExecutionGateway;
+import com.betx.application.port.out.BetRecommendationRepository;
 import com.betx.application.port.out.ExchangeMarketDataGateway;
 import com.betx.application.port.out.ExternalMatchIntelligenceGateway;
 import com.betx.application.port.out.MarketSnapshotRepository;
 import com.betx.application.port.out.SignalHistoryRepository;
+import com.betx.application.port.out.StructuredEventSink;
 import com.betx.application.port.out.TelegramParseMode;
+import com.betx.application.observability.BetxEvent;
+import com.betx.application.observability.BetxEventCategory;
+import com.betx.application.observability.BetxEventLogger;
 import com.betx.domain.betfair.BetfairAutoBettingConfig;
 import com.betx.domain.betfair.BetfairConfig;
 import com.betx.domain.config.BetxConfig;
@@ -829,6 +834,106 @@ class RunDryRunSignalsServiceTest {
     }
 
     @Test
+    void shadowPersistsBetRecommendationWhenStrategyEmitsActionableSignal() {
+        RecordingSnapshotRepository snapshotRepository = repositoryWithPrevious("betfair", "1.1");
+        RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
+        RecordingEventSink sink = new RecordingEventSink();
+        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        RunDryRunSignalsService service = new RunDryRunSignalsService(
+            new StaticConfigRepository(config),
+            List.of(gateway("betfair", List.of(snapshot("betfair", "1.1")), null)),
+            new NoopTelegramConnectionService(),
+            new RecordingBetExecutionGateway(),
+            snapshotRepository,
+            new MarketSnapshotChangeDetector(),
+            new NoopExternalMatchIntelligenceGateway(),
+            new RecordingSignalHistoryRepository(),
+            recommendations,
+            Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC),
+            new BetxEventLogger(sink, Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC))
+        );
+
+        DryRunSignalsResult result = service.run(CONFIG_PATH);
+
+        assertThat(result.signals()).singleElement()
+            .satisfies(signal -> assertThat(signal.evaluationId()).isEqualTo(recommendations.saved().getFirst().evaluationId()));
+        assertThat(recommendations.saved()).singleElement().satisfies(recommendation -> {
+            assertThat(recommendation.source()).isEqualTo(BetRecommendationSource.SHADOW);
+            assertThat(recommendation.status()).isEqualTo(BetRecommendationStatus.CREATED);
+            assertThat(recommendation.evaluationId()).isNotBlank();
+            assertThat(recommendation.exchange()).isEqualTo("betfair");
+            assertThat(recommendation.marketId()).isEqualTo("1.1");
+            assertThat(recommendation.selectionId()).isEqualTo(42L);
+            assertThat(recommendation.selectionSide()).isEqualTo(com.betx.domain.order.SelectionSide.HOME);
+            assertThat(recommendation.strategyName()).isEqualTo("value-football");
+            assertThat(recommendation.recommendedOdds()).isEqualByComparingTo("2.50");
+            assertThat(recommendation.observedAt()).isEqualTo(Instant.parse("2026-05-31T10:01:00Z"));
+            assertThat(recommendation.recommendedAt()).isEqualTo(Instant.parse("2026-05-31T10:01:00Z"));
+            assertThat(recommendation.confidence()).isNull();
+            assertThat(recommendation.edge()).isNull();
+        });
+        assertThat(sink.events())
+            .filteredOn(event -> event.event().equals("bet_recommendation.created"))
+            .singleElement()
+            .satisfies(event -> {
+                assertThat(event.category()).isEqualTo(BetxEventCategory.ANALYTICS);
+                assertThat(event.fields()).containsEntry("recommendationId", recommendations.saved().getFirst().id());
+                assertThat(event.fields()).containsEntry("evaluationId", recommendations.saved().getFirst().evaluationId());
+                assertThat(event.fields()).containsEntry("source", "SHADOW");
+                assertThat(event.fields()).containsEntry("side", "HOME");
+            });
+    }
+
+    @Test
+    void doesNotShadowPersistRecommendationForRejectedStrategyEvaluation() {
+        RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
+        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        RunDryRunSignalsService service = new RunDryRunSignalsService(
+            new StaticConfigRepository(config),
+            List.of(gateway("betfair", List.of(noBetSnapshot()), null)),
+            new NoopTelegramConnectionService(),
+            new RecordingBetExecutionGateway(),
+            new RecordingSnapshotRepository(),
+            new MarketSnapshotChangeDetector(),
+            new NoopExternalMatchIntelligenceGateway(),
+            new RecordingSignalHistoryRepository(),
+            recommendations,
+            Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC),
+            new BetxEventLogger(StructuredEventSink.noop(), Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC))
+        );
+
+        service.run(CONFIG_PATH);
+
+        assertThat(recommendations.saved()).isEmpty();
+    }
+
+    @Test
+    void shadowRecommendationFailureDoesNotFailSignalCycle() {
+        RecordingSnapshotRepository snapshotRepository = repositoryWithPrevious("betfair", "1.1");
+        RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
+        recommendations.failSaves = true;
+        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        RunDryRunSignalsService service = new RunDryRunSignalsService(
+            new StaticConfigRepository(config),
+            List.of(gateway("betfair", List.of(snapshot("betfair", "1.1")), null)),
+            new NoopTelegramConnectionService(),
+            new RecordingBetExecutionGateway(),
+            snapshotRepository,
+            new MarketSnapshotChangeDetector(),
+            new NoopExternalMatchIntelligenceGateway(),
+            new RecordingSignalHistoryRepository(),
+            recommendations,
+            Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC),
+            new BetxEventLogger(StructuredEventSink.noop(), Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC))
+        );
+
+        DryRunSignalsResult result = service.run(CONFIG_PATH);
+
+        assertThat(result.signals()).hasSize(1);
+        assertThat(result.failures()).isEmpty();
+    }
+
+    @Test
     void doesNotSaveSignalHistoryForNoBetDecisions() {
         RecordingSignalHistoryRepository historyRepository = new RecordingSignalHistoryRepository();
         BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
@@ -1344,6 +1449,48 @@ class RunDryRunSignalsServiceTest {
 
         private List<SignalHistoryEntry> saved() {
             return saved;
+        }
+    }
+
+    private static final class RecordingBetRecommendationRepository implements BetRecommendationRepository {
+        private final List<BetRecommendation> saved = new ArrayList<>();
+        private boolean failSaves;
+
+        @Override
+        public void save(String databasePath, BetRecommendation recommendation) {
+            if (failSaves) {
+                throw new IllegalStateException("recommendation database unavailable");
+            }
+            saved.add(recommendation);
+        }
+
+        @Override
+        public Optional<BetRecommendation> findById(String databasePath, String id) {
+            return saved.stream().filter(recommendation -> recommendation.id().equals(id)).findFirst();
+        }
+
+        @Override
+        public List<BetRecommendation> findByEvaluationId(String databasePath, String evaluationId) {
+            return saved.stream()
+                .filter(recommendation -> java.util.Objects.equals(recommendation.evaluationId(), evaluationId))
+                .toList();
+        }
+
+        private List<BetRecommendation> saved() {
+            return saved;
+        }
+    }
+
+    private static final class RecordingEventSink implements StructuredEventSink {
+        private final List<BetxEvent> events = new ArrayList<>();
+
+        @Override
+        public void emit(BetxEvent event) {
+            events.add(event);
+        }
+
+        private List<BetxEvent> events() {
+            return events;
         }
     }
 }

@@ -22,7 +22,8 @@ public record DiagnosticsReport(
     DiagnosticsPersistedExecutionCoverage persistedExecutionCoverage,
     DiagnosticsPlaceOrdersResponseDuration placeOrdersResponseDuration,
     DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort,
-    List<DiagnosticsSkippedMarket> topSkippedMarkets
+    List<DiagnosticsSkippedMarket> topSkippedMarkets,
+    DiagnosticsBetRecommendationsSummary betRecommendations
 ) {
     public DiagnosticsReport(
         Instant generatedAt,
@@ -80,7 +81,8 @@ public record DiagnosticsReport(
                 0,
                 DiagnosticsModel.DiagnosticsDataProvenance.UNAVAILABLE
             ),
-            List.of()
+            List.of(),
+            DiagnosticsBetRecommendationsSummary.empty()
         );
     }
 }

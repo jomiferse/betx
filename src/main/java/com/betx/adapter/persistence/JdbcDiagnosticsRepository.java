@@ -1,6 +1,7 @@
 package com.betx.adapter.persistence;
 
 import com.betx.application.BacktestOutcome;
+import com.betx.application.DiagnosticsBetRecommendationsSummary;
 import com.betx.application.DiagnosticsModel.DiagnosticsDataset;
 import com.betx.application.DiagnosticsModel.RealBetDiagnosticRow;
 import com.betx.application.DiagnosticsPeriod;
@@ -57,7 +58,18 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             Map<String, Long> rejections = tableExists(connection, "paper_signal_evaluations")
                 ? groupedCount(connection, "paper_signal_evaluations", "analyzer_reason", "observed_at", from, to)
                 : Map.of();
-            return new DiagnosticsDataset(realBets, paperTrades, marketsScanned, runnersAnalyzed, recommendations, rejections);
+            DiagnosticsBetRecommendationsSummary betRecommendations = tableExists(connection, "bet_recommendations")
+                ? betRecommendations(connection, from, to)
+                : DiagnosticsBetRecommendationsSummary.empty();
+            return new DiagnosticsDataset(
+                realBets,
+                paperTrades,
+                marketsScanned,
+                runnersAnalyzed,
+                recommendations,
+                rejections,
+                betRecommendations
+            );
         } catch (SQLException exc) {
             throw new IllegalStateException("Could not read diagnostics data.", exc);
         }
@@ -268,6 +280,47 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
                     values.put(resultSet.getString("name"), resultSet.getLong("total"));
                 }
                 return values;
+            }
+        }
+    }
+
+    private static DiagnosticsBetRecommendationsSummary betRecommendations(
+        Connection connection,
+        Instant from,
+        Instant to
+    ) throws SQLException {
+        long total = countRecommendations(connection, from, to, "1 = 1");
+        long withEvaluationId = countRecommendations(connection, from, to, "evaluation_id IS NOT NULL AND evaluation_id <> ''");
+        long withStrategyName = countRecommendations(connection, from, to, "strategy_name IS NOT NULL AND strategy_name <> ''");
+        long withSelectionSide = countRecommendations(connection, from, to, "selection_side IS NOT NULL AND selection_side <> '' AND selection_side <> 'UNKNOWN'");
+        long orphanRecommendations = countRecommendations(connection, from, to, "evaluation_id IS NULL OR evaluation_id = ''");
+        return new DiagnosticsBetRecommendationsSummary(
+            total,
+            withEvaluationId,
+            withStrategyName,
+            withSelectionSide,
+            groupedCount(connection, "bet_recommendations", "strategy_name", "recommended_at", from, to),
+            groupedCount(connection, "bet_recommendations", "selection_side", "recommended_at", from, to),
+            groupedCount(connection, "bet_recommendations", "competition_name", "recommended_at", from, to),
+            total,
+            orphanRecommendations
+        );
+    }
+
+    private static long countRecommendations(
+        Connection connection,
+        Instant from,
+        Instant to,
+        String extraPredicate
+    ) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT COUNT(*) AS total
+            FROM bet_recommendations
+            WHERE (%s) AND (%s)
+            """.formatted(periodPredicate(List.of("recommended_at", "created_at")), extraPredicate))) {
+            bindPeriod(statement, from, to, 2);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getLong("total") : 0;
             }
         }
     }

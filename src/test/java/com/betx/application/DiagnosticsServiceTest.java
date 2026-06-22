@@ -181,6 +181,41 @@ class DiagnosticsServiceTest {
             .noneSatisfy(line -> assertThat(line).contains("Recommendations generated"));
     }
 
+    @Test
+    void reportsShadowRecommendationsWithoutChangingLegacyMatching() {
+        DiagnosticsDataset dataset = new DiagnosticsDataset(
+            List.of(real("real-1", "m1", 10, T0.plusSeconds(60), "3.00", "10.00", BetSettlementResult.WIN, "20.00")),
+            List.of(paper("paper-1", "m1", 10, T0, "2.90", "2.90", "5.00", BacktestOutcome.WIN, "9.50")),
+            20,
+            40,
+            Map.of("BET", 1L),
+            Map.of(),
+            new DiagnosticsBetRecommendationsSummary(
+                3,
+                3,
+                3,
+                3,
+                Map.of("value-football", 3L),
+                Map.of("HOME", 2L, "DRAW", 1L),
+                Map.of("La Liga", 3L),
+                3,
+                0
+            )
+        );
+
+        DiagnosticsReport report = service(dataset, DiagnosticsLogSummary.empty()).generate(request());
+
+        assertThat(report.coverage().matchedPairs()).isEqualTo(1);
+        assertThat(report.betRecommendations().totalRecommendations()).isEqualTo(3);
+        assertThat(report.betRecommendations().byStrategy()).containsEntry("value-football", 3L);
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Bet recommendations")
+            .anySatisfy(line -> assertThat(line).contains("Total recommendations").contains("3"))
+            .anySatisfy(line -> assertThat(line).contains("Recommendations with evaluation_id").contains("3 / 3"))
+            .anySatisfy(line -> assertThat(line).contains("value-football").contains("3"))
+            .anySatisfy(line -> assertThat(line).contains("BetRecommendation is currently shadow-persisted only"));
+    }
+
     private static DiagnosticsService service(DiagnosticsDataset dataset, DiagnosticsLogSummary logs) {
         return new DiagnosticsService(
             new TestConfigRepository(new BetxConfig(

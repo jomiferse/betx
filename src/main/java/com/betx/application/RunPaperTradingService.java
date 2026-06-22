@@ -1,6 +1,7 @@
 package com.betx.application;
 
 import com.betx.application.port.out.BetxConfigRepository;
+import com.betx.application.port.out.BetRecommendationRepository;
 import com.betx.application.port.out.ExchangeMarketDataGateway;
 import com.betx.application.port.out.MarketSnapshotRepository;
 import com.betx.application.port.out.PaperSignalEvaluationRepository;
@@ -14,6 +15,7 @@ import com.betx.domain.config.ConfigPath;
 import com.betx.domain.config.ExchangeConfig;
 import com.betx.domain.config.PaperConfig;
 import com.betx.domain.config.StrategyConfig;
+import com.betx.domain.order.SelectionSide;
 import com.betx.domain.signal.EventMarketAnalyzer;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.ObservedMarketSnapshot;
@@ -52,6 +54,7 @@ public class RunPaperTradingService {
     private final MarketSnapshotRepository snapshotRepository;
     private final PaperTradeRepository paperTradeRepository;
     private final PaperSignalEvaluationRepository paperSignalEvaluationRepository;
+    private final BetRecommendationRepository betRecommendationRepository;
     private final Map<String, PaperTradeSettlementGateway> settlementGateways;
     private final Clock clock;
     private final EventMarketAnalyzer analyzer;
@@ -64,6 +67,7 @@ public class RunPaperTradingService {
         MarketSnapshotRepository snapshotRepository,
         PaperTradeRepository paperTradeRepository,
         PaperSignalEvaluationRepository paperSignalEvaluationRepository,
+        BetRecommendationRepository betRecommendationRepository,
         List<PaperTradeSettlementGateway> settlementGateways,
         BetxEventLogger eventLogger
     ) {
@@ -73,6 +77,7 @@ public class RunPaperTradingService {
             snapshotRepository,
             paperTradeRepository,
             paperSignalEvaluationRepository,
+            betRecommendationRepository,
             settlementGateways,
             Clock.systemUTC(),
             eventLogger
@@ -93,6 +98,7 @@ public class RunPaperTradingService {
             snapshotRepository,
             paperTradeRepository,
             new NoopPaperSignalEvaluationRepository(),
+            new NoopBetRecommendationRepository(),
             settlementGateways,
             clock,
             new BetxEventLogger(StructuredEventSink.noop(), clock)
@@ -114,6 +120,7 @@ public class RunPaperTradingService {
             snapshotRepository,
             paperTradeRepository,
             paperSignalEvaluationRepository,
+            new NoopBetRecommendationRepository(),
             settlementGateways,
             clock,
             new BetxEventLogger(StructuredEventSink.noop(), clock)
@@ -126,6 +133,30 @@ public class RunPaperTradingService {
         MarketSnapshotRepository snapshotRepository,
         PaperTradeRepository paperTradeRepository,
         PaperSignalEvaluationRepository paperSignalEvaluationRepository,
+        BetRecommendationRepository betRecommendationRepository,
+        List<PaperTradeSettlementGateway> settlementGateways,
+        Clock clock
+    ) {
+        this(
+            configRepository,
+            marketDataGateways,
+            snapshotRepository,
+            paperTradeRepository,
+            paperSignalEvaluationRepository,
+            betRecommendationRepository,
+            settlementGateways,
+            clock,
+            new BetxEventLogger(StructuredEventSink.noop(), clock)
+        );
+    }
+
+    RunPaperTradingService(
+        BetxConfigRepository configRepository,
+        List<ExchangeMarketDataGateway> marketDataGateways,
+        MarketSnapshotRepository snapshotRepository,
+        PaperTradeRepository paperTradeRepository,
+        PaperSignalEvaluationRepository paperSignalEvaluationRepository,
+        BetRecommendationRepository betRecommendationRepository,
         List<PaperTradeSettlementGateway> settlementGateways,
         Clock clock,
         BetxEventLogger eventLogger
@@ -138,6 +169,9 @@ public class RunPaperTradingService {
         this.paperSignalEvaluationRepository = paperSignalEvaluationRepository == null
             ? new NoopPaperSignalEvaluationRepository()
             : paperSignalEvaluationRepository;
+        this.betRecommendationRepository = betRecommendationRepository == null
+            ? new NoopBetRecommendationRepository()
+            : betRecommendationRepository;
         this.settlementGateways = (settlementGateways == null ? List.<PaperTradeSettlementGateway>of() : settlementGateways).stream()
             .collect(Collectors.toMap(PaperTradeSettlementGateway::exchangeName, Function.identity(), (left, right) -> left));
         this.clock = clock;
@@ -157,8 +191,10 @@ public class RunPaperTradingService {
             snapshotRepository,
             new NoopPaperTradeRepository(),
             new NoopPaperSignalEvaluationRepository(),
+            new NoopBetRecommendationRepository(),
             List.of(),
-            clock
+            clock,
+            new BetxEventLogger(StructuredEventSink.noop(), clock)
         );
     }
 
@@ -398,6 +434,7 @@ public class RunPaperTradingService {
                         && runnerType(snapshot) == RunnerType.DRAW) {
                         analyzerOutcome = PaperTradeAnalyzerRejectionReason.ACCEPTED;
                         diagnostics.recordAnalyzerOutcome(analyzerOutcome);
+                        shadowPersistRecommendation(config, cycleId, observedAt, analysis);
                         PaperTrade paperTrade = PaperTrade.recommended(snapshot, observedAt, config.risk().maxStake());
                         PaperTrade executed = executePaperTrade(observedAt, paperTrade, snapshot, oddsSlippageRate, slippageModel);
                         logPaperTrade("paper_trade.recommended", "recommended", paperTrade, cycleId)
@@ -540,6 +577,120 @@ public class RunPaperTradingService {
             analysis.evaluationId(),
             null
         );
+    }
+
+    private void shadowPersistRecommendation(
+        BetxConfig config,
+        String cycleId,
+        Instant observedAt,
+        RunnerAnalysis analysis
+    ) {
+        BetRecommendation recommendation = new BetRecommendation(
+            UUID.randomUUID().toString(),
+            analysis.evaluationId(),
+            analysis.exchange(),
+            analysis.marketId(),
+            analysis.selectionId(),
+            selectionSide(analysis),
+            analysis.eventName(),
+            analysis.displayRunner(),
+            analysis.competitionName(),
+            analysis.marketStartTime(),
+            analysis.strategyName(),
+            analysis.bestBackPrice(),
+            observedAt,
+            observedAt,
+            BetRecommendationSource.SHADOW,
+            BetRecommendationStatus.CREATED,
+            Instant.now(clock),
+            null,
+            null,
+            analysis.liquidity(),
+            analysis.reason()
+        );
+        try {
+            betRecommendationRepository.save(config.storage().path(), recommendation);
+            eventLogger.info(BetxEventCategory.ANALYTICS, "bet_recommendation.created")
+                .correlationId("recommendation-" + recommendation.id())
+                .cycleId(cycleId)
+                .exchange(recommendation.exchange())
+                .marketId(recommendation.marketId())
+                .selectionId(recommendation.selectionId())
+                .strategy(recommendation.strategyName())
+                .executionMode("shadow")
+                .result("created")
+                .field("recommendationId", recommendation.id())
+                .field("evaluationId", recommendation.evaluationId())
+                .field("side", recommendation.selectionSide().name())
+                .field("eventName", recommendation.eventName())
+                .field("runnerName", recommendation.runnerName())
+                .field("competitionName", recommendation.competitionName())
+                .field("strategyName", recommendation.strategyName())
+                .field("recommendedOdds", recommendation.recommendedOdds())
+                .field("recommendedAt", recommendation.recommendedAt())
+                .field("source", recommendation.source().name())
+                .emit();
+        } catch (RuntimeException exc) {
+            eventLogger.warn(BetxEventCategory.ERROR, "bet_recommendation.persist_failed")
+                .correlationId(signalCorrelationId(observedAt, analysis.exchange(), analysis.marketId(), analysis.selectionId()))
+                .cycleId(cycleId)
+                .exchange(analysis.exchange())
+                .marketId(analysis.marketId())
+                .selectionId(analysis.selectionId())
+                .strategy(analysis.strategyName())
+                .executionMode("paper")
+                .result("failed")
+                .field("evaluationId", analysis.evaluationId())
+                .field("errorType", exc.getClass().getSimpleName())
+                .field("message", exc.getMessage())
+                .emit();
+        }
+    }
+
+    private SelectionSide selectionSide(RunnerAnalysis analysis) {
+        SelectionSide fromRunnerType = switch (analysis.runnerType()) {
+            case HOME -> SelectionSide.HOME;
+            case DRAW -> SelectionSide.DRAW;
+            case AWAY -> SelectionSide.AWAY;
+            case UNKNOWN -> SelectionSide.UNKNOWN;
+        };
+        if (fromRunnerType != SelectionSide.UNKNOWN) {
+            return fromRunnerType;
+        }
+        SelectionSide fromSelectionId = switch (BacktestRunnerType.fromSelectionId(analysis.selectionId())) {
+            case HOME -> SelectionSide.HOME;
+            case DRAW -> SelectionSide.DRAW;
+            case AWAY -> SelectionSide.AWAY;
+            case UNKNOWN -> SelectionSide.UNKNOWN;
+        };
+        if (fromSelectionId != SelectionSide.UNKNOWN) {
+            return fromSelectionId;
+        }
+        return inferSelectionSide(analysis.eventName(), analysis.displayRunner());
+    }
+
+    private SelectionSide inferSelectionSide(String eventName, String runnerName) {
+        if (runnerName == null || runnerName.isBlank()) {
+            return SelectionSide.UNKNOWN;
+        }
+        String normalizedRunner = runnerName.strip();
+        if (normalizedRunner.toLowerCase(Locale.ROOT).contains("draw")) {
+            return SelectionSide.DRAW;
+        }
+        if (eventName == null || eventName.isBlank()) {
+            return SelectionSide.UNKNOWN;
+        }
+        String[] teams = eventName.split("\\s+v\\s+", 2);
+        if (teams.length != 2) {
+            return SelectionSide.UNKNOWN;
+        }
+        if (normalizedRunner.equalsIgnoreCase(teams[0].strip())) {
+            return SelectionSide.HOME;
+        }
+        if (normalizedRunner.equalsIgnoreCase(teams[1].strip())) {
+            return SelectionSide.AWAY;
+        }
+        return SelectionSide.UNKNOWN;
     }
 
     private void safeSaveSignalEvaluation(
@@ -794,6 +945,22 @@ public class RunPaperTradingService {
 
         @Override
         public List<PaperSignalEvaluation> listLatest(String databasePath, int limit) {
+            return List.of();
+        }
+    }
+
+    private static final class NoopBetRecommendationRepository implements BetRecommendationRepository {
+        @Override
+        public void save(String databasePath, BetRecommendation recommendation) {
+        }
+
+        @Override
+        public Optional<BetRecommendation> findById(String databasePath, String id) {
+            return Optional.empty();
+        }
+
+        @Override
+        public List<BetRecommendation> findByEvaluationId(String databasePath, String evaluationId) {
             return List.of();
         }
     }

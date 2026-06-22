@@ -2,6 +2,7 @@ package com.betx.application;
 
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.BetExecutionGateway;
+import com.betx.application.port.out.BetRecommendationRepository;
 import com.betx.application.port.out.ExchangeMarketDataGateway;
 import com.betx.application.port.out.ExternalMatchIntelligenceGateway;
 import com.betx.application.port.out.MarketSnapshotRepository;
@@ -17,6 +18,7 @@ import com.betx.domain.config.ExchangeConfig;
 import com.betx.domain.config.IntelligenceAutoBettingPolicy;
 import com.betx.domain.config.IntelligenceConfig;
 import com.betx.domain.config.StrategyConfig;
+import com.betx.domain.order.SelectionSide;
 import com.betx.domain.signal.BetSide;
 import com.betx.domain.signal.MarketSnapshot;
 import com.betx.domain.signal.ObservedMarketSnapshot;
@@ -54,6 +56,7 @@ public class RunDryRunSignalsService {
     private final MarketSnapshotChangeDetector changeDetector;
     private final ExternalMatchIntelligenceGateway intelligenceGateway;
     private final SignalHistoryRepository signalHistoryRepository;
+    private final BetRecommendationRepository betRecommendationRepository;
     private final BetxEventLogger eventLogger;
     private final Clock clock;
     private final EventMarketAnalyzer analyzer;
@@ -72,6 +75,7 @@ public class RunDryRunSignalsService {
         MarketSnapshotChangeDetector changeDetector,
         ExternalMatchIntelligenceGateway intelligenceGateway,
         SignalHistoryRepository signalHistoryRepository,
+        BetRecommendationRepository betRecommendationRepository,
         BetxEventLogger eventLogger
     ) {
         this(
@@ -83,6 +87,7 @@ public class RunDryRunSignalsService {
             changeDetector,
             intelligenceGateway,
             signalHistoryRepository,
+            betRecommendationRepository,
             Clock.systemUTC(),
             eventLogger
         );
@@ -106,6 +111,7 @@ public class RunDryRunSignalsService {
             changeDetector,
             new NoopExternalMatchIntelligenceGateway(),
             new NoopSignalHistoryRepository(),
+            new NoopBetRecommendationRepository(),
             clock,
             new BetxEventLogger(StructuredEventSink.noop(), clock)
         );
@@ -130,6 +136,7 @@ public class RunDryRunSignalsService {
             changeDetector,
             intelligenceGateway,
             new NoopSignalHistoryRepository(),
+            new NoopBetRecommendationRepository(),
             clock,
             new BetxEventLogger(StructuredEventSink.noop(), clock)
         );
@@ -155,6 +162,7 @@ public class RunDryRunSignalsService {
             changeDetector,
             intelligenceGateway,
             signalHistoryRepository,
+            new NoopBetRecommendationRepository(),
             clock,
             new BetxEventLogger(StructuredEventSink.noop(), clock)
         );
@@ -169,6 +177,7 @@ public class RunDryRunSignalsService {
         MarketSnapshotChangeDetector changeDetector,
         ExternalMatchIntelligenceGateway intelligenceGateway,
         SignalHistoryRepository signalHistoryRepository,
+        BetRecommendationRepository betRecommendationRepository,
         Clock clock,
         BetxEventLogger eventLogger
     ) {
@@ -181,6 +190,9 @@ public class RunDryRunSignalsService {
         this.changeDetector = changeDetector;
         this.intelligenceGateway = intelligenceGateway == null ? new NoopExternalMatchIntelligenceGateway() : intelligenceGateway;
         this.signalHistoryRepository = signalHistoryRepository == null ? new NoopSignalHistoryRepository() : signalHistoryRepository;
+        this.betRecommendationRepository = betRecommendationRepository == null
+            ? new NoopBetRecommendationRepository()
+            : betRecommendationRepository;
         this.clock = clock;
         this.eventLogger = eventLogger == null ? new BetxEventLogger(StructuredEventSink.noop(), clock) : eventLogger;
         this.analyzer = new EventMarketAnalyzer();
@@ -203,6 +215,7 @@ public class RunDryRunSignalsService {
             new MarketSnapshotChangeDetector(),
             new NoopExternalMatchIntelligenceGateway(),
             new NoopSignalHistoryRepository(),
+            new NoopBetRecommendationRepository(),
             Clock.systemUTC(),
             new BetxEventLogger(StructuredEventSink.noop())
         );
@@ -224,6 +237,7 @@ public class RunDryRunSignalsService {
             new MarketSnapshotChangeDetector(),
             intelligenceGateway,
             new NoopSignalHistoryRepository(),
+            new NoopBetRecommendationRepository(),
             Clock.systemUTC(),
             new BetxEventLogger(StructuredEventSink.noop())
         );
@@ -357,6 +371,7 @@ public class RunDryRunSignalsService {
                     logSignalDecision(cycleId, observedAt, analysis);
                     Optional<MatchIntelligenceAssessment> assessment = Optional.empty();
                     if (analysis.recommendation() == RecommendationType.BET) {
+                        shadowPersistRecommendation(config, cycleId, observedAt, analysis);
                         eventLogger.info(BetxEventCategory.ANALYTICS, "intelligence.requested")
                             .correlationId(signalCorrelationId(observedAt, analysis.exchange(), analysis.marketId(), analysis.selectionId()))
                             .cycleId(cycleId)
@@ -527,6 +542,127 @@ public class RunDryRunSignalsService {
             "signal",
             analysis.evaluationId()
         );
+    }
+
+    private void shadowPersistRecommendation(
+        BetxConfig config,
+        String cycleId,
+        Instant observedAt,
+        RunnerAnalysis analysis
+    ) {
+        BetRecommendation recommendation = toShadowRecommendation(observedAt, analysis);
+        try {
+            betRecommendationRepository.save(config.storage().path(), recommendation);
+            logRecommendationCreated(cycleId, recommendation);
+        } catch (RuntimeException exc) {
+            eventLogger.warn(BetxEventCategory.ERROR, "bet_recommendation.persist_failed")
+                .correlationId(signalCorrelationId(observedAt, analysis.exchange(), analysis.marketId(), analysis.selectionId()))
+                .cycleId(cycleId)
+                .exchange(analysis.exchange())
+                .marketId(analysis.marketId())
+                .selectionId(analysis.selectionId())
+                .strategy(analysis.strategyName())
+                .result("failed")
+                .field("evaluationId", analysis.evaluationId())
+                .field("errorType", exc.getClass().getSimpleName())
+                .field("message", safeMessage(exc))
+                .emit();
+        }
+    }
+
+    private BetRecommendation toShadowRecommendation(Instant observedAt, RunnerAnalysis analysis) {
+        return new BetRecommendation(
+            UUID.randomUUID().toString(),
+            analysis.evaluationId(),
+            analysis.exchange(),
+            analysis.marketId(),
+            analysis.selectionId(),
+            selectionSide(analysis),
+            analysis.eventName(),
+            analysis.displayRunner(),
+            analysis.competitionName(),
+            analysis.marketStartTime(),
+            analysis.strategyName(),
+            analysis.bestBackPrice(),
+            observedAt,
+            observedAt,
+            BetRecommendationSource.SHADOW,
+            BetRecommendationStatus.CREATED,
+            Instant.now(clock),
+            null,
+            null,
+            analysis.liquidity(),
+            analysis.reason()
+        );
+    }
+
+    private void logRecommendationCreated(String cycleId, BetRecommendation recommendation) {
+        eventLogger.info(BetxEventCategory.ANALYTICS, "bet_recommendation.created")
+            .correlationId("recommendation-" + recommendation.id())
+            .cycleId(cycleId)
+            .exchange(recommendation.exchange())
+            .marketId(recommendation.marketId())
+            .selectionId(recommendation.selectionId())
+            .strategy(recommendation.strategyName())
+            .executionMode("shadow")
+            .result("created")
+            .field("recommendationId", recommendation.id())
+            .field("evaluationId", recommendation.evaluationId())
+            .field("side", recommendation.selectionSide().name())
+            .field("eventName", recommendation.eventName())
+            .field("runnerName", recommendation.runnerName())
+            .field("competitionName", recommendation.competitionName())
+            .field("strategyName", recommendation.strategyName())
+            .field("recommendedOdds", recommendation.recommendedOdds())
+            .field("recommendedAt", recommendation.recommendedAt())
+            .field("source", recommendation.source().name())
+            .emit();
+    }
+
+    private SelectionSide selectionSide(RunnerAnalysis analysis) {
+        SelectionSide fromRunnerType = switch (analysis.runnerType()) {
+            case HOME -> SelectionSide.HOME;
+            case DRAW -> SelectionSide.DRAW;
+            case AWAY -> SelectionSide.AWAY;
+            case UNKNOWN -> SelectionSide.UNKNOWN;
+        };
+        if (fromRunnerType != SelectionSide.UNKNOWN) {
+            return fromRunnerType;
+        }
+        SelectionSide fromSelectionId = switch (BacktestRunnerType.fromSelectionId(analysis.selectionId())) {
+            case HOME -> SelectionSide.HOME;
+            case DRAW -> SelectionSide.DRAW;
+            case AWAY -> SelectionSide.AWAY;
+            case UNKNOWN -> SelectionSide.UNKNOWN;
+        };
+        if (fromSelectionId != SelectionSide.UNKNOWN) {
+            return fromSelectionId;
+        }
+        return inferSelectionSide(analysis.eventName(), analysis.displayRunner());
+    }
+
+    private SelectionSide inferSelectionSide(String eventName, String runnerName) {
+        if (runnerName == null || runnerName.isBlank()) {
+            return SelectionSide.UNKNOWN;
+        }
+        String normalizedRunner = runnerName.strip();
+        if (normalizedRunner.toLowerCase(java.util.Locale.ROOT).contains("draw")) {
+            return SelectionSide.DRAW;
+        }
+        if (eventName == null || eventName.isBlank()) {
+            return SelectionSide.UNKNOWN;
+        }
+        String[] teams = eventName.split("\\s+v\\s+", 2);
+        if (teams.length != 2) {
+            return SelectionSide.UNKNOWN;
+        }
+        if (normalizedRunner.equalsIgnoreCase(teams[0].strip())) {
+            return SelectionSide.HOME;
+        }
+        if (normalizedRunner.equalsIgnoreCase(teams[1].strip())) {
+            return SelectionSide.AWAY;
+        }
+        return SelectionSide.UNKNOWN;
     }
 
     private Optional<MatchIntelligenceAssessment> assessIntelligence(BetxConfig config, RunnerAnalysis analysis) {
@@ -808,6 +944,22 @@ public class RunDryRunSignalsService {
 
         @Override
         public void updateOrderState(String databasePath, com.betx.domain.order.BetIntent intent) {
+        }
+    }
+
+    private static final class NoopBetRecommendationRepository implements BetRecommendationRepository {
+        @Override
+        public void save(String databasePath, BetRecommendation recommendation) {
+        }
+
+        @Override
+        public Optional<BetRecommendation> findById(String databasePath, String id) {
+            return Optional.empty();
+        }
+
+        @Override
+        public List<BetRecommendation> findByEvaluationId(String databasePath, String evaluationId) {
+            return List.of();
         }
     }
 }
