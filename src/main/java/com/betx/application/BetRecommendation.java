@@ -213,7 +213,7 @@ public record BetRecommendation(
             initialRecommendedOdds,
             latestRecommendedOdds,
             bestRecommendedOdds,
-            coveredAt == null ? this.coveredAt : coveredAt,
+            this.coveredAt == null ? coveredAt : this.coveredAt,
             expiredAt,
             lastEvaluationId
         );

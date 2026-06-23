@@ -97,19 +97,26 @@ public class JdbcBetRecommendationRepository implements BetRecommendationReposit
     }
 
     @Override
-    public Optional<BetRecommendation> markCovered(String databasePath, String canonicalKey, Instant coveredAt) {
+    public Optional<BetRecommendationUpsertResult> markCovered(String databasePath, String canonicalKey, Instant coveredAt) {
         ensureSchemaInitialized(databasePath);
         String path = resolvedDatabasePath(databasePath);
         try (Connection connection = connection(path)) {
             beginImmediate(connection);
             try {
                 Optional<BetRecommendation> existing = findCanonicalForUpdate(connection, canonicalKey);
-                Optional<BetRecommendation> covered = existing.map(recommendation -> recommendation.covered(coveredAt));
-                if (covered.isPresent()) {
-                    updateCanonicalFields(connection, covered.get());
+                Optional<BetRecommendationUpsertResult> result = Optional.empty();
+                if (existing.isPresent()) {
+                    BetRecommendation current = existing.get();
+                    boolean transitioned = current.status() == BetRecommendationStatus.ACTIVE;
+                    BetRecommendation covered = current.covered(coveredAt);
+                    updateCanonicalFields(connection, covered);
+                    result = Optional.of(new BetRecommendationUpsertResult(
+                        covered,
+                        transitioned ? BetRecommendationUpsertAction.COVERED : BetRecommendationUpsertAction.OBSERVED
+                    ));
                 }
                 commit(connection);
-                return covered;
+                return result;
             } catch (RuntimeException | SQLException exc) {
                 rollback(connection);
                 throw exc;

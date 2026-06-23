@@ -170,6 +170,7 @@ class TelegramBetConfirmationServiceTest {
         RecordingStructuredEventSink sink = new RecordingStructuredEventSink();
         RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
         recommendations.add(recommendation("rec-existing-covered-selection", "eval-original-covered-selection", "1.1", 42L, SelectionSide.UNKNOWN, "N/A"));
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
         TelegramBetConfirmationService service = service(
             configWithAutoBetting(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3, true, true),
             telegram,
@@ -179,7 +180,7 @@ class TelegramBetConfirmationServiceTest {
             StaticExposureGateway.available(0, BigDecimal.ZERO),
             new RecordingMarketSnapshotRepository(),
             new RecordingSignalHistoryRepository(),
-            new RecordingExecutionGateway(),
+            executionGateway,
             Clock.systemUTC(),
             sink,
             recommendations
@@ -213,6 +214,113 @@ class TelegramBetConfirmationServiceTest {
             assertThat(event.fields()).containsEntry("canonicalKey", "betfair|1.1|42|UNKNOWN|N/A");
             assertThat(event.fields()).containsEntry("status", "COVERED");
         });
+    }
+
+    @Test
+    void repeatedActiveMarketIntentSkipDoesNotLogCoveredRecommendationAgain() {
+        RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        Instant previousBetAt = Instant.parse("2026-06-16T12:54:09Z");
+        BetIntent existing = new BetIntent(
+            "existing-covered-selection",
+            BetIntentSource.AUTOMATIC,
+            "betfair",
+            "1.1",
+            42L,
+            "Team A v Team B",
+            "Match Odds",
+            "Team A",
+            null,
+            SelectionSide.HOME,
+            "value-football",
+            BetSide.BACK,
+            "liquidity_ok",
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            null,
+            null,
+            null,
+            null,
+            BigDecimal.valueOf(5),
+            "Already matched.",
+            "bet-123",
+            previousBetAt.plusMillis(200),
+            BetSettlementResult.WIN,
+            BigDecimal.ONE,
+            BetIntentStage.SETTLED,
+            previousBetAt,
+            previousBetAt.plusMillis(200),
+            null,
+            null,
+            null,
+            BigDecimal.valueOf(2.5),
+            previousBetAt,
+            previousBetAt.plusMillis(100),
+            null,
+            previousBetAt.plusMillis(200),
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            BigDecimal.valueOf(5),
+            BigDecimal.ZERO,
+            BetExecutionStatus.FULLY_MATCHED
+        );
+        intents.save("data.db", existing);
+        RecordingStructuredEventSink sink = new RecordingStructuredEventSink();
+        RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
+        recommendations.add(recommendation("rec-existing-covered-selection", "eval-original-covered-selection", "1.1", 42L, SelectionSide.UNKNOWN, "N/A"));
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3, true, true),
+            telegram,
+            gateway,
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            new RecordingMarketSnapshotRepository(),
+            new RecordingSignalHistoryRepository(),
+            executionGateway,
+            Clock.systemUTC(),
+            sink,
+            recommendations
+        );
+
+        service.sync(CONFIG_PATH, resultOf(signalWithEvaluationId(
+            "betfair",
+            "1.1",
+            42L,
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            "evaluation-confirmation-skip-1"
+        ), analysis("Team A")));
+        service.sync(CONFIG_PATH, resultOf(signalWithEvaluationId(
+            "betfair",
+            "1.1",
+            42L,
+            BigDecimal.valueOf(2.5),
+            BigDecimal.valueOf(5),
+            "evaluation-confirmation-skip-2"
+        ), analysis("Team A")));
+
+        assertThat(telegram.sentMessages()).isEmpty();
+        assertThat(intents.saved()).containsExactly(existing);
+        assertThat(intents.claimDuplicateProtectionCalls()).isZero();
+        assertThat(executionGateway.orders()).isEmpty();
+        assertThat(recommendations.coveredKeys()).containsExactly(
+            "betfair|1.1|42|UNKNOWN|N/A",
+            "betfair|1.1|42|UNKNOWN|N/A"
+        );
+        assertThat(sink.events().stream()
+            .filter(event -> event.event().equals("bet_recommendation.covered"))
+            .toList())
+            .singleElement()
+            .satisfies(event -> {
+                assertThat(event.fields()).containsEntry("recommendationId", "rec-existing-covered-selection");
+                assertThat(event.fields()).containsEntry("canonicalKey", "betfair|1.1|42|UNKNOWN|N/A");
+                assertThat(event.fields()).containsEntry("status", "COVERED");
+                assertThat(event.fields()).containsKey("coveredAt");
+            });
     }
 
     @Test
@@ -2668,15 +2776,19 @@ class TelegramBetConfirmationServiceTest {
         }
 
         @Override
-        public Optional<BetRecommendation> markCovered(String databasePath, String canonicalKey, Instant coveredAt) {
+        public Optional<BetRecommendationUpsertResult> markCovered(String databasePath, String canonicalKey, Instant coveredAt) {
             coveredKeys.add(canonicalKey);
             BetRecommendation recommendation = recommendations.get(canonicalKey);
             if (recommendation == null) {
                 return Optional.empty();
             }
+            boolean transitioned = recommendation.status() == BetRecommendationStatus.ACTIVE;
             BetRecommendation covered = recommendation.covered(coveredAt);
             recommendations.put(canonicalKey, covered);
-            return Optional.of(covered);
+            return Optional.of(new BetRecommendationUpsertResult(
+                covered,
+                transitioned ? BetRecommendationUpsertAction.COVERED : BetRecommendationUpsertAction.OBSERVED
+            ));
         }
 
         @Override

@@ -17,7 +17,7 @@ public interface BetRecommendationRepository {
         );
     }
 
-    default Optional<BetRecommendation> markCovered(String databasePath, String canonicalKey, Instant coveredAt) {
+    default Optional<BetRecommendationUpsertResult> markCovered(String databasePath, String canonicalKey, Instant coveredAt) {
         return Optional.empty();
     }
 

@@ -1699,6 +1699,8 @@ public class TelegramBetConfirmationService {
         );
         try {
             betRecommendationRepository.markCovered(databasePath, canonicalKey, Instant.now(clock))
+                .filter(result -> result.action() == BetRecommendationUpsertAction.COVERED)
+                .map(BetRecommendationUpsertResult::recommendation)
                 .ifPresent(recommendation -> eventLogger.info(BetxEventCategory.ANALYTICS, "bet_recommendation.covered")
                     .correlationId("recommendation-" + recommendation.id())
                     .exchange(recommendation.exchange())
@@ -1721,6 +1723,7 @@ public class TelegramBetConfirmationService {
                     .field("bestRecommendedOdds", recommendation.bestRecommendedOdds())
                     .field("observedCount", recommendation.observedCount())
                     .field("status", recommendation.status().name())
+                    .field("coveredAt", recommendation.coveredAt())
                     .field("source", recommendation.source().name())
                     .emit());
         } catch (RuntimeException exc) {

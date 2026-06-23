@@ -123,6 +123,34 @@ class JdbcBetRecommendationRepositoryTest {
     }
 
     @Test
+    void markCoveredReportsTransitionOnlyOnceAndKeepsOriginalCoveredAt() throws Exception {
+        String databasePath = tempDir.resolve("mark-covered-once.db").toString();
+        JdbcBetRecommendationRepository repository = new JdbcBetRecommendationRepository(databasePath);
+        repository.upsertActiveRecommendation(databasePath, recommendation("rec-1", "eval-1"));
+
+        var first = repository.markCovered(
+            databasePath,
+            "betfair|1.234|42|HOME|value-football",
+            Instant.parse("2026-06-22T08:40:00Z")
+        );
+        var second = repository.markCovered(
+            databasePath,
+            "betfair|1.234|42|HOME|value-football",
+            Instant.parse("2026-06-22T08:45:00Z")
+        );
+
+        assertThat(first).isPresent();
+        assertThat(first.get().action()).isEqualTo(BetRecommendationUpsertAction.COVERED);
+        assertThat(first.get().recommendation().status()).isEqualTo(BetRecommendationStatus.COVERED);
+        assertThat(first.get().recommendation().coveredAt()).isEqualTo(Instant.parse("2026-06-22T08:40:00Z"));
+        assertThat(second).isPresent();
+        assertThat(second.get().action()).isEqualTo(BetRecommendationUpsertAction.OBSERVED);
+        assertThat(second.get().recommendation().status()).isEqualTo(BetRecommendationStatus.COVERED);
+        assertThat(second.get().recommendation().coveredAt()).isEqualTo(Instant.parse("2026-06-22T08:40:00Z"));
+        assertThat(countRows(databasePath)).isEqualTo(1);
+    }
+
+    @Test
     void concurrentUpsertsForSameCanonicalKeyCreateSingleRow() throws Exception {
         String databasePath = tempDir.resolve("upsert-concurrent.db").toString();
         JdbcBetRecommendationRepository repository = new JdbcBetRecommendationRepository(databasePath);
