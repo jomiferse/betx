@@ -290,13 +290,46 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
         Instant to
     ) throws SQLException {
         long total = countRecommendations(connection, from, to, "1 = 1");
+        boolean hasCanonicalFields = hasColumn(connection, "bet_recommendations", "canonical_key")
+            && hasColumn(connection, "bet_recommendations", "observed_count");
+        long pre22ShadowRows = hasCanonicalFields
+            ? countRecommendations(connection, from, to, "canonical_key IS NULL OR canonical_key = ''")
+            : total;
+        long post22CanonicalRows = hasCanonicalFields
+            ? countRecommendations(connection, from, to, "canonical_key IS NOT NULL AND canonical_key <> ''")
+            : 0;
+        long activeCanonical = hasCanonicalFields
+            ? countRecommendations(connection, from, to, "canonical_key IS NOT NULL AND canonical_key <> '' AND status = 'ACTIVE'")
+            : 0;
+        long coveredCanonical = hasCanonicalFields
+            ? countRecommendations(connection, from, to, "canonical_key IS NOT NULL AND canonical_key <> '' AND status = 'COVERED'")
+            : 0;
+        long expiredCanonical = hasCanonicalFields
+            ? countRecommendations(connection, from, to, "canonical_key IS NOT NULL AND canonical_key <> '' AND status = 'EXPIRED'")
+            : 0;
+        long observations = hasCanonicalFields ? recommendationObservationSum(connection, from, to) : 0;
         long withEvaluationId = countRecommendations(connection, from, to, "evaluation_id IS NOT NULL AND evaluation_id <> ''");
+        long withLastEvaluationId = hasCanonicalFields
+            ? countRecommendations(connection, from, to, "last_evaluation_id IS NOT NULL AND last_evaluation_id <> ''")
+            : 0;
         long withStrategyName = countRecommendations(connection, from, to, "strategy_name IS NOT NULL AND strategy_name <> ''");
         long withSelectionSide = countRecommendations(connection, from, to, "selection_side IS NOT NULL AND selection_side <> '' AND selection_side <> 'UNKNOWN'");
         long orphanRecommendations = countRecommendations(connection, from, to, "evaluation_id IS NULL OR evaluation_id = ''");
         return new DiagnosticsBetRecommendationsSummary(
             total,
+            pre22ShadowRows,
+            post22CanonicalRows,
+            activeCanonical,
+            coveredCanonical,
+            expiredCanonical,
+            observations,
+            hasCanonicalFields ? recommendationAverageObservedCount(connection, from, to) : 0,
+            hasCanonicalFields ? recommendationPercentileObservedCount(connection, from, to, 0.50) : 0,
+            hasCanonicalFields ? recommendationPercentileObservedCount(connection, from, to, 0.95) : 0,
+            hasCanonicalFields ? topRecommendationsByObservedCount(connection, from, to) : Map.of(),
+            hasCanonicalFields ? duplicateCanonicalGroups(connection, from, to) : 0,
             withEvaluationId,
+            withLastEvaluationId,
             withStrategyName,
             withSelectionSide,
             groupedCount(connection, "bet_recommendations", "strategy_name", "recommended_at", from, to),
@@ -305,6 +338,99 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             total,
             orphanRecommendations
         );
+    }
+
+    private static long recommendationObservationSum(Connection connection, Instant from, Instant to) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT COALESCE(SUM(COALESCE(observed_count, 1)), 0) AS total
+            FROM bet_recommendations
+            WHERE (%s) AND canonical_key IS NOT NULL AND canonical_key <> ''
+            """.formatted(periodPredicate(List.of("recommended_at", "created_at"))))) {
+            bindPeriod(statement, from, to, 2);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getLong("total") : 0;
+            }
+        }
+    }
+
+    private static double recommendationAverageObservedCount(Connection connection, Instant from, Instant to) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT COALESCE(AVG(COALESCE(observed_count, 1)), 0) AS average_value
+            FROM bet_recommendations
+            WHERE (%s) AND canonical_key IS NOT NULL AND canonical_key <> ''
+            """.formatted(periodPredicate(List.of("recommended_at", "created_at"))))) {
+            bindPeriod(statement, from, to, 2);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getDouble("average_value") : 0;
+            }
+        }
+    }
+
+    private static double recommendationPercentileObservedCount(
+        Connection connection,
+        Instant from,
+        Instant to,
+        double percentile
+    ) throws SQLException {
+        long total = countRecommendations(connection, from, to, "canonical_key IS NOT NULL AND canonical_key <> ''");
+        if (total == 0) {
+            return 0;
+        }
+        long offset = Math.max(0, (long) Math.ceil(total * percentile) - 1);
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT COALESCE(observed_count, 1) AS observed_count
+            FROM bet_recommendations
+            WHERE (%s) AND canonical_key IS NOT NULL AND canonical_key <> ''
+            ORDER BY COALESCE(observed_count, 1) ASC
+            LIMIT 1 OFFSET ?
+            """.formatted(periodPredicate(List.of("recommended_at", "created_at"))))) {
+            bindPeriod(statement, from, to, 2);
+            statement.setLong(9, offset);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getDouble("observed_count") : 0;
+            }
+        }
+    }
+
+    private static Map<String, Long> topRecommendationsByObservedCount(
+        Connection connection,
+        Instant from,
+        Instant to
+    ) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT canonical_key AS name, COALESCE(observed_count, 1) AS total
+            FROM bet_recommendations
+            WHERE (%s) AND canonical_key IS NOT NULL AND canonical_key <> ''
+            ORDER BY COALESCE(observed_count, 1) DESC, canonical_key ASC
+            LIMIT 5
+            """.formatted(periodPredicate(List.of("recommended_at", "created_at"))))) {
+            bindPeriod(statement, from, to, 2);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                Map<String, Long> values = new LinkedHashMap<>();
+                while (resultSet.next()) {
+                    values.put(resultSet.getString("name"), resultSet.getLong("total"));
+                }
+                return values;
+            }
+        }
+    }
+
+    private static long duplicateCanonicalGroups(Connection connection, Instant from, Instant to) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT COUNT(*) AS total
+            FROM (
+                SELECT canonical_key
+                FROM bet_recommendations
+                WHERE (%s) AND canonical_key IS NOT NULL AND canonical_key <> ''
+                GROUP BY canonical_key
+                HAVING COUNT(*) > 1
+            )
+            """.formatted(periodPredicate(List.of("recommended_at", "created_at"))))) {
+            bindPeriod(statement, from, to, 2);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getLong("total") : 0;
+            }
+        }
     }
 
     private static long countRecommendations(

@@ -192,7 +192,19 @@ class DiagnosticsServiceTest {
             Map.of(),
             new DiagnosticsBetRecommendationsSummary(
                 3,
+                1,
+                2,
+                1,
+                1,
+                0,
+                7,
+                3.5,
                 3,
+                5,
+                Map.of("betfair|m1|10|HOME|value-football", 5L),
+                0,
+                3,
+                2,
                 3,
                 3,
                 Map.of("value-football", 3L),
@@ -211,9 +223,14 @@ class DiagnosticsServiceTest {
         assertThat(new DiagnosticsFormatter().format(report))
             .contains("Bet recommendations")
             .anySatisfy(line -> assertThat(line).contains("Total recommendations").contains("3"))
+            .anySatisfy(line -> assertThat(line).contains("pre-2.2 shadow rows").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("post-2.2 canonical rows").contains("2"))
+            .anySatisfy(line -> assertThat(line).contains("Canonical covered recommendations").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("Recommendation observations").contains("7"))
             .anySatisfy(line -> assertThat(line).contains("Recommendations with evaluation_id").contains("3 / 3"))
+            .anySatisfy(line -> assertThat(line).contains("Recommendations with last_evaluation_id").contains("2 / 3"))
             .anySatisfy(line -> assertThat(line).contains("value-football").contains("3"))
-            .anySatisfy(line -> assertThat(line).contains("BetRecommendation is currently shadow-persisted only"));
+            .anySatisfy(line -> assertThat(line).contains("BetRecommendation is canonicalized in shadow mode"));
     }
 
     private static DiagnosticsService service(DiagnosticsDataset dataset, DiagnosticsLogSummary logs) {

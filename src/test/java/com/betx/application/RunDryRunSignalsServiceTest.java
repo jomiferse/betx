@@ -856,10 +856,11 @@ class RunDryRunSignalsServiceTest {
         DryRunSignalsResult result = service.run(CONFIG_PATH);
 
         assertThat(result.signals()).singleElement()
-            .satisfies(signal -> assertThat(signal.evaluationId()).isEqualTo(recommendations.saved().getFirst().evaluationId()));
-        assertThat(recommendations.saved()).singleElement().satisfies(recommendation -> {
+            .satisfies(signal -> assertThat(signal.evaluationId()).isEqualTo(recommendations.upserted().getFirst().evaluationId()));
+        assertThat(recommendations.saved()).isEmpty();
+        assertThat(recommendations.upserted()).singleElement().satisfies(recommendation -> {
             assertThat(recommendation.source()).isEqualTo(BetRecommendationSource.SHADOW);
-            assertThat(recommendation.status()).isEqualTo(BetRecommendationStatus.CREATED);
+            assertThat(recommendation.status()).isEqualTo(BetRecommendationStatus.ACTIVE);
             assertThat(recommendation.evaluationId()).isNotBlank();
             assertThat(recommendation.exchange()).isEqualTo("betfair");
             assertThat(recommendation.marketId()).isEqualTo("1.1");
@@ -877,10 +878,51 @@ class RunDryRunSignalsServiceTest {
             .singleElement()
             .satisfies(event -> {
                 assertThat(event.category()).isEqualTo(BetxEventCategory.ANALYTICS);
-                assertThat(event.fields()).containsEntry("recommendationId", recommendations.saved().getFirst().id());
-                assertThat(event.fields()).containsEntry("evaluationId", recommendations.saved().getFirst().evaluationId());
+                assertThat(event.fields()).containsEntry("recommendationId", recommendations.upserted().getFirst().id());
+                assertThat(event.fields()).containsEntry("evaluationId", recommendations.upserted().getFirst().evaluationId());
                 assertThat(event.fields()).containsEntry("source", "SHADOW");
                 assertThat(event.fields()).containsEntry("side", "HOME");
+                assertThat(event.fields()).containsEntry("status", "ACTIVE");
+                assertThat(event.fields()).containsEntry("observedCount", 1L);
+            });
+    }
+
+    @Test
+    void logsObservedRecommendationWhenPollingSeesSameCanonicalOpportunityAgain() {
+        RecordingSnapshotRepository snapshotRepository = repositoryWithPrevious("betfair", "1.1");
+        RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
+        RecordingEventSink sink = new RecordingEventSink();
+        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        RunDryRunSignalsService service = new RunDryRunSignalsService(
+            new StaticConfigRepository(config),
+            List.of(gateway("betfair", List.of(snapshot("betfair", "1.1")), null)),
+            new NoopTelegramConnectionService(),
+            new RecordingBetExecutionGateway(),
+            snapshotRepository,
+            new MarketSnapshotChangeDetector(),
+            new NoopExternalMatchIntelligenceGateway(),
+            new RecordingSignalHistoryRepository(),
+            recommendations,
+            Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC),
+            new BetxEventLogger(sink, Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC))
+        );
+
+        service.run(CONFIG_PATH);
+        service.run(CONFIG_PATH);
+
+        assertThat(recommendations.upserted()).hasSize(2);
+        assertThat(recommendations.upserted().get(1).observedCount()).isEqualTo(2);
+        assertThat(sink.events())
+            .filteredOn(event -> event.event().equals("bet_recommendation.created"))
+            .hasSize(1);
+        assertThat(sink.events())
+            .filteredOn(event -> event.event().equals("bet_recommendation.observed"))
+            .singleElement()
+            .satisfies(event -> {
+                assertThat(event.fields()).containsEntry("recommendationId", recommendations.upserted().get(1).id());
+                assertThat(event.fields()).containsEntry("canonicalKey", recommendations.upserted().get(1).canonicalKey());
+                assertThat(event.fields()).containsEntry("observedCount", 2L);
+                assertThat(event.fields()).containsEntry("status", "ACTIVE");
             });
     }
 
@@ -1454,6 +1496,8 @@ class RunDryRunSignalsServiceTest {
 
     private static final class RecordingBetRecommendationRepository implements BetRecommendationRepository {
         private final List<BetRecommendation> saved = new ArrayList<>();
+        private final java.util.Map<String, BetRecommendation> canonical = new java.util.LinkedHashMap<>();
+        private final List<BetRecommendation> upserted = new ArrayList<>();
         private boolean failSaves;
 
         @Override
@@ -1462,6 +1506,27 @@ class RunDryRunSignalsServiceTest {
                 throw new IllegalStateException("recommendation database unavailable");
             }
             saved.add(recommendation);
+        }
+
+        @Override
+        public BetRecommendationUpsertResult upsertActiveRecommendation(String databasePath, BetRecommendation recommendation) {
+            if (failSaves) {
+                throw new IllegalStateException("recommendation database unavailable");
+            }
+            BetRecommendation existing = canonical.get(recommendation.canonicalKey());
+            if (existing == null) {
+                canonical.put(recommendation.canonicalKey(), recommendation);
+                upserted.add(recommendation);
+                return new BetRecommendationUpsertResult(recommendation, BetRecommendationUpsertAction.CREATED);
+            }
+            BetRecommendation updated = existing.observedAgain(
+                recommendation.evaluationId(),
+                recommendation.recommendedOdds(),
+                recommendation.observedAt()
+            );
+            canonical.put(updated.canonicalKey(), updated);
+            upserted.add(updated);
+            return new BetRecommendationUpsertResult(updated, BetRecommendationUpsertAction.OBSERVED);
         }
 
         @Override
@@ -1478,6 +1543,10 @@ class RunDryRunSignalsServiceTest {
 
         private List<BetRecommendation> saved() {
             return saved;
+        }
+
+        private List<BetRecommendation> upserted() {
+            return upserted;
         }
     }
 

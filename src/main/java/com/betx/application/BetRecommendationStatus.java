@@ -1,5 +1,8 @@
 package com.betx.application;
 
 public enum BetRecommendationStatus {
-    CREATED
+    CREATED,
+    ACTIVE,
+    COVERED,
+    EXPIRED
 }

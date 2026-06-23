@@ -3,6 +3,8 @@ package com.betx.adapter.persistence;
 import com.betx.application.BetRecommendation;
 import com.betx.application.BetRecommendationSource;
 import com.betx.application.BetRecommendationStatus;
+import com.betx.application.BetRecommendationUpsertAction;
+import com.betx.application.BetRecommendationUpsertResult;
 import com.betx.application.port.out.BetRecommendationRepository;
 import com.betx.domain.order.SelectionSide;
 import java.math.BigDecimal;
@@ -47,13 +49,73 @@ public class JdbcBetRecommendationRepository implements BetRecommendationReposit
                      id, evaluation_id, exchange, market_id, selection_id, selection_side,
                      event_name, runner_name, competition_name, market_start_time, strategy_name,
                      recommended_odds, observed_at, recommended_at, source, status, created_at,
-                     confidence, edge, liquidity, reason
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     confidence, edge, liquidity, reason, canonical_key, first_seen_at, last_seen_at,
+                     observed_count, initial_recommended_odds, latest_recommended_odds,
+                     best_recommended_odds, covered_at, expired_at, last_evaluation_id
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  """)) {
             bind(statement, recommendation);
             statement.executeUpdate();
         } catch (SQLException exc) {
             throw new IllegalStateException("Could not save bet recommendation.", exc);
+        }
+    }
+
+    @Override
+    public BetRecommendationUpsertResult upsertActiveRecommendation(String databasePath, BetRecommendation recommendation) {
+        ensureSchemaInitialized(databasePath);
+        String path = resolvedDatabasePath(databasePath);
+        try (Connection connection = connection(path)) {
+            beginImmediate(connection);
+            try {
+                Optional<BetRecommendation> existing = findCanonicalForUpdate(connection, recommendation.canonicalKey());
+                BetRecommendationUpsertResult result;
+                if (existing.isEmpty()) {
+                    insert(connection, recommendation);
+                    result = new BetRecommendationUpsertResult(recommendation, BetRecommendationUpsertAction.CREATED);
+                } else {
+                    BetRecommendation updated = existing.get().observedAgain(
+                        recommendation.evaluationId(),
+                        recommendation.recommendedOdds(),
+                        recommendation.observedAt()
+                    );
+                    updateCanonicalFields(connection, updated);
+                    BetRecommendationUpsertAction action = updated.status() == BetRecommendationStatus.COVERED
+                        ? BetRecommendationUpsertAction.COVERED
+                        : BetRecommendationUpsertAction.OBSERVED;
+                    result = new BetRecommendationUpsertResult(updated, action);
+                }
+                commit(connection);
+                return result;
+            } catch (RuntimeException | SQLException exc) {
+                rollback(connection);
+                throw exc;
+            }
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not upsert bet recommendation.", exc);
+        }
+    }
+
+    @Override
+    public Optional<BetRecommendation> markCovered(String databasePath, String canonicalKey, Instant coveredAt) {
+        ensureSchemaInitialized(databasePath);
+        String path = resolvedDatabasePath(databasePath);
+        try (Connection connection = connection(path)) {
+            beginImmediate(connection);
+            try {
+                Optional<BetRecommendation> existing = findCanonicalForUpdate(connection, canonicalKey);
+                Optional<BetRecommendation> covered = existing.map(recommendation -> recommendation.covered(coveredAt));
+                if (covered.isPresent()) {
+                    updateCanonicalFields(connection, covered.get());
+                }
+                commit(connection);
+                return covered;
+            } catch (RuntimeException | SQLException exc) {
+                rollback(connection);
+                throw exc;
+            }
+        } catch (SQLException exc) {
+            throw new IllegalStateException("Could not mark bet recommendation covered.", exc);
         }
     }
 
@@ -160,12 +222,44 @@ public class JdbcBetRecommendationRepository implements BetRecommendationReposit
                     confidence INTEGER,
                     edge TEXT,
                     liquidity TEXT,
-                    reason TEXT
+                    reason TEXT,
+                    canonical_key TEXT,
+                    first_seen_at TEXT,
+                    last_seen_at TEXT,
+                    observed_count INTEGER,
+                    initial_recommended_odds TEXT,
+                    latest_recommended_odds TEXT,
+                    best_recommended_odds TEXT,
+                    covered_at TEXT,
+                    expired_at TEXT,
+                    last_evaluation_id TEXT
                 )
                 """);
+            addColumnIfMissing(connection, "canonical_key", "TEXT");
+            addColumnIfMissing(connection, "first_seen_at", "TEXT");
+            addColumnIfMissing(connection, "last_seen_at", "TEXT");
+            addColumnIfMissing(connection, "observed_count", "INTEGER");
+            addColumnIfMissing(connection, "initial_recommended_odds", "TEXT");
+            addColumnIfMissing(connection, "latest_recommended_odds", "TEXT");
+            addColumnIfMissing(connection, "best_recommended_odds", "TEXT");
+            addColumnIfMissing(connection, "covered_at", "TEXT");
+            addColumnIfMissing(connection, "expired_at", "TEXT");
+            addColumnIfMissing(connection, "last_evaluation_id", "TEXT");
             statement.executeUpdate("""
                 CREATE INDEX IF NOT EXISTS idx_bet_recommendations_evaluation_id
                 ON bet_recommendations(evaluation_id)
+                """);
+            statement.executeUpdate("""
+                CREATE INDEX IF NOT EXISTS idx_bet_recommendations_canonical_key
+                ON bet_recommendations(canonical_key)
+                """);
+            statement.executeUpdate("""
+                CREATE INDEX IF NOT EXISTS idx_bet_recommendations_canonical_status
+                ON bet_recommendations(exchange, market_id, selection_id, selection_side, strategy_name, status)
+                """);
+            statement.executeUpdate("""
+                CREATE INDEX IF NOT EXISTS idx_bet_recommendations_last_seen_at
+                ON bet_recommendations(last_seen_at)
                 """);
             statement.executeUpdate("""
                 CREATE INDEX IF NOT EXISTS idx_bet_recommendations_match_key
@@ -178,6 +272,10 @@ public class JdbcBetRecommendationRepository implements BetRecommendationReposit
             statement.executeUpdate("""
                 CREATE INDEX IF NOT EXISTS idx_bet_recommendations_strategy_name
                 ON bet_recommendations(strategy_name)
+                """);
+            statement.executeUpdate("""
+                CREATE INDEX IF NOT EXISTS idx_bet_recommendations_status
+                ON bet_recommendations(status)
                 """);
         }
     }
@@ -208,6 +306,16 @@ public class JdbcBetRecommendationRepository implements BetRecommendationReposit
         setDecimal(statement, 19, recommendation.edge());
         setDecimal(statement, 20, recommendation.liquidity());
         statement.setString(21, recommendation.reason());
+        statement.setString(22, recommendation.canonicalKey());
+        setInstant(statement, 23, recommendation.firstSeenAt());
+        setInstant(statement, 24, recommendation.lastSeenAt());
+        statement.setLong(25, recommendation.observedCount());
+        setDecimal(statement, 26, recommendation.initialRecommendedOdds());
+        setDecimal(statement, 27, recommendation.latestRecommendedOdds());
+        setDecimal(statement, 28, recommendation.bestRecommendedOdds());
+        setInstant(statement, 29, recommendation.coveredAt());
+        setInstant(statement, 30, recommendation.expiredAt());
+        statement.setString(31, recommendation.lastEvaluationId());
     }
 
     private BetRecommendation map(ResultSet resultSet) throws SQLException {
@@ -232,8 +340,115 @@ public class JdbcBetRecommendationRepository implements BetRecommendationReposit
             integer(resultSet, "confidence"),
             decimal(resultSet, "edge"),
             decimal(resultSet, "liquidity"),
-            resultSet.getString("reason")
+            resultSet.getString("reason"),
+            resultSet.getString("canonical_key"),
+            instant(resultSet, "first_seen_at"),
+            instant(resultSet, "last_seen_at"),
+            longValue(resultSet, "observed_count", 1),
+            decimal(resultSet, "initial_recommended_odds"),
+            decimal(resultSet, "latest_recommended_odds"),
+            decimal(resultSet, "best_recommended_odds"),
+            instant(resultSet, "covered_at"),
+            instant(resultSet, "expired_at"),
+            resultSet.getString("last_evaluation_id")
         );
+    }
+
+    private void insert(Connection connection, BetRecommendation recommendation) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            INSERT INTO bet_recommendations (
+                id, evaluation_id, exchange, market_id, selection_id, selection_side,
+                event_name, runner_name, competition_name, market_start_time, strategy_name,
+                recommended_odds, observed_at, recommended_at, source, status, created_at,
+                confidence, edge, liquidity, reason, canonical_key, first_seen_at, last_seen_at,
+                observed_count, initial_recommended_odds, latest_recommended_odds,
+                best_recommended_odds, covered_at, expired_at, last_evaluation_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """)) {
+            bind(statement, recommendation);
+            statement.executeUpdate();
+        }
+    }
+
+    private Optional<BetRecommendation> findCanonicalForUpdate(Connection connection, String canonicalKey) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT *
+            FROM bet_recommendations
+            WHERE canonical_key = ?
+              AND status IN ('ACTIVE', 'COVERED')
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """)) {
+            statement.setString(1, canonicalKey);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? Optional.of(map(resultSet)) : Optional.empty();
+            }
+        }
+    }
+
+    private void updateCanonicalFields(Connection connection, BetRecommendation recommendation) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            UPDATE bet_recommendations
+            SET status = ?,
+                last_seen_at = ?,
+                observed_count = ?,
+                latest_recommended_odds = ?,
+                best_recommended_odds = ?,
+                covered_at = ?,
+                expired_at = ?,
+                last_evaluation_id = ?
+            WHERE id = ?
+            """)) {
+            statement.setString(1, recommendation.status().name());
+            setInstant(statement, 2, recommendation.lastSeenAt());
+            statement.setLong(3, recommendation.observedCount());
+            setDecimal(statement, 4, recommendation.latestRecommendedOdds());
+            setDecimal(statement, 5, recommendation.bestRecommendedOdds());
+            setInstant(statement, 6, recommendation.coveredAt());
+            setInstant(statement, 7, recommendation.expiredAt());
+            statement.setString(8, recommendation.lastEvaluationId());
+            statement.setString(9, recommendation.id());
+            statement.executeUpdate();
+        }
+    }
+
+    private void beginImmediate(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("BEGIN IMMEDIATE");
+        }
+    }
+
+    private void commit(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("COMMIT");
+        }
+    }
+
+    private void rollback(Connection connection) {
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("ROLLBACK");
+        } catch (SQLException ignored) {
+        }
+    }
+
+    private void addColumnIfMissing(Connection connection, String columnName, String definition) throws SQLException {
+        if (columnExists(connection, columnName)) {
+            return;
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("ALTER TABLE bet_recommendations ADD COLUMN " + columnName + " " + definition);
+        }
+    }
+
+    private boolean columnExists(Connection connection, String columnName) throws SQLException {
+        try (ResultSet resultSet = connection.createStatement().executeQuery("PRAGMA table_info(bet_recommendations)")) {
+            while (resultSet.next()) {
+                if (columnName.equalsIgnoreCase(resultSet.getString("name"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     private SelectionSide selectionSide(String value) {
@@ -264,5 +479,10 @@ public class JdbcBetRecommendationRepository implements BetRecommendationReposit
     private Integer integer(ResultSet resultSet, String field) throws SQLException {
         int value = resultSet.getInt(field);
         return resultSet.wasNull() ? null : value;
+    }
+
+    private long longValue(ResultSet resultSet, String field, long defaultValue) throws SQLException {
+        long value = resultSet.getLong(field);
+        return resultSet.wasNull() ? defaultValue : value;
     }
 }

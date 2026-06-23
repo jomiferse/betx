@@ -22,8 +22,22 @@ public class DiagnosticsFormatter {
         lines.add("Bet recommendations");
         DiagnosticsBetRecommendationsSummary recommendations = report.betRecommendations();
         lines.add(line("Total recommendations", recommendations.totalRecommendations()));
+        lines.add(line("pre-2.2 shadow rows", recommendations.pre22ShadowRows()));
+        lines.add(line("post-2.2 canonical rows", recommendations.post22CanonicalRows()));
+        lines.add(line("Canonical active recommendations", recommendations.canonicalActiveRecommendations()));
+        lines.add(line("Canonical covered recommendations", recommendations.canonicalCoveredRecommendations()));
+        lines.add(line("Canonical expired recommendations", recommendations.canonicalExpiredRecommendations()));
+        lines.add(line("Recommendation observations", recommendations.recommendationObservations()));
+        lines.add(line("Average observed_count", formatDouble(recommendations.averageObservedCount())));
+        lines.add(line("Median observed_count", formatDouble(recommendations.medianObservedCount())));
+        lines.add(line("P95 observed_count", formatDouble(recommendations.p95ObservedCount())));
+        lines.add(line("Duplicate canonical groups", recommendations.duplicateCanonicalGroups()));
         lines.add(line("Recommendations with evaluation_id", coverage(
             recommendations.withEvaluationId(),
+            recommendations.totalRecommendations()
+        )));
+        lines.add(line("Recommendations with last_evaluation_id", coverage(
+            recommendations.withLastEvaluationId(),
             recommendations.totalRecommendations()
         )));
         lines.add(line("Recommendations with strategy_name", coverage(
@@ -36,6 +50,7 @@ public class DiagnosticsFormatter {
         )));
         lines.add(line("Recommendations created in period", recommendations.createdInPeriod()));
         lines.add(line("Orphan recommendations", recommendations.orphanRecommendations()));
+        addGrouped(lines, "Top recommendations by observed_count", recommendations.topByObservedCount());
         addGrouped(lines, "Recommendations by strategy", recommendations.byStrategy());
         addGrouped(lines, "Recommendations by selection side", recommendations.bySelectionSide());
         addGrouped(lines, "Recommendations by competition", recommendations.byCompetition());
@@ -219,6 +234,10 @@ public class DiagnosticsFormatter {
 
     private static String coverage(long value, long total) {
         return value + " / " + total;
+    }
+
+    private static String formatDouble(double value) {
+        return BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
     }
 
     private static String text(String value) {

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.betx.adapter.logging.JsonlStructuredEventSink;
 import com.betx.application.port.out.BetExecutionGateway;
+import com.betx.application.port.out.BetRecommendationRepository;
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.ExchangeAccountGateway;
 import com.betx.application.port.out.ExchangeExposureGateway;
@@ -167,6 +168,8 @@ class TelegramBetConfirmationServiceTest {
         );
         intents.save("data.db", existing);
         RecordingStructuredEventSink sink = new RecordingStructuredEventSink();
+        RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
+        recommendations.add(recommendation("rec-existing-covered-selection", "eval-original-covered-selection", "1.1", 42L, SelectionSide.UNKNOWN, "N/A"));
         TelegramBetConfirmationService service = service(
             configWithAutoBetting(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3, true, true),
             telegram,
@@ -178,7 +181,8 @@ class TelegramBetConfirmationServiceTest {
             new RecordingSignalHistoryRepository(),
             new RecordingExecutionGateway(),
             Clock.systemUTC(),
-            sink
+            sink,
+            recommendations
         );
 
         service.sync(CONFIG_PATH, resultOf(signalWithEvaluationId(
@@ -201,6 +205,13 @@ class TelegramBetConfirmationServiceTest {
             assertThat(event.fields()).containsEntry("reason", "ACTIVE_MARKET_INTENT_EXISTS");
             assertThat(event.fields()).containsEntry("existingBetIntentId", "existing-covered-selection");
             assertThat(event.fields()).containsEntry("evaluationId", "evaluation-confirmation-skip");
+        });
+        assertThat(recommendations.coveredKeys()).containsExactly("betfair|1.1|42|UNKNOWN|N/A");
+        assertThat(sink.events()).anySatisfy(event -> {
+            assertThat(event.event()).isEqualTo("bet_recommendation.covered");
+            assertThat(event.fields()).containsEntry("recommendationId", "rec-existing-covered-selection");
+            assertThat(event.fields()).containsEntry("canonicalKey", "betfair|1.1|42|UNKNOWN|N/A");
+            assertThat(event.fields()).containsEntry("status", "COVERED");
         });
     }
 
@@ -1990,6 +2001,37 @@ class TelegramBetConfirmationServiceTest {
         );
     }
 
+    private TelegramBetConfirmationService service(
+        BetxConfig config,
+        RecordingTelegramConnectionService telegram,
+        RecordingTelegramGateway gateway,
+        RecordingIntentRepository intents,
+        ExchangeAccountGateway accountGateway,
+        ExchangeExposureGateway exposureGateway,
+        MarketSnapshotRepository snapshotRepository,
+        SignalHistoryRepository historyRepository,
+        BetExecutionGateway executionGateway,
+        Clock clock,
+        StructuredEventSink eventSink,
+        BetRecommendationRepository recommendationRepository
+    ) {
+        return new TelegramBetConfirmationService(
+            new StaticConfigRepository(config),
+            telegram,
+            gateway,
+            intents,
+            new RecordingTelegramStateRepository(),
+            accountGateway,
+            exposureGateway,
+            snapshotRepository,
+            historyRepository,
+            recommendationRepository,
+            executionGateway,
+            clock,
+            new BetxEventLogger(eventSink, clock)
+        );
+    }
+
     private static JsonNode readJson(String line) {
         try {
             return JSON.readTree(line);
@@ -2186,6 +2228,40 @@ class TelegramBetConfirmationServiceTest {
             BigDecimal.valueOf(0.04),
             BigDecimal.valueOf(1_200),
             RecommendationType.BET,
+            "liquidity ok"
+        );
+    }
+
+    private BetRecommendation recommendation(
+        String id,
+        String evaluationId,
+        String marketId,
+        long selectionId,
+        SelectionSide side,
+        String strategyName
+    ) {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        return new BetRecommendation(
+            id,
+            evaluationId,
+            "betfair",
+            marketId,
+            selectionId,
+            side,
+            "Team A v Team B",
+            side == SelectionSide.DRAW ? "The Draw" : "Team A",
+            "La Liga",
+            Instant.parse("2026-06-15T18:00:00Z"),
+            strategyName,
+            BigDecimal.valueOf(2.5),
+            observedAt,
+            observedAt,
+            BetRecommendationSource.SHADOW,
+            BetRecommendationStatus.ACTIVE,
+            observedAt,
+            null,
+            null,
+            BigDecimal.valueOf(1200),
             "liquidity ok"
         );
     }
@@ -2575,6 +2651,50 @@ class TelegramBetConfirmationServiceTest {
 
         List<BetxEvent> events() {
             return events;
+        }
+    }
+
+    private static final class RecordingBetRecommendationRepository implements BetRecommendationRepository {
+        private final Map<String, BetRecommendation> recommendations = new LinkedHashMap<>();
+        private final List<String> coveredKeys = new ArrayList<>();
+
+        private void add(BetRecommendation recommendation) {
+            recommendations.put(recommendation.canonicalKey(), recommendation);
+        }
+
+        @Override
+        public void save(String databasePath, BetRecommendation recommendation) {
+            add(recommendation);
+        }
+
+        @Override
+        public Optional<BetRecommendation> markCovered(String databasePath, String canonicalKey, Instant coveredAt) {
+            coveredKeys.add(canonicalKey);
+            BetRecommendation recommendation = recommendations.get(canonicalKey);
+            if (recommendation == null) {
+                return Optional.empty();
+            }
+            BetRecommendation covered = recommendation.covered(coveredAt);
+            recommendations.put(canonicalKey, covered);
+            return Optional.of(covered);
+        }
+
+        @Override
+        public Optional<BetRecommendation> findById(String databasePath, String id) {
+            return recommendations.values().stream()
+                .filter(recommendation -> recommendation.id().equals(id))
+                .findFirst();
+        }
+
+        @Override
+        public List<BetRecommendation> findByEvaluationId(String databasePath, String evaluationId) {
+            return recommendations.values().stream()
+                .filter(recommendation -> java.util.Objects.equals(recommendation.evaluationId(), evaluationId))
+                .toList();
+        }
+
+        private List<String> coveredKeys() {
+            return coveredKeys;
         }
     }
 

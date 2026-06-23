@@ -117,11 +117,14 @@ class RunPaperTradingServiceTest {
         );
 
         assertThat(result.recommendationsGenerated()).isEqualTo(1);
-        assertThat(recommendations.saved).singleElement().satisfies(recommendation -> {
+        assertThat(recommendations.saved).isEmpty();
+        assertThat(recommendations.upserted).singleElement().satisfies(recommendation -> {
             assertThat(recommendation.evaluationId()).isEqualTo(evaluations.saved.getFirst().evaluationId());
             assertThat(recommendation.selectionSide()).isEqualTo(com.betx.domain.order.SelectionSide.DRAW);
             assertThat(recommendation.strategyName()).isEqualTo("value-football");
             assertThat(recommendation.source()).isEqualTo(BetRecommendationSource.SHADOW);
+            assertThat(recommendation.status()).isEqualTo(BetRecommendationStatus.ACTIVE);
+            assertThat(recommendation.canonicalKey()).isEqualTo("betfair|market-1|2|DRAW|value-football");
             assertThat(recommendation.recommendedOdds()).isEqualByComparingTo("3.70");
         });
         assertThat(paperTrades.saved).singleElement()
@@ -792,10 +795,17 @@ class RunPaperTradingServiceTest {
 
     private static final class BetRecommendationRepositoryStub implements BetRecommendationRepository {
         private final List<BetRecommendation> saved = new ArrayList<>();
+        private final List<BetRecommendation> upserted = new ArrayList<>();
 
         @Override
         public void save(String databasePath, BetRecommendation recommendation) {
             saved.add(recommendation);
+        }
+
+        @Override
+        public BetRecommendationUpsertResult upsertActiveRecommendation(String databasePath, BetRecommendation recommendation) {
+            upserted.add(recommendation);
+            return new BetRecommendationUpsertResult(recommendation, BetRecommendationUpsertAction.CREATED);
         }
 
         @Override

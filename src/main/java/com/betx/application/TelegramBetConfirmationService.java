@@ -1,6 +1,7 @@
 package com.betx.application;
 
 import com.betx.application.port.out.BetExecutionGateway;
+import com.betx.application.port.out.BetRecommendationRepository;
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.ExchangeAccountGateway;
 import com.betx.application.port.out.ExchangeExposureGateway;
@@ -80,6 +81,7 @@ public class TelegramBetConfirmationService {
     private final ExchangeExposureGateway exposureGateway;
     private final MarketSnapshotRepository snapshotRepository;
     private final SignalHistoryRepository signalHistoryRepository;
+    private final BetRecommendationRepository betRecommendationRepository;
     private final BetExecutionGateway executionGateway;
     private final TelegramBetAlertFormatter telegramBetAlertFormatter;
     private final Clock clock;
@@ -98,6 +100,7 @@ public class TelegramBetConfirmationService {
         @Qualifier("betfairExchangeExposureGateway") ExchangeExposureGateway exposureGateway,
         MarketSnapshotRepository snapshotRepository,
         SignalHistoryRepository signalHistoryRepository,
+        BetRecommendationRepository betRecommendationRepository,
         @Qualifier("betfairBetExecutionGateway") BetExecutionGateway executionGateway,
         BetxEventLogger eventLogger
     ) {
@@ -111,6 +114,7 @@ public class TelegramBetConfirmationService {
             exposureGateway,
             snapshotRepository,
             signalHistoryRepository,
+            betRecommendationRepository,
             executionGateway,
             Clock.systemUTC(),
             eventLogger
@@ -135,6 +139,7 @@ public class TelegramBetConfirmationService {
             (config, exchange, settledSince) -> ExchangeExposure.unavailable("Exposure gateway is not configured."),
             new NoopMarketSnapshotRepository(),
             new NoopSignalHistoryRepository(),
+            new NoopBetRecommendationRepository(),
             executionGateway,
             Clock.systemUTC(),
             new BetxEventLogger(StructuredEventSink.noop())
@@ -163,9 +168,72 @@ public class TelegramBetConfirmationService {
             exposureGateway,
             snapshotRepository,
             new NoopSignalHistoryRepository(),
+            new NoopBetRecommendationRepository(),
             executionGateway,
             clock,
             new BetxEventLogger(StructuredEventSink.noop(), clock)
+        );
+    }
+
+    TelegramBetConfirmationService(
+        BetxConfigRepository configRepository,
+        TelegramConnectionService telegramConnectionService,
+        TelegramBotGateway telegramGateway,
+        BetIntentRepository intentRepository,
+        TelegramStateRepository telegramStateRepository,
+        ExchangeAccountGateway accountGateway,
+        ExchangeExposureGateway exposureGateway,
+        MarketSnapshotRepository snapshotRepository,
+        SignalHistoryRepository signalHistoryRepository,
+        BetRecommendationRepository betRecommendationRepository,
+        BetExecutionGateway executionGateway,
+        Clock clock
+    ) {
+        this(
+            configRepository,
+            telegramConnectionService,
+            telegramGateway,
+            intentRepository,
+            telegramStateRepository,
+            accountGateway,
+            exposureGateway,
+            snapshotRepository,
+            signalHistoryRepository,
+            betRecommendationRepository,
+            executionGateway,
+            clock,
+            new BetxEventLogger(StructuredEventSink.noop(), clock)
+        );
+    }
+
+    TelegramBetConfirmationService(
+        BetxConfigRepository configRepository,
+        TelegramConnectionService telegramConnectionService,
+        TelegramBotGateway telegramGateway,
+        BetIntentRepository intentRepository,
+        TelegramStateRepository telegramStateRepository,
+        ExchangeAccountGateway accountGateway,
+        ExchangeExposureGateway exposureGateway,
+        MarketSnapshotRepository snapshotRepository,
+        SignalHistoryRepository signalHistoryRepository,
+        BetExecutionGateway executionGateway,
+        Clock clock,
+        BetxEventLogger eventLogger
+    ) {
+        this(
+            configRepository,
+            telegramConnectionService,
+            telegramGateway,
+            intentRepository,
+            telegramStateRepository,
+            accountGateway,
+            exposureGateway,
+            snapshotRepository,
+            signalHistoryRepository,
+            new NoopBetRecommendationRepository(),
+            executionGateway,
+            clock,
+            eventLogger
         );
     }
 
@@ -191,6 +259,7 @@ public class TelegramBetConfirmationService {
             exposureGateway,
             snapshotRepository,
             signalHistoryRepository,
+            new NoopBetRecommendationRepository(),
             executionGateway,
             clock
         );
@@ -219,6 +288,7 @@ public class TelegramBetConfirmationService {
             exposureGateway,
             snapshotRepository,
             signalHistoryRepository,
+            new NoopBetRecommendationRepository(),
             executionGateway,
             clock,
             new BetxEventLogger(StructuredEventSink.noop(), clock)
@@ -235,6 +305,7 @@ public class TelegramBetConfirmationService {
         ExchangeExposureGateway exposureGateway,
         MarketSnapshotRepository snapshotRepository,
         SignalHistoryRepository signalHistoryRepository,
+        BetRecommendationRepository betRecommendationRepository,
         BetExecutionGateway executionGateway,
         Clock clock,
         BetxEventLogger eventLogger
@@ -248,6 +319,9 @@ public class TelegramBetConfirmationService {
         this.exposureGateway = exposureGateway;
         this.snapshotRepository = snapshotRepository == null ? new NoopMarketSnapshotRepository() : snapshotRepository;
         this.signalHistoryRepository = signalHistoryRepository == null ? new NoopSignalHistoryRepository() : signalHistoryRepository;
+        this.betRecommendationRepository = betRecommendationRepository == null
+            ? new NoopBetRecommendationRepository()
+            : betRecommendationRepository;
         this.executionGateway = executionGateway;
         this.telegramBetAlertFormatter = new TelegramBetAlertFormatter();
         this.clock = clock;
@@ -495,7 +569,7 @@ public class TelegramBetConfirmationService {
                 signal.side()
             );
             if (existingDuplicate.isPresent()) {
-                logActiveMarketIntentSkipped(signal, analysis, existingDuplicate.get(), "telegram_confirmation");
+                logActiveMarketIntentSkipped(config.storage().path(), signal, analysis, existingDuplicate.get(), "telegram_confirmation");
                 continue;
             }
             if (intentRepository.findActiveByKey(config.storage().path(), signal.exchange(), signal.marketId(), signal.selectionId()).isPresent()) {
@@ -612,7 +686,7 @@ public class TelegramBetConfirmationService {
                 signal.side()
             );
             if (existingDuplicate.isPresent()) {
-                logActiveMarketIntentSkipped(signal, analysis, existingDuplicate.get(), "automatic");
+                logActiveMarketIntentSkipped(config.storage().path(), signal, analysis, existingDuplicate.get(), "automatic");
                 continue;
             }
             if (intentRepository.findActiveByMarket(config.storage().path(), signal.exchange(), signal.marketId()).isPresent()) {
@@ -1584,11 +1658,13 @@ public class TelegramBetConfirmationService {
     }
 
     private void logActiveMarketIntentSkipped(
+        String databasePath,
         BetSignal signal,
         RunnerAnalysis analysis,
         BetIntent existing,
         String executionMode
     ) {
+        markRecommendationCovered(databasePath, signal, analysis);
         eventLogger.info(BetxEventCategory.AUDIT, "bet_signal.skipped")
             .correlationId(signalCorrelationId(signal))
             .exchange(signal.exchange())
@@ -1611,6 +1687,55 @@ public class TelegramBetConfirmationService {
             + " | exchange=" + signal.exchange()
             + " | marketId=" + signal.marketId()
             + " | selectionId=" + signal.selectionId());
+    }
+
+    private void markRecommendationCovered(String databasePath, BetSignal signal, RunnerAnalysis analysis) {
+        String canonicalKey = BetRecommendation.canonicalKey(
+            signal.exchange(),
+            signal.marketId(),
+            signal.selectionId(),
+            selectionSide(analysis.runnerType()),
+            analysis.strategyName()
+        );
+        try {
+            betRecommendationRepository.markCovered(databasePath, canonicalKey, Instant.now(clock))
+                .ifPresent(recommendation -> eventLogger.info(BetxEventCategory.ANALYTICS, "bet_recommendation.covered")
+                    .correlationId("recommendation-" + recommendation.id())
+                    .exchange(recommendation.exchange())
+                    .marketId(recommendation.marketId())
+                    .selectionId(recommendation.selectionId())
+                    .strategy(recommendation.strategyName())
+                    .executionMode("shadow")
+                    .result("covered")
+                    .field("recommendationId", recommendation.id())
+                    .field("canonicalKey", recommendation.canonicalKey())
+                    .field("evaluationId", recommendation.evaluationId())
+                    .field("lastEvaluationId", recommendation.lastEvaluationId())
+                    .field("side", recommendation.selectionSide().name())
+                    .field("eventName", recommendation.eventName())
+                    .field("runnerName", recommendation.runnerName())
+                    .field("competitionName", recommendation.competitionName())
+                    .field("strategyName", recommendation.strategyName())
+                    .field("initialRecommendedOdds", recommendation.initialRecommendedOdds())
+                    .field("latestRecommendedOdds", recommendation.latestRecommendedOdds())
+                    .field("bestRecommendedOdds", recommendation.bestRecommendedOdds())
+                    .field("observedCount", recommendation.observedCount())
+                    .field("status", recommendation.status().name())
+                    .field("source", recommendation.source().name())
+                    .emit());
+        } catch (RuntimeException exc) {
+            eventLogger.warn(BetxEventCategory.ERROR, "bet_recommendation.cover_failed")
+                .correlationId(signalCorrelationId(signal))
+                .exchange(signal.exchange())
+                .marketId(signal.marketId())
+                .selectionId(signal.selectionId())
+                .strategy(analysis.strategyName())
+                .result("failed")
+                .field("canonicalKey", canonicalKey)
+                .field("errorType", exc.getClass().getSimpleName())
+                .field("message", safeMessage(exc))
+                .emit();
+        }
     }
 
     private void logOrderExecutionStatus(BetIntent intent) {
@@ -1779,6 +1904,22 @@ public class TelegramBetConfirmationService {
 
         @Override
         public void updateOrderState(String databasePath, BetIntent intent) {
+        }
+    }
+
+    private static final class NoopBetRecommendationRepository implements BetRecommendationRepository {
+        @Override
+        public void save(String databasePath, BetRecommendation recommendation) {
+        }
+
+        @Override
+        public Optional<BetRecommendation> findById(String databasePath, String id) {
+            return Optional.empty();
+        }
+
+        @Override
+        public List<BetRecommendation> findByEvaluationId(String databasePath, String evaluationId) {
+            return List.of();
         }
     }
 

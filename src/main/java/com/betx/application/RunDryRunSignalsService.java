@@ -552,8 +552,11 @@ public class RunDryRunSignalsService {
     ) {
         BetRecommendation recommendation = toShadowRecommendation(observedAt, analysis);
         try {
-            betRecommendationRepository.save(config.storage().path(), recommendation);
-            logRecommendationCreated(cycleId, recommendation);
+            BetRecommendationUpsertResult result = betRecommendationRepository.upsertActiveRecommendation(
+                config.storage().path(),
+                recommendation
+            );
+            logRecommendation(cycleId, result);
         } catch (RuntimeException exc) {
             eventLogger.warn(BetxEventCategory.ERROR, "bet_recommendation.persist_failed")
                 .correlationId(signalCorrelationId(observedAt, analysis.exchange(), analysis.marketId(), analysis.selectionId()))
@@ -587,7 +590,7 @@ public class RunDryRunSignalsService {
             observedAt,
             observedAt,
             BetRecommendationSource.SHADOW,
-            BetRecommendationStatus.CREATED,
+            BetRecommendationStatus.ACTIVE,
             Instant.now(clock),
             null,
             null,
@@ -596,8 +599,17 @@ public class RunDryRunSignalsService {
         );
     }
 
-    private void logRecommendationCreated(String cycleId, BetRecommendation recommendation) {
-        eventLogger.info(BetxEventCategory.ANALYTICS, "bet_recommendation.created")
+    private void logRecommendation(String cycleId, BetRecommendationUpsertResult result) {
+        if (result.action() == BetRecommendationUpsertAction.OBSERVED && !shouldLogObservedRecommendation(result.recommendation())) {
+            return;
+        }
+        String event = switch (result.action()) {
+            case CREATED -> "bet_recommendation.created";
+            case OBSERVED -> "bet_recommendation.observed";
+            case COVERED -> "bet_recommendation.covered";
+        };
+        BetRecommendation recommendation = result.recommendation();
+        eventLogger.info(BetxEventCategory.ANALYTICS, event)
             .correlationId("recommendation-" + recommendation.id())
             .cycleId(cycleId)
             .exchange(recommendation.exchange())
@@ -605,18 +617,29 @@ public class RunDryRunSignalsService {
             .selectionId(recommendation.selectionId())
             .strategy(recommendation.strategyName())
             .executionMode("shadow")
-            .result("created")
+            .result(result.action().name().toLowerCase(java.util.Locale.ROOT))
             .field("recommendationId", recommendation.id())
+            .field("canonicalKey", recommendation.canonicalKey())
             .field("evaluationId", recommendation.evaluationId())
+            .field("lastEvaluationId", recommendation.lastEvaluationId())
             .field("side", recommendation.selectionSide().name())
             .field("eventName", recommendation.eventName())
             .field("runnerName", recommendation.runnerName())
             .field("competitionName", recommendation.competitionName())
             .field("strategyName", recommendation.strategyName())
             .field("recommendedOdds", recommendation.recommendedOdds())
+            .field("initialRecommendedOdds", recommendation.initialRecommendedOdds())
+            .field("latestRecommendedOdds", recommendation.latestRecommendedOdds())
+            .field("bestRecommendedOdds", recommendation.bestRecommendedOdds())
+            .field("observedCount", recommendation.observedCount())
+            .field("status", recommendation.status().name())
             .field("recommendedAt", recommendation.recommendedAt())
             .field("source", recommendation.source().name())
             .emit();
+    }
+
+    private boolean shouldLogObservedRecommendation(BetRecommendation recommendation) {
+        return recommendation.observedCount() == 2 || recommendation.observedCount() % 100 == 0;
     }
 
     private SelectionSide selectionSide(RunnerAnalysis analysis) {
