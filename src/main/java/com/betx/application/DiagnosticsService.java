@@ -82,6 +82,11 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         List<String> limitations = limitations(logs, persistedExecutionCoverage, logEventCoverage);
         List<String> topFindings = topFindings(coverage, paperVsReal, execution, findings);
         Map<MatchGapReason, Long> matchingGaps = matchingGaps(matches);
+        DiagnosticsRecommendationReadiness recommendationReadiness = recommendationReadiness(
+            dataset.recommendationReadiness(),
+            dataset.betRecommendations(),
+            logEventCoverage
+        );
         return new DiagnosticsReport(
             Instant.now(clock),
             requestedPeriod,
@@ -101,7 +106,8 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             prospectiveRealBettingCohort,
             logs.topSkippedMarkets(),
             dataset.betRecommendations(),
-            dataset.paperRecommendationCoverage()
+            dataset.paperRecommendationCoverage(),
+            recommendationReadiness
         );
     }
 
@@ -399,6 +405,45 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             logCount(logs, "bet_signal.skipped:ACTIVE_MARKET_INTENT_EXISTS"),
             logCount(logs, "bet_intent.skipped:DUPLICATE_REAL_BET"),
             logs.eventCounts().isEmpty() ? DiagnosticsDataProvenance.UNAVAILABLE : DiagnosticsDataProvenance.LOG_CORRELATED
+        );
+    }
+
+    private DiagnosticsRecommendationReadiness recommendationReadiness(
+        DiagnosticsRecommendationReadiness base,
+        DiagnosticsBetRecommendationsSummary betRecommendations,
+        DiagnosticsLogEventCoverage logEventCoverage
+    ) {
+        List<String> reasons = new ArrayList<>();
+        boolean hasPaperSample = base.paperTradesWithRecommendationId() > 0;
+        if (!hasPaperSample) {
+            reasons.add("Insufficient post-2.3 paper sample with recommendation_id.");
+        }
+        if (base.paperTradesMissingRecommendationIdPost23() > 0) {
+            reasons.add("Some post-2.3 paper trades are missing recommendation_id.");
+        }
+        if (base.brokenPaperRecommendationJoins() > 0) {
+            reasons.add("Some paper recommendation_id values do not resolve to BetRecommendation.");
+        }
+        if (betRecommendations.duplicateCanonicalGroups() > 0) {
+            reasons.add("Duplicate canonical recommendation groups exist.");
+        }
+        if (logEventCoverage.orderSubmittedEvents() > 0 && logEventCoverage.orderResponseEvents() == 0) {
+            reasons.add("order.response logs are missing while order.submitted logs exist.");
+        }
+        if (base.realBetsWithRecommendationId() > 0) {
+            reasons.add("Real bets already contain recommendation_id before 2.5.");
+        }
+        String realConsumption = reasons.isEmpty() ? "YES" : hasPaperSample ? "PARTIAL" : "PARTIAL";
+        List<String> finalReasons = new ArrayList<>(reasons);
+        finalReasons.add("Real betting does not consume BetRecommendation yet.");
+        if (base.realBetsWithRecommendationId() == 0) {
+            finalReasons.add("bet_intents.recommendation_id is still NULL for expected 2.4 operation.");
+        }
+        return base.withReadiness(
+            realConsumption,
+            "NO",
+            realConsumption.equals("YES") ? "READY_FOR_REAL_CONSUMPTION" : "PARTIAL",
+            finalReasons
         );
     }
 

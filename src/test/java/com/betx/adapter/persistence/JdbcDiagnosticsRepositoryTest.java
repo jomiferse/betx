@@ -7,6 +7,9 @@ import com.betx.application.BetRecommendationSource;
 import com.betx.application.BetRecommendationStatus;
 import com.betx.application.PaperTrade;
 import com.betx.application.PaperTradeStatus;
+import com.betx.domain.order.BetIntent;
+import com.betx.domain.order.BetIntentSource;
+import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.SelectionSide;
 import com.betx.domain.signal.BetSide;
 import java.math.BigDecimal;
@@ -59,6 +62,47 @@ class JdbcDiagnosticsRepositoryTest {
         assertThat(coverage.paperTradesLinkedToActiveRecommendations()).isEqualTo(1);
         assertThat(coverage.paperTradesLinkedToCoveredRecommendations()).isEqualTo(1);
         assertThat(coverage.paperTradesLinkedToExpiredRecommendations()).isEqualTo(1);
+    }
+
+    @Test
+    void countsRecommendationReadinessAcrossPaperLinksAndExactRealEquivalents() {
+        String databasePath = tempDir.resolve("readiness.db").toString();
+        JdbcBetRecommendationRepository recommendationRepository = new JdbcBetRecommendationRepository(databasePath);
+        JdbcPaperTradeRepository paperTradeRepository = new JdbcPaperTradeRepository(databasePath);
+        JdbcBetIntentRepository betIntentRepository = new JdbcBetIntentRepository(databasePath);
+        recommendationRepository.save(databasePath, recommendation("rec-neither", "eval-neither", "1.200", BetRecommendationStatus.ACTIVE, CUTOFF));
+        recommendationRepository.save(databasePath, recommendation("rec-paper", "eval-paper", "1.201", BetRecommendationStatus.ACTIVE, CUTOFF));
+        recommendationRepository.save(databasePath, recommendation("rec-real", "eval-real", "1.202", BetRecommendationStatus.ACTIVE, CUTOFF));
+        recommendationRepository.save(databasePath, recommendation("rec-both", "eval-both", "1.203", BetRecommendationStatus.COVERED, CUTOFF));
+
+        paperTradeRepository.upsert(databasePath, paperTrade("paper-linked", "1.201", CUTOFF.plusSeconds(1), "rec-paper"));
+        paperTradeRepository.upsert(databasePath, paperTrade("paper-both", "1.203", CUTOFF.plusSeconds(2), "rec-both"));
+        paperTradeRepository.upsert(databasePath, paperTrade("paper-missing-id", "1.204", CUTOFF.plusSeconds(3), null));
+        paperTradeRepository.upsert(databasePath, paperTrade("paper-broken", "1.205", CUTOFF.plusSeconds(4), "missing-rec"));
+        betIntentRepository.save(databasePath, realBet("real-equivalent", "1.202", null));
+        betIntentRepository.save(databasePath, realBet("real-both", "1.203", null));
+        betIntentRepository.save(databasePath, realBet("real-unexpected-rec", "1.206", "rec-unexpected"));
+
+        var dataset = new JdbcDiagnosticsRepository().load(databasePath, CUTOFF, TO);
+        var readiness = dataset.recommendationReadiness();
+
+        assertThat(readiness.totalCanonicalRecommendations()).isEqualTo(4);
+        assertThat(readiness.activeRecommendations()).isEqualTo(3);
+        assertThat(readiness.coveredRecommendations()).isEqualTo(1);
+        assertThat(readiness.expiredRecommendations()).isZero();
+        assertThat(readiness.recommendationsWithPaperTrades()).isEqualTo(2);
+        assertThat(readiness.recommendationsWithoutPaperTrades()).isEqualTo(2);
+        assertThat(readiness.recommendationsWithRealEquivalentBet()).isEqualTo(2);
+        assertThat(readiness.recommendationsWithoutRealEquivalentBet()).isEqualTo(2);
+        assertThat(readiness.recommendationsWithBothPaperAndRealEquivalent()).isEqualTo(1);
+        assertThat(readiness.recommendationsWithPaperOnly()).isEqualTo(1);
+        assertThat(readiness.recommendationsWithRealOnly()).isEqualTo(1);
+        assertThat(readiness.recommendationsWithNeitherPaperNorReal()).isEqualTo(1);
+        assertThat(readiness.paperTradesMissingRecommendationIdPost23()).isEqualTo(1);
+        assertThat(readiness.brokenPaperRecommendationJoins()).isEqualTo(1);
+        assertThat(readiness.realBetsWithRecommendationId()).isEqualTo(1);
+        assertThat(readiness.realBetsMissingRecommendationId()).isEqualTo(2);
+        assertThat(readiness.readyForRecommendationIdMatching()).isEqualTo("NO");
     }
 
     private static BetRecommendation recommendation(
@@ -124,6 +168,53 @@ class JdbcDiagnosticsRepositoryTest {
             null,
             true,
             recommendationId
+        );
+    }
+
+    private static BetIntent realBet(String id, String marketId, String recommendationId) {
+        return new BetIntent(
+            id,
+            BetIntentSource.AUTOMATIC,
+            "betfair",
+            marketId,
+            58805L,
+            "Team A v Team B",
+            "Match Odds",
+            "The Draw",
+            "Cup",
+            SelectionSide.DRAW,
+            "value-football",
+            BetSide.BACK,
+            "liquidity_ok",
+            new BigDecimal("3.50"),
+            BigDecimal.ONE,
+            new BigDecimal("20.00"),
+            null,
+            null,
+            null,
+            BigDecimal.ONE,
+            "accepted",
+            "bet-" + id,
+            null,
+            null,
+            null,
+            BetIntentStage.EXECUTED,
+            CUTOFF.plusSeconds(5),
+            CUTOFF.plusSeconds(6),
+            "eval-" + id,
+            recommendationId,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
         );
     }
 }

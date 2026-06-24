@@ -2,10 +2,12 @@ package com.betx.adapter.persistence;
 
 import com.betx.application.BacktestOutcome;
 import com.betx.application.DiagnosticsBetRecommendationsSummary;
+import com.betx.application.DiagnosticsModel.DiagnosticsDataProvenance;
 import com.betx.application.DiagnosticsModel.DiagnosticsDataset;
 import com.betx.application.DiagnosticsModel.RealBetDiagnosticRow;
 import com.betx.application.DiagnosticsPaperRecommendationCoverage;
 import com.betx.application.DiagnosticsPeriod;
+import com.betx.application.DiagnosticsRecommendationReadiness;
 import com.betx.application.DiagnosticsRepository;
 import com.betx.application.PaperTrade;
 import com.betx.application.PaperTradeStatus;
@@ -65,6 +67,9 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage = tableExists(connection, "paper_trades")
                 ? paperRecommendationCoverage(connection, from, to)
                 : DiagnosticsPaperRecommendationCoverage.empty();
+            DiagnosticsRecommendationReadiness recommendationReadiness = tableExists(connection, "bet_recommendations")
+                ? recommendationReadiness(connection, from, to, paperRecommendationCoverage)
+                : DiagnosticsRecommendationReadiness.empty();
             return new DiagnosticsDataset(
                 realBets,
                 paperTrades,
@@ -73,7 +78,8 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
                 recommendations,
                 rejections,
                 betRecommendations,
-                paperRecommendationCoverage
+                paperRecommendationCoverage,
+                recommendationReadiness
             );
         } catch (SQLException exc) {
             throw new IllegalStateException("Could not read diagnostics data.", exc);
@@ -384,6 +390,154 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
         }
     }
 
+    private static DiagnosticsRecommendationReadiness recommendationReadiness(
+        Connection connection,
+        Instant from,
+        Instant to,
+        DiagnosticsPaperRecommendationCoverage paperCoverage
+    ) throws SQLException {
+        if (!hasColumn(connection, "bet_recommendations", "canonical_key")) {
+            return DiagnosticsRecommendationReadiness.empty();
+        }
+        boolean exactRealEquivalenceAvailable = tableExists(connection, "bet_intents")
+            && hasColumn(connection, "bet_intents", "selection_side")
+            && hasColumn(connection, "bet_intents", "strategy_name");
+        RecommendationLinkCounts links = recommendationLinkCounts(connection, from, to, exactRealEquivalenceAvailable);
+        long realBetsWithRecommendationId = tableExists(connection, "bet_intents") && hasColumn(connection, "bet_intents", "recommendation_id")
+            ? countRealBets(connection, from, to, "AND b.recommendation_id IS NOT NULL")
+            : 0;
+        long realBetsTotal = tableExists(connection, "bet_intents")
+            ? countRealBets(connection, from, to, "")
+            : 0;
+        return new DiagnosticsRecommendationReadiness(
+            links.totalCanonicalRecommendations(),
+            links.activeRecommendations(),
+            links.coveredRecommendations(),
+            links.expiredRecommendations(),
+            links.recommendationsWithPaperTrades(),
+            links.totalCanonicalRecommendations() - links.recommendationsWithPaperTrades(),
+            links.recommendationsWithRealEquivalentBet(),
+            links.totalCanonicalRecommendations() - links.recommendationsWithRealEquivalentBet(),
+            links.recommendationsWithBothPaperAndRealEquivalent(),
+            links.recommendationsWithPaperTrades() - links.recommendationsWithBothPaperAndRealEquivalent(),
+            links.recommendationsWithRealEquivalentBet() - links.recommendationsWithBothPaperAndRealEquivalent(),
+            links.totalCanonicalRecommendations()
+                - links.recommendationsWithPaperTrades()
+                - links.recommendationsWithRealEquivalentBet()
+                + links.recommendationsWithBothPaperAndRealEquivalent(),
+            paperCoverage.paperTradesWithRecommendationId(),
+            paperCoverage.post23PaperTrades() - paperCoverage.post23PaperTradesWithRecommendationId(),
+            paperCoverage.paperTradesWithRecommendationIdButMissingBetRecommendation(),
+            realBetsWithRecommendationId,
+            realBetsTotal - realBetsWithRecommendationId,
+            exactRealEquivalenceAvailable ? DiagnosticsDataProvenance.SQLITE_EXACT : DiagnosticsDataProvenance.UNAVAILABLE,
+            "PARTIAL",
+            "NO",
+            "PARTIAL",
+            List.of()
+        );
+    }
+
+    private static RecommendationLinkCounts recommendationLinkCounts(
+        Connection connection,
+        Instant from,
+        Instant to,
+        boolean includeRealEquivalent
+    ) throws SQLException {
+        String realEquivalentCte = includeRealEquivalent ? """
+            real_equivalent AS (
+                SELECT DISTINCT br.id
+                FROM canonical br
+                JOIN bet_intents b
+                  ON b.exchange = br.exchange
+                 AND b.market_id = br.market_id
+                 AND b.selection_id = br.selection_id
+                 AND b.selection_side = br.selection_side
+                 AND b.strategy_name = br.strategy_name
+                WHERE (%s)
+            ),
+            """.formatted(periodPredicate(List.of("b.created_at", "b.updated_at", "b.settled_at"))) : """
+            real_equivalent AS (
+                SELECT NULL AS id
+                WHERE 0
+            ),
+            """;
+        String sql = """
+            WITH canonical AS (
+                SELECT id, exchange, market_id, selection_id, selection_side, strategy_name, status
+                FROM bet_recommendations
+                WHERE canonical_key IS NOT NULL
+                  AND (%s)
+            ),
+            paper_linked AS (
+                SELECT DISTINCT br.id
+                FROM canonical br
+                JOIN paper_trades p ON p.recommendation_id = br.id
+                WHERE (%s)
+            ),
+            %s
+            classified AS (
+                SELECT
+                    c.id,
+                    c.status,
+                    EXISTS (SELECT 1 FROM paper_linked p WHERE p.id = c.id) AS has_paper,
+                    EXISTS (SELECT 1 FROM real_equivalent r WHERE r.id = c.id) AS has_real
+                FROM canonical c
+            )
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'ACTIVE' THEN 1 ELSE 0 END) AS active,
+                SUM(CASE WHEN status = 'COVERED' THEN 1 ELSE 0 END) AS covered,
+                SUM(CASE WHEN status = 'EXPIRED' THEN 1 ELSE 0 END) AS expired,
+                SUM(CASE WHEN has_paper THEN 1 ELSE 0 END) AS with_paper,
+                SUM(CASE WHEN has_real THEN 1 ELSE 0 END) AS with_real,
+                SUM(CASE WHEN has_paper AND has_real THEN 1 ELSE 0 END) AS both
+            FROM classified
+            """.formatted(
+            periodPredicate(List.of("recommended_at", "first_seen_at", "last_seen_at")),
+            periodPredicate(List.of("p.recommendation_timestamp", "p.execution_timestamp", "p.settlement_timestamp")),
+            realEquivalentCte
+        );
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            bindPeriod(statement, from, to, 3);
+            bindPeriod(statement, from, to, 3, 13);
+            if (includeRealEquivalent) {
+                bindPeriod(statement, from, to, 3, 25);
+            }
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return RecommendationLinkCounts.empty();
+                }
+                return new RecommendationLinkCounts(
+                    resultSet.getLong("total"),
+                    resultSet.getLong("active"),
+                    resultSet.getLong("covered"),
+                    resultSet.getLong("expired"),
+                    resultSet.getLong("with_paper"),
+                    resultSet.getLong("with_real"),
+                    resultSet.getLong("both")
+                );
+            }
+        }
+    }
+
+    private static long countRealBets(Connection connection, Instant from, Instant to, String extraPredicate) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT COUNT(*) AS total
+            FROM bet_intents b
+            WHERE (%s)
+            %s
+            """.formatted(
+            periodPredicate(List.of("b.created_at", "b.updated_at", "b.settled_at")),
+            extraPredicate == null ? "" : extraPredicate
+        ))) {
+            bindPeriod(statement, from, to, 3);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getLong("total") : 0;
+            }
+        }
+    }
+
     private static long countDistinctMarkets(Connection connection, Instant from, Instant to) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
             SELECT COUNT(DISTINCT exchange || '|' || market_id) AS total
@@ -628,7 +782,17 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
     }
 
     private static void bindPeriod(PreparedStatement statement, Instant from, Instant to, int timestampColumns) throws SQLException {
-        int index = 1;
+        bindPeriod(statement, from, to, timestampColumns, 1);
+    }
+
+    private static void bindPeriod(
+        PreparedStatement statement,
+        Instant from,
+        Instant to,
+        int timestampColumns,
+        int startIndex
+    ) throws SQLException {
+        int index = startIndex;
         for (int ignored = 0; ignored < timestampColumns; ignored++) {
             statement.setString(index++, from == null ? null : from.toString());
             statement.setString(index++, from == null ? null : from.toString());
@@ -691,5 +855,19 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
 
     private static BacktestOutcome outcome(String value) {
         return value == null || value.isBlank() ? null : BacktestOutcome.valueOf(value);
+    }
+
+    private record RecommendationLinkCounts(
+        long totalCanonicalRecommendations,
+        long activeRecommendations,
+        long coveredRecommendations,
+        long expiredRecommendations,
+        long recommendationsWithPaperTrades,
+        long recommendationsWithRealEquivalentBet,
+        long recommendationsWithBothPaperAndRealEquivalent
+    ) {
+        private static RecommendationLinkCounts empty() {
+            return new RecommendationLinkCounts(0, 0, 0, 0, 0, 0, 0);
+        }
     }
 }

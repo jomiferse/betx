@@ -55,6 +55,37 @@ public class DiagnosticsFormatter {
         addGrouped(lines, "Recommendations by selection side", recommendations.bySelectionSide());
         addGrouped(lines, "Recommendations by competition", recommendations.byCompetition());
         lines.add("");
+        lines.add("Recommendation readiness");
+        DiagnosticsRecommendationReadiness readiness = report.recommendationReadiness();
+        lines.add(line("Paper consumes BetRecommendation", readiness.paperTradesWithRecommendationId() > 0 ? "yes" : "no"));
+        lines.add(line("Real consumes BetRecommendation", readiness.realBetsWithRecommendationId() > 0 ? "yes" : "no"));
+        lines.add(line("Matching by recommendation_id", "no"));
+        lines.add(line("Total canonical recommendations", readiness.totalCanonicalRecommendations()));
+        lines.add(line("ACTIVE recommendations", readiness.activeRecommendations()));
+        lines.add(line("COVERED recommendations", readiness.coveredRecommendations()));
+        lines.add(line("EXPIRED recommendations", readiness.expiredRecommendations()));
+        lines.add(line("Recommendations with paper trades", readiness.recommendationsWithPaperTrades()));
+        lines.add(line("Recommendations without paper trades", readiness.recommendationsWithoutPaperTrades()));
+        lines.add(line("Recommendations with real equivalent bet", readiness.recommendationsWithRealEquivalentBet()));
+        lines.add(line("Recommendations without real equivalent bet", readiness.recommendationsWithoutRealEquivalentBet()));
+        lines.add(line("Recommendations with both paper and real equivalent", readiness.recommendationsWithBothPaperAndRealEquivalent()));
+        lines.add(line("Recommendations with paper only", readiness.recommendationsWithPaperOnly()));
+        lines.add(line("Recommendations with real only", readiness.recommendationsWithRealOnly()));
+        lines.add(line("Recommendations with neither paper nor real", readiness.recommendationsWithNeitherPaperNorReal()));
+        lines.add(line("Paper trades with recommendation_id", readiness.paperTradesWithRecommendationId()));
+        lines.add(line("Paper trades missing recommendation_id post-2.3", readiness.paperTradesMissingRecommendationIdPost23()));
+        lines.add(line("Broken paper recommendation joins", readiness.brokenPaperRecommendationJoins()));
+        lines.add(line("Real bets with recommendation_id", readiness.realBetsWithRecommendationId()));
+        lines.add(line("Real bets missing recommendation_id", readiness.realBetsMissingRecommendationId()));
+        lines.add(line("Real equivalent coverage source", readiness.realEquivalentCoverageSource()));
+        lines.add(line("Ready for real consumption", readiness.readyForRealConsumption()));
+        lines.add(line("Ready for recommendation_id matching", readiness.readyForRecommendationIdMatching()));
+        lines.add(line("Readiness status", readiness.readinessStatus()));
+        if (!readiness.readinessReasons().isEmpty()) {
+            lines.add("Readiness reasons:");
+            readiness.readinessReasons().forEach(reason -> lines.add("- " + reason));
+        }
+        lines.add("");
         lines.add("Paper recommendation coverage");
         DiagnosticsPaperRecommendationCoverage paperCoverage = report.paperRecommendationCoverage();
         lines.add(line("Paper trades total", paperCoverage.paperTradesTotal()));

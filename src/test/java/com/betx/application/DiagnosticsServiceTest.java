@@ -278,6 +278,84 @@ class DiagnosticsServiceTest {
             .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"));
     }
 
+    @Test
+    void reportsRecommendationReadinessWithoutEnablingRecommendationIdMatching() {
+        DiagnosticsDataset dataset = new DiagnosticsDataset(
+            List.of(real("real-1", "m1", 10, T0.plusSeconds(60), "3.00", "10.00", BetSettlementResult.WIN, "20.00")),
+            List.of(paper("paper-linked", "m1", 10, T0, "2.90", "2.90", "5.00", BacktestOutcome.WIN, "9.50", "rec-1")),
+            20,
+            40,
+            Map.of("BET", 1L),
+            Map.of(),
+            new DiagnosticsBetRecommendationsSummary(
+                2,
+                0,
+                2,
+                1,
+                1,
+                0,
+                3,
+                1.5,
+                1,
+                2,
+                Map.of(),
+                0,
+                2,
+                2,
+                2,
+                2,
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                2,
+                0
+            ),
+            new DiagnosticsPaperRecommendationCoverage(1, 1, 0, 1, 1, 0, 1, 1, 0, 0),
+            new DiagnosticsRecommendationReadiness(
+                2,
+                1,
+                1,
+                0,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                1,
+                1,
+                0,
+                0,
+                0,
+                1,
+                DiagnosticsDataProvenance.SQLITE_EXACT,
+                "PARTIAL",
+                "NO",
+                "PARTIAL",
+                List.of()
+            )
+        );
+
+        DiagnosticsReport report = service(dataset, new DiagnosticsLogSummary(
+            Map.of("order.submitted", 1L, "order.response", 1L),
+            Map.of(),
+            0,
+            0,
+            List.of()
+        )).generate(request());
+
+        assertThat(report.recommendationReadiness().readyForRecommendationIdMatching()).isEqualTo("NO");
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Recommendation readiness")
+            .anySatisfy(line -> assertThat(line).contains("Paper consumes BetRecommendation").contains("yes"))
+            .anySatisfy(line -> assertThat(line).contains("Real consumes BetRecommendation").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("Recommendations with both paper and real equivalent").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("Ready for recommendation_id matching").contains("NO"))
+            .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("Real betting does not consume BetRecommendation yet."));
+    }
+
     private static DiagnosticsService service(DiagnosticsDataset dataset, DiagnosticsLogSummary logs) {
         return new DiagnosticsService(
             new TestConfigRepository(new BetxConfig(

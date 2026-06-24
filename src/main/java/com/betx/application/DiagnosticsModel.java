@@ -86,7 +86,8 @@ public final class DiagnosticsModel {
         Map<String, Long> signalRecommendations,
         Map<String, Long> rejectionReasons,
         DiagnosticsBetRecommendationsSummary betRecommendations,
-        DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage
+        DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage,
+        DiagnosticsRecommendationReadiness recommendationReadiness
     ) {
         public DiagnosticsDataset(
             List<RealBetDiagnosticRow> realBets,
@@ -104,7 +105,8 @@ public final class DiagnosticsModel {
                 signalRecommendations,
                 rejectionReasons,
                 DiagnosticsBetRecommendationsSummary.empty(),
-                DiagnosticsPaperRecommendationCoverage.empty()
+                DiagnosticsPaperRecommendationCoverage.empty(),
+                DiagnosticsRecommendationReadiness.empty()
             );
         }
 
@@ -125,7 +127,31 @@ public final class DiagnosticsModel {
                 signalRecommendations,
                 rejectionReasons,
                 betRecommendations,
-                DiagnosticsPaperRecommendationCoverage.empty()
+                DiagnosticsPaperRecommendationCoverage.empty(),
+                DiagnosticsRecommendationReadiness.empty()
+            );
+        }
+
+        public DiagnosticsDataset(
+            List<RealBetDiagnosticRow> realBets,
+            List<PaperTrade> paperTrades,
+            long marketsScanned,
+            long runnersAnalyzed,
+            Map<String, Long> signalRecommendations,
+            Map<String, Long> rejectionReasons,
+            DiagnosticsBetRecommendationsSummary betRecommendations,
+            DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage
+        ) {
+            this(
+                realBets,
+                paperTrades,
+                marketsScanned,
+                runnersAnalyzed,
+                signalRecommendations,
+                rejectionReasons,
+                betRecommendations,
+                paperRecommendationCoverage,
+                DiagnosticsRecommendationReadiness.empty()
             );
         }
 
@@ -138,6 +164,9 @@ public final class DiagnosticsModel {
             paperRecommendationCoverage = paperRecommendationCoverage == null
                 ? DiagnosticsPaperRecommendationCoverage.empty()
                 : paperRecommendationCoverage;
+            recommendationReadiness = recommendationReadiness == null
+                ? DiagnosticsRecommendationReadiness.empty()
+                : recommendationReadiness;
         }
     }
 

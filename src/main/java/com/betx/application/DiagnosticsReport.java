@@ -24,7 +24,8 @@ public record DiagnosticsReport(
     DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort,
     List<DiagnosticsSkippedMarket> topSkippedMarkets,
     DiagnosticsBetRecommendationsSummary betRecommendations,
-    DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage
+    DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage,
+    DiagnosticsRecommendationReadiness recommendationReadiness
 ) {
     public DiagnosticsReport(
         Instant generatedAt,
@@ -84,7 +85,8 @@ public record DiagnosticsReport(
             ),
             List.of(),
             DiagnosticsBetRecommendationsSummary.empty(),
-            DiagnosticsPaperRecommendationCoverage.empty()
+            DiagnosticsPaperRecommendationCoverage.empty(),
+            DiagnosticsRecommendationReadiness.empty()
         );
     }
 
@@ -92,5 +94,8 @@ public record DiagnosticsReport(
         paperRecommendationCoverage = paperRecommendationCoverage == null
             ? DiagnosticsPaperRecommendationCoverage.empty()
             : paperRecommendationCoverage;
+        recommendationReadiness = recommendationReadiness == null
+            ? DiagnosticsRecommendationReadiness.empty()
+            : recommendationReadiness;
     }
 }
