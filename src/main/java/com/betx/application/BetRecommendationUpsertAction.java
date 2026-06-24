@@ -3,5 +3,6 @@ package com.betx.application;
 public enum BetRecommendationUpsertAction {
     CREATED,
     OBSERVED,
-    COVERED
+    COVERED,
+    ALREADY_COVERED
 }

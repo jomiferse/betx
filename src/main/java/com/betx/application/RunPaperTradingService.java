@@ -632,6 +632,9 @@ public class RunPaperTradingService {
     }
 
     private void logRecommendation(String cycleId, BetRecommendationUpsertResult result) {
+        if (result.action() == BetRecommendationUpsertAction.ALREADY_COVERED) {
+            return;
+        }
         if (result.action() == BetRecommendationUpsertAction.OBSERVED && !shouldLogObservedRecommendation(result.recommendation())) {
             return;
         }
@@ -639,6 +642,7 @@ public class RunPaperTradingService {
             case CREATED -> "bet_recommendation.created";
             case OBSERVED -> "bet_recommendation.observed";
             case COVERED -> "bet_recommendation.covered";
+            case ALREADY_COVERED -> throw new IllegalStateException("Already covered recommendations are not logged.");
         };
         BetRecommendation recommendation = result.recommendation();
         eventLogger.info(BetxEventCategory.ANALYTICS, event)
@@ -665,6 +669,7 @@ public class RunPaperTradingService {
                 .field("bestRecommendedOdds", recommendation.bestRecommendedOdds())
                 .field("observedCount", recommendation.observedCount())
                 .field("status", recommendation.status().name())
+                .field("coveredAt", recommendation.coveredAt())
                 .field("recommendedAt", recommendation.recommendedAt())
                 .field("source", recommendation.source().name())
                 .emit();

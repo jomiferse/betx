@@ -9,6 +9,9 @@ import com.betx.application.port.out.MarketSnapshotRepository;
 import com.betx.application.port.out.PaperSignalEvaluationRepository;
 import com.betx.application.port.out.PaperTradeRepository;
 import com.betx.application.port.out.PaperTradeSettlementGateway;
+import com.betx.application.port.out.StructuredEventSink;
+import com.betx.application.observability.BetxEvent;
+import com.betx.application.observability.BetxEventLogger;
 import com.betx.domain.betfair.BetfairConfig;
 import com.betx.domain.config.BetxConfig;
 import com.betx.domain.config.ConfigPath;
@@ -131,6 +134,47 @@ class RunPaperTradingServiceTest {
             .satisfies(trade -> assertThat(trade.recommendationId()).isNull());
         assertThat(evaluations.saved).singleElement()
             .satisfies(evaluation -> assertThat(evaluation.recommendationId()).isNull());
+    }
+
+    @Test
+    void doesNotLogCoveredRecommendationWhenPaperCanonicalRecommendationWasAlreadyCovered() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        PaperSignalEvaluationRepositoryStub evaluations = new PaperSignalEvaluationRepositoryStub();
+        BetRecommendationRepositoryStub recommendations = new BetRecommendationRepositoryStub();
+        recommendations.nextAction = BetRecommendationUpsertAction.ALREADY_COVERED;
+        RecordingEventSink sink = new RecordingEventSink();
+        repository.recent.add(new ObservedMarketSnapshot(
+            observedAt.minusSeconds(3600),
+            snapshot(2L, "Draw", "3.70")
+        ));
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(snapshot(2L, "Draw", "3.70")))),
+            repository,
+            paperTrades,
+            evaluations,
+            recommendations,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC),
+            new BetxEventLogger(sink, Clock.fixed(observedAt, ZoneOffset.UTC))
+        );
+
+        service.run(
+            new ConfigPath(Path.of("betx.yml")),
+            new BigDecimal("0.02"),
+            BacktestSlippageModel.PROFIT_HAIRCUT
+        );
+
+        assertThat(sink.events)
+            .filteredOn(event -> event.event().equals("bet_recommendation.covered"))
+            .isEmpty();
+        assertThat(sink.events)
+            .filteredOn(event -> event.event().equals("bet_recommendation.created"))
+            .isEmpty();
+        assertThat(paperTrades.saved).singleElement()
+            .satisfies(trade -> assertThat(trade.recommendationId()).isNull());
     }
 
     @Test
@@ -796,6 +840,7 @@ class RunPaperTradingServiceTest {
     private static final class BetRecommendationRepositoryStub implements BetRecommendationRepository {
         private final List<BetRecommendation> saved = new ArrayList<>();
         private final List<BetRecommendation> upserted = new ArrayList<>();
+        private BetRecommendationUpsertAction nextAction;
 
         @Override
         public void save(String databasePath, BetRecommendation recommendation) {
@@ -805,7 +850,10 @@ class RunPaperTradingServiceTest {
         @Override
         public BetRecommendationUpsertResult upsertActiveRecommendation(String databasePath, BetRecommendation recommendation) {
             upserted.add(recommendation);
-            return new BetRecommendationUpsertResult(recommendation, BetRecommendationUpsertAction.CREATED);
+            return new BetRecommendationUpsertResult(
+                recommendation,
+                nextAction == null ? BetRecommendationUpsertAction.CREATED : nextAction
+            );
         }
 
         @Override
@@ -818,6 +866,15 @@ class RunPaperTradingServiceTest {
             return saved.stream()
                 .filter(recommendation -> java.util.Objects.equals(recommendation.evaluationId(), evaluationId))
                 .toList();
+        }
+    }
+
+    private static final class RecordingEventSink implements StructuredEventSink {
+        private final List<BetxEvent> events = new ArrayList<>();
+
+        @Override
+        public void emit(BetxEvent event) {
+            events.add(event);
         }
     }
 

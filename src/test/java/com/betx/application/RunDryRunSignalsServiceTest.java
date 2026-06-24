@@ -927,6 +927,37 @@ class RunDryRunSignalsServiceTest {
     }
 
     @Test
+    void doesNotLogCoveredRecommendationWhenCanonicalRecommendationWasAlreadyCovered() {
+        RecordingSnapshotRepository snapshotRepository = repositoryWithPrevious("betfair", "1.1");
+        RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
+        recommendations.nextAction = BetRecommendationUpsertAction.ALREADY_COVERED;
+        RecordingEventSink sink = new RecordingEventSink();
+        BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
+        RunDryRunSignalsService service = new RunDryRunSignalsService(
+            new StaticConfigRepository(config),
+            List.of(gateway("betfair", List.of(snapshot("betfair", "1.1")), null)),
+            new NoopTelegramConnectionService(),
+            new RecordingBetExecutionGateway(),
+            snapshotRepository,
+            new MarketSnapshotChangeDetector(),
+            new NoopExternalMatchIntelligenceGateway(),
+            new RecordingSignalHistoryRepository(),
+            recommendations,
+            Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC),
+            new BetxEventLogger(sink, Clock.fixed(Instant.parse("2026-05-31T10:01:00Z"), ZoneOffset.UTC))
+        );
+
+        service.run(CONFIG_PATH);
+
+        assertThat(sink.events())
+            .filteredOn(event -> event.event().equals("bet_recommendation.covered"))
+            .isEmpty();
+        assertThat(sink.events())
+            .filteredOn(event -> event.event().equals("bet_recommendation.created"))
+            .isEmpty();
+    }
+
+    @Test
     void doesNotShadowPersistRecommendationForRejectedStrategyEvaluation() {
         RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
         BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
@@ -1499,6 +1530,7 @@ class RunDryRunSignalsServiceTest {
         private final java.util.Map<String, BetRecommendation> canonical = new java.util.LinkedHashMap<>();
         private final List<BetRecommendation> upserted = new ArrayList<>();
         private boolean failSaves;
+        private BetRecommendationUpsertAction nextAction;
 
         @Override
         public void save(String databasePath, BetRecommendation recommendation) {
@@ -1517,7 +1549,10 @@ class RunDryRunSignalsServiceTest {
             if (existing == null) {
                 canonical.put(recommendation.canonicalKey(), recommendation);
                 upserted.add(recommendation);
-                return new BetRecommendationUpsertResult(recommendation, BetRecommendationUpsertAction.CREATED);
+                return new BetRecommendationUpsertResult(
+                    recommendation,
+                    nextAction == null ? BetRecommendationUpsertAction.CREATED : nextAction
+                );
             }
             BetRecommendation updated = existing.observedAgain(
                 recommendation.evaluationId(),
@@ -1526,7 +1561,10 @@ class RunDryRunSignalsServiceTest {
             );
             canonical.put(updated.canonicalKey(), updated);
             upserted.add(updated);
-            return new BetRecommendationUpsertResult(updated, BetRecommendationUpsertAction.OBSERVED);
+            return new BetRecommendationUpsertResult(
+                updated,
+                nextAction == null ? BetRecommendationUpsertAction.OBSERVED : nextAction
+            );
         }
 
         @Override

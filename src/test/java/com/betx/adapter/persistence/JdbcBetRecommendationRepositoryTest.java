@@ -115,7 +115,7 @@ class JdbcBetRecommendationRepositoryTest {
         );
 
         assertThat(covered).isPresent();
-        assertThat(observed.action()).isEqualTo(BetRecommendationUpsertAction.COVERED);
+        assertThat(observed.action()).isEqualTo(BetRecommendationUpsertAction.ALREADY_COVERED);
         assertThat(observed.recommendation().status()).isEqualTo(BetRecommendationStatus.COVERED);
         assertThat(observed.recommendation().coveredAt()).isEqualTo(Instant.parse("2026-06-22T08:40:00Z"));
         assertThat(observed.recommendation().observedCount()).isEqualTo(2);
@@ -144,7 +144,7 @@ class JdbcBetRecommendationRepositoryTest {
         assertThat(first.get().recommendation().status()).isEqualTo(BetRecommendationStatus.COVERED);
         assertThat(first.get().recommendation().coveredAt()).isEqualTo(Instant.parse("2026-06-22T08:40:00Z"));
         assertThat(second).isPresent();
-        assertThat(second.get().action()).isEqualTo(BetRecommendationUpsertAction.OBSERVED);
+        assertThat(second.get().action()).isEqualTo(BetRecommendationUpsertAction.ALREADY_COVERED);
         assertThat(second.get().recommendation().status()).isEqualTo(BetRecommendationStatus.COVERED);
         assertThat(second.get().recommendation().coveredAt()).isEqualTo(Instant.parse("2026-06-22T08:40:00Z"));
         assertThat(countRows(databasePath)).isEqualTo(1);

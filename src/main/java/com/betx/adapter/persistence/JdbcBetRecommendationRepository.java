@@ -80,8 +80,8 @@ public class JdbcBetRecommendationRepository implements BetRecommendationReposit
                         recommendation.observedAt()
                     );
                     updateCanonicalFields(connection, updated);
-                    BetRecommendationUpsertAction action = updated.status() == BetRecommendationStatus.COVERED
-                        ? BetRecommendationUpsertAction.COVERED
+                    BetRecommendationUpsertAction action = existing.get().status() == BetRecommendationStatus.COVERED
+                        ? BetRecommendationUpsertAction.ALREADY_COVERED
                         : BetRecommendationUpsertAction.OBSERVED;
                     result = new BetRecommendationUpsertResult(updated, action);
                 }
@@ -112,7 +112,7 @@ public class JdbcBetRecommendationRepository implements BetRecommendationReposit
                     updateCanonicalFields(connection, covered);
                     result = Optional.of(new BetRecommendationUpsertResult(
                         covered,
-                        transitioned ? BetRecommendationUpsertAction.COVERED : BetRecommendationUpsertAction.OBSERVED
+                        transitioned ? BetRecommendationUpsertAction.COVERED : BetRecommendationUpsertAction.ALREADY_COVERED
                     ));
                 }
                 commit(connection);
