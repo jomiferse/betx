@@ -9,9 +9,10 @@ public record DiagnosticsPaperRecommendationCoverage(
     long paperTradesWithRecommendationIdButMissingBetRecommendation,
     long paperTradesLinkedToCanonicalRecommendation,
     long paperTradesLinkedToActiveRecommendations,
-    long paperTradesLinkedToCoveredRecommendations
+    long paperTradesLinkedToCoveredRecommendations,
+    long paperTradesLinkedToExpiredRecommendations
 ) {
     public static DiagnosticsPaperRecommendationCoverage empty() {
-        return new DiagnosticsPaperRecommendationCoverage(0, 0, 0, 0, 0, 0, 0, 0, 0);
+        return new DiagnosticsPaperRecommendationCoverage(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 }

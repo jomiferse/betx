@@ -84,6 +84,10 @@ public class DiagnosticsFormatter {
             "Paper trades linked to COVERED recommendations",
             paperCoverage.paperTradesLinkedToCoveredRecommendations()
         ));
+        lines.add(line(
+            "Paper trades linked to EXPIRED recommendations",
+            paperCoverage.paperTradesLinkedToExpiredRecommendations()
+        ));
         lines.add(line("Real orders with recommendation_id", coverage(
             report.executionDataCoverage().withRecommendationId(),
             report.executionDataCoverage().totalOrders()

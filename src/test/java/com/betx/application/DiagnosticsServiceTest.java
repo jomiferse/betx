@@ -255,6 +255,7 @@ class DiagnosticsServiceTest {
                 0,
                 1,
                 1,
+                0,
                 0
             )
         );
@@ -271,6 +272,7 @@ class DiagnosticsServiceTest {
             .anySatisfy(line -> assertThat(line).contains("Paper trades with recommendation_id").contains("1 / 2"))
             .anySatisfy(line -> assertThat(line).contains("Post-2.3 paper trades with recommendation_id").contains("1 / 1"))
             .anySatisfy(line -> assertThat(line).contains("Paper trades linked to ACTIVE recommendations").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("Paper trades linked to EXPIRED recommendations").contains("0"))
             .anySatisfy(line -> assertThat(line).contains("BetRecommendation consumed by paper").contains("yes"))
             .anySatisfy(line -> assertThat(line).contains("BetRecommendation consumed by real").contains("no"))
             .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"));

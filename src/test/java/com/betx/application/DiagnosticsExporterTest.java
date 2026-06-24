@@ -30,6 +30,7 @@ class DiagnosticsExporterTest {
         assertThat(jsonText)
             .contains("\"generatedAt\"")
             .contains("\"matchedPairs\"")
+            .contains("\"paperTradesLinkedToExpiredRecommendations\"")
             .doesNotContain("token")
             .doesNotContain("password")
             .doesNotContain("session");

@@ -244,7 +244,7 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
     ) throws SQLException {
         long total = countPaperTrades(connection, from, to, "");
         if (!hasColumn(connection, "paper_trades", "recommendation_id")) {
-            return new DiagnosticsPaperRecommendationCoverage(total, 0, total, 0, 0, 0, 0, 0, 0);
+            return new DiagnosticsPaperRecommendationCoverage(total, 0, total, 0, 0, 0, 0, 0, 0, 0);
         }
         long withRecommendationId = countPaperTrades(connection, from, to, "AND p.recommendation_id IS NOT NULL");
         long missingRecommendation = tableExists(connection, "bet_recommendations")
@@ -269,17 +269,48 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             : 0;
         long linkedActive = countPaperTradesLinkedToStatus(connection, from, to, "ACTIVE");
         long linkedCovered = countPaperTradesLinkedToStatus(connection, from, to, "COVERED");
+        long linkedExpired = countPaperTradesLinkedToStatus(connection, from, to, "EXPIRED");
+        Instant firstLinkedPaperTrade = firstPaperTradeWithRecommendationId(connection, from, to);
+        long post23PaperTrades = firstLinkedPaperTrade == null
+            ? 0
+            : countPaperTradesSince(connection, from, to, firstLinkedPaperTrade, "");
+        long post23PaperTradesWithRecommendationId = firstLinkedPaperTrade == null
+            ? 0
+            : countPaperTradesSince(connection, from, to, firstLinkedPaperTrade, "AND p.recommendation_id IS NOT NULL");
         return new DiagnosticsPaperRecommendationCoverage(
             total,
             withRecommendationId,
             total - withRecommendationId,
-            withRecommendationId,
-            withRecommendationId,
+            post23PaperTrades,
+            post23PaperTradesWithRecommendationId,
             missingRecommendation,
             linkedCanonical,
             linkedActive,
-            linkedCovered
+            linkedCovered,
+            linkedExpired
         );
+    }
+
+    private static Instant firstPaperTradeWithRecommendationId(Connection connection, Instant from, Instant to) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT MIN(p.recommendation_timestamp) AS first_linked
+            FROM paper_trades p
+            WHERE (%s)
+              AND p.recommendation_id IS NOT NULL
+            """.formatted(periodPredicate(List.of(
+            "p.recommendation_timestamp",
+            "p.execution_timestamp",
+            "p.settlement_timestamp"
+        ))))) {
+            bindPeriod(statement, from, to, 3);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return null;
+                }
+                String firstLinked = resultSet.getString("first_linked");
+                return firstLinked == null ? null : Instant.parse(firstLinked);
+            }
+        }
     }
 
     private static long countPaperTrades(Connection connection, Instant from, Instant to, String extraPredicate) throws SQLException {
@@ -293,6 +324,31 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             extraPredicate == null ? "" : extraPredicate
         ))) {
             bindPeriod(statement, from, to, 3);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getLong("total") : 0;
+            }
+        }
+    }
+
+    private static long countPaperTradesSince(
+        Connection connection,
+        Instant from,
+        Instant to,
+        Instant since,
+        String extraPredicate
+    ) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT COUNT(*) AS total
+            FROM paper_trades p
+            WHERE (%s)
+              AND p.recommendation_timestamp >= ?
+            %s
+            """.formatted(
+            periodPredicate(List.of("p.recommendation_timestamp", "p.execution_timestamp", "p.settlement_timestamp")),
+            extraPredicate == null ? "" : extraPredicate
+        ))) {
+            bindPeriod(statement, from, to, 3);
+            statement.setString(13, since.toString());
             try (ResultSet resultSet = statement.executeQuery()) {
                 return resultSet.next() ? resultSet.getLong("total") : 0;
             }
@@ -321,7 +377,7 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             "p.settlement_timestamp"
         ))))) {
             bindPeriod(statement, from, to, 3);
-            statement.setString(4, status);
+            statement.setString(13, status);
             try (ResultSet resultSet = statement.executeQuery()) {
                 return resultSet.next() ? resultSet.getLong("total") : 0;
             }
