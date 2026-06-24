@@ -4,6 +4,7 @@ import com.betx.application.BacktestOutcome;
 import com.betx.application.DiagnosticsBetRecommendationsSummary;
 import com.betx.application.DiagnosticsModel.DiagnosticsDataset;
 import com.betx.application.DiagnosticsModel.RealBetDiagnosticRow;
+import com.betx.application.DiagnosticsPaperRecommendationCoverage;
 import com.betx.application.DiagnosticsPeriod;
 import com.betx.application.DiagnosticsRepository;
 import com.betx.application.PaperTrade;
@@ -61,6 +62,9 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             DiagnosticsBetRecommendationsSummary betRecommendations = tableExists(connection, "bet_recommendations")
                 ? betRecommendations(connection, from, to)
                 : DiagnosticsBetRecommendationsSummary.empty();
+            DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage = tableExists(connection, "paper_trades")
+                ? paperRecommendationCoverage(connection, from, to)
+                : DiagnosticsPaperRecommendationCoverage.empty();
             return new DiagnosticsDataset(
                 realBets,
                 paperTrades,
@@ -68,7 +72,8 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
                 runnersAnalyzed,
                 recommendations,
                 rejections,
-                betRecommendations
+                betRecommendations,
+                paperRecommendationCoverage
             );
         } catch (SQLException exc) {
             throw new IllegalStateException("Could not read diagnostics data.", exc);
@@ -228,6 +233,97 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
                     ));
                 }
                 return rows;
+            }
+        }
+    }
+
+    private static DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage(
+        Connection connection,
+        Instant from,
+        Instant to
+    ) throws SQLException {
+        long total = countPaperTrades(connection, from, to, "");
+        if (!hasColumn(connection, "paper_trades", "recommendation_id")) {
+            return new DiagnosticsPaperRecommendationCoverage(total, 0, total, 0, 0, 0, 0, 0, 0);
+        }
+        long withRecommendationId = countPaperTrades(connection, from, to, "AND p.recommendation_id IS NOT NULL");
+        long missingRecommendation = tableExists(connection, "bet_recommendations")
+            ? countPaperTrades(connection, from, to, """
+                AND p.recommendation_id IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM bet_recommendations br
+                    WHERE br.id = p.recommendation_id
+                )
+                """)
+            : withRecommendationId;
+        long linkedCanonical = tableExists(connection, "bet_recommendations")
+            ? countPaperTrades(connection, from, to, """
+                AND EXISTS (
+                    SELECT 1
+                    FROM bet_recommendations br
+                    WHERE br.id = p.recommendation_id
+                      AND br.canonical_key IS NOT NULL
+                )
+                """)
+            : 0;
+        long linkedActive = countPaperTradesLinkedToStatus(connection, from, to, "ACTIVE");
+        long linkedCovered = countPaperTradesLinkedToStatus(connection, from, to, "COVERED");
+        return new DiagnosticsPaperRecommendationCoverage(
+            total,
+            withRecommendationId,
+            total - withRecommendationId,
+            withRecommendationId,
+            withRecommendationId,
+            missingRecommendation,
+            linkedCanonical,
+            linkedActive,
+            linkedCovered
+        );
+    }
+
+    private static long countPaperTrades(Connection connection, Instant from, Instant to, String extraPredicate) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT COUNT(*) AS total
+            FROM paper_trades p
+            WHERE (%s)
+            %s
+            """.formatted(
+            periodPredicate(List.of("p.recommendation_timestamp", "p.execution_timestamp", "p.settlement_timestamp")),
+            extraPredicate == null ? "" : extraPredicate
+        ))) {
+            bindPeriod(statement, from, to, 3);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getLong("total") : 0;
+            }
+        }
+    }
+
+    private static long countPaperTradesLinkedToStatus(
+        Connection connection,
+        Instant from,
+        Instant to,
+        String status
+    ) throws SQLException {
+        if (!tableExists(connection, "bet_recommendations") || !hasColumn(connection, "paper_trades", "recommendation_id")) {
+            return 0;
+        }
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT COUNT(*) AS total
+            FROM paper_trades p
+            JOIN bet_recommendations br ON br.id = p.recommendation_id
+            WHERE (%s)
+              AND br.canonical_key IS NOT NULL
+              AND br.status = ?
+            """.formatted(periodPredicate(List.of(
+            "p.recommendation_timestamp",
+            "p.execution_timestamp",
+            "p.settlement_timestamp"
+        ))))) {
+            bindPeriod(statement, from, to, 3);
+            statement.setString(4, status);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getLong("total") : 0;
             }
         }
     }

@@ -100,7 +100,8 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             placeOrdersResponseDuration,
             prospectiveRealBettingCohort,
             logs.topSkippedMarkets(),
-            dataset.betRecommendations()
+            dataset.betRecommendations(),
+            dataset.paperRecommendationCoverage()
         );
     }
 
@@ -597,7 +598,7 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         values.add("Exact persisted execution fields are used only when present; legacy rows may not include partial-fill detail.");
         values.add("paper_trades does not persist strategy_name, so strategy is not required for paper-real matching.");
         values.add("Real-vs-paper odds metrics are APPROXIMATED because the real persisted odds source is bet_intents, not a proven executed price.");
-        values.add("BetRecommendation is canonicalized in shadow mode but is not yet consumed by paper or real betting.");
+        values.add("BetRecommendation is consumed by paper trading only; real betting and matching still use legacy correlation.");
         if (persistedExecutionCoverage.betsWithOrderSubmittedAt() > logEventCoverage.orderSubmittedEvents()) {
             values.add("LOG_SQLITE_ORDER_EVENT_COVERAGE_MISMATCH: SQLite orders with order_submitted_at: "
                 + persistedExecutionCoverage.betsWithOrderSubmittedAt()

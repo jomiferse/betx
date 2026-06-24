@@ -55,6 +55,43 @@ public class DiagnosticsFormatter {
         addGrouped(lines, "Recommendations by selection side", recommendations.bySelectionSide());
         addGrouped(lines, "Recommendations by competition", recommendations.byCompetition());
         lines.add("");
+        lines.add("Paper recommendation coverage");
+        DiagnosticsPaperRecommendationCoverage paperCoverage = report.paperRecommendationCoverage();
+        lines.add(line("Paper trades total", paperCoverage.paperTradesTotal()));
+        lines.add(line("Paper trades with recommendation_id", coverage(
+            paperCoverage.paperTradesWithRecommendationId(),
+            paperCoverage.paperTradesTotal()
+        )));
+        lines.add(line("Paper trades without recommendation_id", paperCoverage.paperTradesWithoutRecommendationId()));
+        lines.add(line("Post-2.3 paper trades", paperCoverage.post23PaperTrades()));
+        lines.add(line("Post-2.3 paper trades with recommendation_id", coverage(
+            paperCoverage.post23PaperTradesWithRecommendationId(),
+            paperCoverage.post23PaperTrades()
+        )));
+        lines.add(line(
+            "Paper trades with recommendation_id but missing BetRecommendation",
+            paperCoverage.paperTradesWithRecommendationIdButMissingBetRecommendation()
+        ));
+        lines.add(line(
+            "Paper trades linked to canonical recommendation",
+            paperCoverage.paperTradesLinkedToCanonicalRecommendation()
+        ));
+        lines.add(line(
+            "Paper trades linked to ACTIVE recommendations",
+            paperCoverage.paperTradesLinkedToActiveRecommendations()
+        ));
+        lines.add(line(
+            "Paper trades linked to COVERED recommendations",
+            paperCoverage.paperTradesLinkedToCoveredRecommendations()
+        ));
+        lines.add(line("Real orders with recommendation_id", coverage(
+            report.executionDataCoverage().withRecommendationId(),
+            report.executionDataCoverage().totalOrders()
+        )));
+        lines.add(line("BetRecommendation consumed by paper", "yes"));
+        lines.add(line("BetRecommendation consumed by real", report.executionDataCoverage().withRecommendationId() > 0 ? "yes" : "no"));
+        lines.add(line("Matching by recommendation_id", "no"));
+        lines.add("");
         lines.add("Matching gaps");
         if (report.matchingGaps().isEmpty()) {
             lines.add(line("None", 0));

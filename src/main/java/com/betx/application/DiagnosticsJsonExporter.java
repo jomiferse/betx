@@ -35,6 +35,7 @@ public class DiagnosticsJsonExporter {
         payload.put("period", period);
         payload.put("coverage", report.coverage());
         payload.put("betRecommendations", report.betRecommendations());
+        payload.put("paperRecommendationCoverage", report.paperRecommendationCoverage());
         payload.put("decisionFunnel", report.decisionFunnel());
         payload.put("executionMetrics", execution(report.executionMetrics()));
         payload.put("logEventCoverage", report.logEventCoverage());

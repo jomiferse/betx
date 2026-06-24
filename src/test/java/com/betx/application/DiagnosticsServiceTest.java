@@ -230,7 +230,50 @@ class DiagnosticsServiceTest {
             .anySatisfy(line -> assertThat(line).contains("Recommendations with evaluation_id").contains("3 / 3"))
             .anySatisfy(line -> assertThat(line).contains("Recommendations with last_evaluation_id").contains("2 / 3"))
             .anySatisfy(line -> assertThat(line).contains("value-football").contains("3"))
-            .anySatisfy(line -> assertThat(line).contains("BetRecommendation is canonicalized in shadow mode"));
+            .anySatisfy(line -> assertThat(line).contains("BetRecommendation is consumed by paper trading only"));
+    }
+
+    @Test
+    void reportsPaperRecommendationCoverageWithoutChangingLegacyMatching() {
+        DiagnosticsDataset dataset = new DiagnosticsDataset(
+            List.of(real("real-1", "m1", 10, T0.plusSeconds(60), "3.00", "10.00", BetSettlementResult.WIN, "20.00")),
+            List.of(
+                paper("paper-linked", "m1", 10, T0, "2.90", "2.90", "5.00", BacktestOutcome.WIN, "9.50", "rec-canonical-active"),
+                paper("paper-historical", "m2", 11, T0, "3.10", "3.10", "5.00", null, null)
+            ),
+            20,
+            40,
+            Map.of("BET", 1L),
+            Map.of(),
+            DiagnosticsBetRecommendationsSummary.empty(),
+            new DiagnosticsPaperRecommendationCoverage(
+                2,
+                1,
+                1,
+                1,
+                1,
+                0,
+                1,
+                1,
+                0
+            )
+        );
+
+        DiagnosticsReport report = service(dataset, DiagnosticsLogSummary.empty()).generate(request());
+
+        assertThat(report.coverage().matchedPairs()).isEqualTo(1);
+        assertThat(report.paperRecommendationCoverage().paperTradesTotal()).isEqualTo(2);
+        assertThat(report.paperRecommendationCoverage().paperTradesWithRecommendationId()).isEqualTo(1);
+        assertThat(report.paperRecommendationCoverage().paperTradesWithoutRecommendationId()).isEqualTo(1);
+        assertThat(report.paperRecommendationCoverage().paperTradesLinkedToCanonicalRecommendation()).isEqualTo(1);
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Paper recommendation coverage")
+            .anySatisfy(line -> assertThat(line).contains("Paper trades with recommendation_id").contains("1 / 2"))
+            .anySatisfy(line -> assertThat(line).contains("Post-2.3 paper trades with recommendation_id").contains("1 / 1"))
+            .anySatisfy(line -> assertThat(line).contains("Paper trades linked to ACTIVE recommendations").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("BetRecommendation consumed by paper").contains("yes"))
+            .anySatisfy(line -> assertThat(line).contains("BetRecommendation consumed by real").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"));
     }
 
     private static DiagnosticsService service(DiagnosticsDataset dataset, DiagnosticsLogSummary logs) {
@@ -422,6 +465,21 @@ class DiagnosticsServiceTest {
         BacktestOutcome result,
         String pnl
     ) {
+        return paper(id, marketId, selectionId, recommendedAt, requestedOdds, executionOdds, stake, result, pnl, null);
+    }
+
+    private static PaperTrade paper(
+        String id,
+        String marketId,
+        long selectionId,
+        Instant recommendedAt,
+        String requestedOdds,
+        String executionOdds,
+        String stake,
+        BacktestOutcome result,
+        String pnl,
+        String recommendationId
+    ) {
         return new PaperTrade(
             id,
             "betfair",
@@ -450,7 +508,8 @@ class DiagnosticsServiceTest {
             decimal(pnl),
             null,
             null,
-            true
+            true,
+            recommendationId
         );
     }
 

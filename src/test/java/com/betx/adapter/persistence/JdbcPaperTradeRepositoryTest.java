@@ -22,7 +22,37 @@ class JdbcPaperTradeRepositoryTest {
     void upsertsPaperTradesByMarketSelectionAcrossRepositoryInstances() {
         String databasePath = tempDir.resolve("paper.db").toString();
         JdbcPaperTradeRepository writer = new JdbcPaperTradeRepository(databasePath);
-        PaperTrade recommended = PaperTrade.recommended(snapshot(), Instant.parse("2026-06-15T10:00:00Z"), BigDecimal.valueOf(5));
+        PaperTrade recommended = new PaperTrade(
+            PaperTrade.key("betfair", "1.234", 2L),
+            "betfair",
+            "1.234",
+            2L,
+            "Team A v Team B",
+            "Match Odds",
+            "SP1",
+            Instant.parse("2026-06-15T18:00:00Z"),
+            "Draw",
+            BetSide.BACK,
+            PaperTradeStatus.RECOMMENDED,
+            Instant.parse("2026-06-15T10:00:00Z"),
+            new BigDecimal("3.70"),
+            new BigDecimal("3.70"),
+            null,
+            null,
+            false,
+            null,
+            null,
+            null,
+            null,
+            BigDecimal.valueOf(5),
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            null,
+            null,
+            true,
+            "rec-paper-1"
+        );
         PaperTrade settled = recommended
             .withExecuted(Instant.parse("2026-06-15T10:01:00Z"), new BigDecimal("3.70"), true)
             .withClosed(Instant.parse("2026-06-15T17:50:00Z"), new BigDecimal("3.50"))
@@ -45,6 +75,7 @@ class JdbcPaperTradeRepositoryTest {
             assertThat(trade.grossPnl()).isEqualByComparingTo("13.50");
             assertThat(trade.commission()).isEqualByComparingTo("0.68");
             assertThat(trade.netPnl()).isEqualByComparingTo("12.82");
+            assertThat(trade.recommendationId()).isEqualTo("rec-paper-1");
         });
         assertThat(reader.findByMarketSelection(databasePath, "betfair", "1.234", 2L))
             .get()
@@ -63,6 +94,7 @@ class JdbcPaperTradeRepositoryTest {
             assertThat(trade.side()).isEqualTo(BetSide.BACK);
             assertThat(trade.status()).isEqualTo(PaperTradeStatus.EXECUTED);
             assertThat(trade.runnerName()).isEqualTo("Draw");
+            assertThat(trade.recommendationId()).isNull();
         });
     }
 

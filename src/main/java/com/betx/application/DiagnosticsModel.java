@@ -85,7 +85,8 @@ public final class DiagnosticsModel {
         long runnersAnalyzed,
         Map<String, Long> signalRecommendations,
         Map<String, Long> rejectionReasons,
-        DiagnosticsBetRecommendationsSummary betRecommendations
+        DiagnosticsBetRecommendationsSummary betRecommendations,
+        DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage
     ) {
         public DiagnosticsDataset(
             List<RealBetDiagnosticRow> realBets,
@@ -102,7 +103,29 @@ public final class DiagnosticsModel {
                 runnersAnalyzed,
                 signalRecommendations,
                 rejectionReasons,
-                DiagnosticsBetRecommendationsSummary.empty()
+                DiagnosticsBetRecommendationsSummary.empty(),
+                DiagnosticsPaperRecommendationCoverage.empty()
+            );
+        }
+
+        public DiagnosticsDataset(
+            List<RealBetDiagnosticRow> realBets,
+            List<PaperTrade> paperTrades,
+            long marketsScanned,
+            long runnersAnalyzed,
+            Map<String, Long> signalRecommendations,
+            Map<String, Long> rejectionReasons,
+            DiagnosticsBetRecommendationsSummary betRecommendations
+        ) {
+            this(
+                realBets,
+                paperTrades,
+                marketsScanned,
+                runnersAnalyzed,
+                signalRecommendations,
+                rejectionReasons,
+                betRecommendations,
+                DiagnosticsPaperRecommendationCoverage.empty()
             );
         }
 
@@ -112,6 +135,9 @@ public final class DiagnosticsModel {
             signalRecommendations = signalRecommendations == null ? Map.of() : Map.copyOf(signalRecommendations);
             rejectionReasons = rejectionReasons == null ? Map.of() : Map.copyOf(rejectionReasons);
             betRecommendations = betRecommendations == null ? DiagnosticsBetRecommendationsSummary.empty() : betRecommendations;
+            paperRecommendationCoverage = paperRecommendationCoverage == null
+                ? DiagnosticsPaperRecommendationCoverage.empty()
+                : paperRecommendationCoverage;
         }
     }
 

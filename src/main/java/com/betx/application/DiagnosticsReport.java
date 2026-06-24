@@ -23,7 +23,8 @@ public record DiagnosticsReport(
     DiagnosticsPlaceOrdersResponseDuration placeOrdersResponseDuration,
     DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort,
     List<DiagnosticsSkippedMarket> topSkippedMarkets,
-    DiagnosticsBetRecommendationsSummary betRecommendations
+    DiagnosticsBetRecommendationsSummary betRecommendations,
+    DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage
 ) {
     public DiagnosticsReport(
         Instant generatedAt,
@@ -82,7 +83,14 @@ public record DiagnosticsReport(
                 DiagnosticsModel.DiagnosticsDataProvenance.UNAVAILABLE
             ),
             List.of(),
-            DiagnosticsBetRecommendationsSummary.empty()
+            DiagnosticsBetRecommendationsSummary.empty(),
+            DiagnosticsPaperRecommendationCoverage.empty()
         );
+    }
+
+    public DiagnosticsReport {
+        paperRecommendationCoverage = paperRecommendationCoverage == null
+            ? DiagnosticsPaperRecommendationCoverage.empty()
+            : paperRecommendationCoverage;
     }
 }

@@ -124,6 +124,10 @@ public record PaperTrade(
     }
 
     public static PaperTrade recommended(MarketSnapshot snapshot, Instant observedAt, BigDecimal stake) {
+        return recommended(snapshot, observedAt, stake, null);
+    }
+
+    public static PaperTrade recommended(MarketSnapshot snapshot, Instant observedAt, BigDecimal stake, String recommendationId) {
         return new PaperTrade(
             key(snapshot.exchange(), snapshot.marketId(), snapshot.selectionId()),
             snapshot.exchange(),
@@ -152,7 +156,8 @@ public record PaperTrade(
             BigDecimal.ZERO,
             null,
             null,
-            true
+            true,
+            recommendationId
         );
     }
 
@@ -185,7 +190,8 @@ public record PaperTrade(
             netPnl,
             decimalClvRatio,
             impliedProbabilityChange,
-            true
+            true,
+            recommendationId
         );
     }
 
@@ -220,7 +226,8 @@ public record PaperTrade(
             netPnl,
             clv,
             impliedProbability,
-            true
+            true,
+            recommendationId
         );
     }
 
@@ -259,7 +266,8 @@ public record PaperTrade(
             gross.subtract(paidCommission).setScale(2, RoundingMode.HALF_UP),
             decimalClvRatio,
             impliedProbabilityChange,
-            true
+            true,
+            recommendationId
         );
     }
 

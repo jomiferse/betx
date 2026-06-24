@@ -430,30 +430,38 @@ public class RunPaperTradingService {
                     RunnerAnalysis analysis = analyzer.analyze(snapshot, recent, strategyConfig.get(), config.risk())
                         .withEvaluationId(evaluationId);
                     PaperTradeAnalyzerRejectionReason analyzerOutcome;
+                    String recommendationId = null;
                     if (analysis.recommendation() == RecommendationType.BET
                         && runnerType(snapshot) == RunnerType.DRAW) {
                         analyzerOutcome = PaperTradeAnalyzerRejectionReason.ACCEPTED;
                         diagnostics.recordAnalyzerOutcome(analyzerOutcome);
-                        shadowPersistRecommendation(config, cycleId, observedAt, analysis);
-                        PaperTrade paperTrade = PaperTrade.recommended(snapshot, observedAt, config.risk().maxStake());
+                        BetRecommendationUpsertResult recommendationResult = shadowPersistRecommendation(config, cycleId, observedAt, analysis)
+                            .orElse(null);
+                        recommendationId = recommendationResult == null ? null : recommendationResult.recommendation().id();
+                        PaperTrade paperTrade = PaperTrade.recommended(
+                            snapshot,
+                            observedAt,
+                            config.risk().maxStake(),
+                            recommendationId
+                        );
                         PaperTrade executed = executePaperTrade(observedAt, paperTrade, snapshot, oddsSlippageRate, slippageModel);
                         logPaperTrade("paper_trade.recommended", "recommended", paperTrade, cycleId)
                             .field("evaluationId", analysis.evaluationId())
-                            .field("recommendationId", (String) null)
+                            .field("recommendationId", recommendationId)
                             .field("requestedOdds", paperTrade.requestedOdds())
                             .emit();
                         if (executed.status() == PaperTradeStatus.EXECUTION_FAILED) {
                             executionFailures++;
                             logPaperTrade("paper_trade.execution_failed", "failed", executed, cycleId)
                                 .field("evaluationId", analysis.evaluationId())
-                                .field("recommendationId", (String) null)
+                                .field("recommendationId", recommendationId)
                                 .field("reason", "insufficient_liquidity_or_invalid_odds")
                                 .emit();
                         } else {
                             recommendationsGenerated++;
                             logPaperTrade("paper_trade.executed", "executed", executed, cycleId)
                                 .field("evaluationId", analysis.evaluationId())
-                                .field("recommendationId", (String) null)
+                                .field("recommendationId", recommendationId)
                                 .field("executionOdds", executed.executionOdds())
                                 .emit();
                         }
@@ -476,7 +484,14 @@ public class RunPaperTradingService {
                             .field("liquidity", snapshot.liquidity())
                             .emit();
                     }
-                    PaperSignalEvaluation evaluation = toSignalEvaluation(observedAt, snapshot, recent, analysis, analyzerOutcome);
+                    PaperSignalEvaluation evaluation = toSignalEvaluation(
+                        observedAt,
+                        snapshot,
+                        recent,
+                        analysis,
+                        analyzerOutcome,
+                        recommendationId
+                    );
                     if (shouldPersistSignalEvaluation(evaluation)) {
                         signalEvaluations.add(evaluation);
                         safeSaveSignalEvaluation(config, evaluation, failures);
@@ -548,7 +563,8 @@ public class RunPaperTradingService {
         MarketSnapshot snapshot,
         List<ObservedMarketSnapshot> recent,
         RunnerAnalysis analysis,
-        PaperTradeAnalyzerRejectionReason analyzerReason
+        PaperTradeAnalyzerRejectionReason analyzerReason,
+        String recommendationId
     ) {
         MarketSnapshot previous = recent == null || recent.isEmpty() ? null : recent.getFirst().snapshot();
         return new PaperSignalEvaluation(
@@ -575,11 +591,11 @@ public class RunPaperTradingService {
             previous == null ? null : percentageDelta(previous.liquidity(), snapshot.liquidity()),
             analyzerReason,
             analysis.evaluationId(),
-            null
+            recommendationId
         );
     }
 
-    private void shadowPersistRecommendation(
+    private Optional<BetRecommendationUpsertResult> shadowPersistRecommendation(
         BetxConfig config,
         String cycleId,
         Instant observedAt,
@@ -614,6 +630,7 @@ public class RunPaperTradingService {
                 recommendation
             );
             logRecommendation(cycleId, result);
+            return Optional.of(result);
         } catch (RuntimeException exc) {
             eventLogger.warn(BetxEventCategory.ERROR, "bet_recommendation.persist_failed")
                 .correlationId(signalCorrelationId(observedAt, analysis.exchange(), analysis.marketId(), analysis.selectionId()))
@@ -628,6 +645,7 @@ public class RunPaperTradingService {
                 .field("errorType", exc.getClass().getSimpleName())
                 .field("message", exc.getMessage())
                 .emit();
+            return Optional.empty();
         }
     }
 

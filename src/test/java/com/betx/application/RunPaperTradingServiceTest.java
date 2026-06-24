@@ -92,7 +92,7 @@ class RunPaperTradingServiceTest {
     }
 
     @Test
-    void shadowPersistsRecommendationForNewPaperRecommendationWithoutLinkingPaperTrade() {
+    void linksNewPaperTradeToCreatedCanonicalRecommendation() {
         Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
         MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
         PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
@@ -131,13 +131,96 @@ class RunPaperTradingServiceTest {
             assertThat(recommendation.recommendedOdds()).isEqualByComparingTo("3.70");
         });
         assertThat(paperTrades.saved).singleElement()
-            .satisfies(trade -> assertThat(trade.recommendationId()).isNull());
+            .satisfies(trade -> assertThat(trade.recommendationId()).isEqualTo(recommendations.upserted.getFirst().id()));
         assertThat(evaluations.saved).singleElement()
-            .satisfies(evaluation -> assertThat(evaluation.recommendationId()).isNull());
+            .satisfies(evaluation -> assertThat(evaluation.recommendationId()).isEqualTo(recommendations.upserted.getFirst().id()));
     }
 
     @Test
-    void doesNotLogCoveredRecommendationWhenPaperCanonicalRecommendationWasAlreadyCovered() {
+    void linksNewPaperTradeToObservedCanonicalRecommendationWithoutCreatingExtraTrade() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        PaperSignalEvaluationRepositoryStub evaluations = new PaperSignalEvaluationRepositoryStub();
+        BetRecommendationRepositoryStub recommendations = new BetRecommendationRepositoryStub();
+        recommendations.nextAction = BetRecommendationUpsertAction.OBSERVED;
+        repository.recent.add(new ObservedMarketSnapshot(
+            observedAt.minusSeconds(3600),
+            snapshot(2L, "Draw", "3.70")
+        ));
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(snapshot(2L, "Draw", "3.70")))),
+            repository,
+            paperTrades,
+            evaluations,
+            recommendations,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC)
+        );
+
+        PaperTradingResult result = service.run(
+            new ConfigPath(Path.of("betx.yml")),
+            new BigDecimal("0.02"),
+            BacktestSlippageModel.PROFIT_HAIRCUT
+        );
+
+        assertThat(result.recommendationsGenerated()).isEqualTo(1);
+        assertThat(paperTrades.saved).singleElement().satisfies(trade -> {
+            assertThat(trade.recommendationId()).isEqualTo(recommendations.upserted.getFirst().id());
+            assertThat(trade.requestedOdds()).isEqualByComparingTo("3.70");
+            assertThat(trade.stake()).isEqualByComparingTo("5");
+            assertThat(trade.side()).isEqualTo(BetSide.BACK);
+            assertThat(trade.eventName()).isEqualTo("Team A v Team B");
+            assertThat(trade.runnerName()).isEqualTo("Draw");
+        });
+        assertThat(evaluations.saved).singleElement()
+            .satisfies(evaluation -> assertThat(evaluation.recommendationId()).isEqualTo(recommendations.upserted.getFirst().id()));
+    }
+
+    @Test
+    void paperTradeEventsIncludeCanonicalRecommendationId() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        PaperSignalEvaluationRepositoryStub evaluations = new PaperSignalEvaluationRepositoryStub();
+        BetRecommendationRepositoryStub recommendations = new BetRecommendationRepositoryStub();
+        RecordingEventSink sink = new RecordingEventSink();
+        repository.recent.add(new ObservedMarketSnapshot(
+            observedAt.minusSeconds(3600),
+            snapshot(2L, "Draw", "3.70")
+        ));
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(snapshot(2L, "Draw", "3.70")))),
+            repository,
+            paperTrades,
+            evaluations,
+            recommendations,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC),
+            new BetxEventLogger(sink, Clock.fixed(observedAt, ZoneOffset.UTC))
+        );
+
+        service.run(
+            new ConfigPath(Path.of("betx.yml")),
+            new BigDecimal("0.02"),
+            BacktestSlippageModel.PROFIT_HAIRCUT
+        );
+
+        String recommendationId = recommendations.upserted.getFirst().id();
+        assertThat(sink.events)
+            .filteredOn(event -> event.event().equals("paper_trade.recommended"))
+            .singleElement()
+            .satisfies(event -> assertThat(event.fields()).containsEntry("recommendationId", recommendationId));
+        assertThat(sink.events)
+            .filteredOn(event -> event.event().equals("paper_trade.executed"))
+            .singleElement()
+            .satisfies(event -> assertThat(event.fields()).containsEntry("recommendationId", recommendationId));
+    }
+
+    @Test
+    void linksNewPaperTradeToAlreadyCoveredCanonicalRecommendationWithoutLoggingCoveredAgain() {
         Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
         MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
         PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
@@ -174,7 +257,9 @@ class RunPaperTradingServiceTest {
             .filteredOn(event -> event.event().equals("bet_recommendation.created"))
             .isEmpty();
         assertThat(paperTrades.saved).singleElement()
-            .satisfies(trade -> assertThat(trade.recommendationId()).isNull());
+            .satisfies(trade -> assertThat(trade.recommendationId()).isEqualTo(recommendations.upserted.getFirst().id()));
+        assertThat(evaluations.saved).singleElement()
+            .satisfies(evaluation -> assertThat(evaluation.recommendationId()).isEqualTo(recommendations.upserted.getFirst().id()));
     }
 
     @Test
