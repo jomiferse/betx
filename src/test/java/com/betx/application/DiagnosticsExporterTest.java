@@ -33,6 +33,11 @@ class DiagnosticsExporterTest {
             .contains("\"recommendationReadiness\"")
             .contains("\"readyForRealConsumption\"")
             .contains("\"readyForRecommendationIdMatching\"")
+            .contains("\"paperConsumesBetRecommendation\" : true")
+            .contains("\"realConsumesBetRecommendation\" : true")
+            .contains("\"matchingByRecommendationId\" : false")
+            .contains("\"recommendationIdMatchingOfficial\" : false")
+            .contains("\"legacyMatchingRemainsOfficial\" : true")
             .contains("\"paperTradesLinkedToExpiredRecommendations\"")
             .doesNotContain("token")
             .doesNotContain("password")
@@ -76,7 +81,7 @@ class DiagnosticsExporterTest {
             new BigDecimal("2.00000000"),
             new BigDecimal("0.10000000")
         );
-        return new DiagnosticsReport(
+        DiagnosticsReport base = new DiagnosticsReport(
             Instant.parse("2026-06-02T00:00:00Z"),
             new DiagnosticsPeriod(Instant.parse("2026-06-01T00:00:00Z"), Instant.parse("2026-06-02T00:00:00Z")),
             new DiagnosticsCoverage(1, 1, 1, 0, 0, 0),
@@ -87,6 +92,60 @@ class DiagnosticsExporterTest {
             List.of(),
             List.of("Matched paper-real pairs: 1 observations."),
             List.of(match)
+        );
+        return new DiagnosticsReport(
+            base.generatedAt(),
+            base.period(),
+            base.coverage(),
+            base.decisionFunnel(),
+            base.executionMetrics(),
+            base.paperVsRealMetrics(),
+            base.integrityFindings(),
+            base.limitations(),
+            base.topFindings(),
+            base.matchedPairs(),
+            base.matchingGaps(),
+            base.executionDataCoverage(),
+            base.logEventCoverage(),
+            base.persistedExecutionCoverage(),
+            base.placeOrdersResponseDuration(),
+            base.prospectiveRealBettingCohort(),
+            base.topSkippedMarkets(),
+            base.betRecommendations(),
+            base.paperRecommendationCoverage(),
+            new DiagnosticsRecommendationReadiness(
+                1,
+                1,
+                0,
+                0,
+                1,
+                0,
+                1,
+                0,
+                1,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                1,
+                0,
+                1,
+                1,
+                1,
+                0,
+                0,
+                1,
+                1,
+                0,
+                0,
+                DiagnosticsDataProvenance.SQLITE_EXACT,
+                "YES",
+                "NO",
+                "RECOMMENDATION_ID_MATCHING_CANDIDATE",
+                List.of("recommendation_id matching is not enabled as official matching yet.")
+            )
         );
     }
 }

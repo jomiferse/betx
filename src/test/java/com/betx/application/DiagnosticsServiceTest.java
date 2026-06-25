@@ -230,7 +230,10 @@ class DiagnosticsServiceTest {
             .anySatisfy(line -> assertThat(line).contains("Recommendations with evaluation_id").contains("3 / 3"))
             .anySatisfy(line -> assertThat(line).contains("Recommendations with last_evaluation_id").contains("2 / 3"))
             .anySatisfy(line -> assertThat(line).contains("value-football").contains("3"))
-            .anySatisfy(line -> assertThat(line).contains("BetRecommendation is consumed by paper trading only"));
+            .anySatisfy(line -> assertThat(line)
+                .contains("BetRecommendation is consumed by paper and real prospectively")
+                .contains("recommendation_id matching is not enabled yet"))
+            .noneSatisfy(line -> assertThat(line).contains("BetRecommendation is consumed by paper trading only"));
     }
 
     @Test
@@ -427,7 +430,9 @@ class DiagnosticsServiceTest {
             .anySatisfy(line -> assertThat(line).contains("Post-2.5 real bets with recommendation_id").contains("1 / 1"))
             .anySatisfy(line -> assertThat(line).contains("Real bets linked to canonical recommendation").contains("1"))
             .anySatisfy(line -> assertThat(line).contains("Real bets linked to ACTIVE recommendations").contains("1"))
-            .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"));
+            .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("Recommendation_id matching official").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("Legacy matching remains official").contains("yes"));
     }
 
     private static DiagnosticsService service(DiagnosticsDataset dataset, DiagnosticsLogSummary logs) {

@@ -35,7 +35,7 @@ public class DiagnosticsJsonExporter {
         payload.put("period", period);
         payload.put("coverage", report.coverage());
         payload.put("betRecommendations", report.betRecommendations());
-        payload.put("recommendationReadiness", report.recommendationReadiness());
+        payload.put("recommendationReadiness", recommendationReadiness(report.recommendationReadiness()));
         payload.put("paperRecommendationCoverage", report.paperRecommendationCoverage());
         payload.put("decisionFunnel", report.decisionFunnel());
         payload.put("executionMetrics", execution(report.executionMetrics()));
@@ -52,6 +52,47 @@ public class DiagnosticsJsonExporter {
         payload.put("topFindings", report.topFindings());
         payload.put("matchedPairs", report.matchedPairs().stream().map(this::match).toList());
         return payload;
+    }
+
+    private Map<String, Object> recommendationReadiness(DiagnosticsRecommendationReadiness readiness) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("paperConsumesBetRecommendation", readiness.paperTradesWithRecommendationId() > 0);
+        value.put("realConsumesBetRecommendation", readiness.realBetsWithRecommendationId() > 0);
+        value.put("matchingByRecommendationId", false);
+        value.put("recommendationIdMatchingOfficial", false);
+        value.put("legacyMatchingRemainsOfficial", true);
+        value.put("totalCanonicalRecommendations", readiness.totalCanonicalRecommendations());
+        value.put("activeRecommendations", readiness.activeRecommendations());
+        value.put("coveredRecommendations", readiness.coveredRecommendations());
+        value.put("expiredRecommendations", readiness.expiredRecommendations());
+        value.put("recommendationsWithPaperTrades", readiness.recommendationsWithPaperTrades());
+        value.put("recommendationsWithoutPaperTrades", readiness.recommendationsWithoutPaperTrades());
+        value.put("recommendationsWithRealEquivalentBet", readiness.recommendationsWithRealEquivalentBet());
+        value.put("recommendationsWithoutRealEquivalentBet", readiness.recommendationsWithoutRealEquivalentBet());
+        value.put("recommendationsWithBothPaperAndRealEquivalent", readiness.recommendationsWithBothPaperAndRealEquivalent());
+        value.put("recommendationsWithPaperOnly", readiness.recommendationsWithPaperOnly());
+        value.put("recommendationsWithRealOnly", readiness.recommendationsWithRealOnly());
+        value.put("recommendationsWithNeitherPaperNorReal", readiness.recommendationsWithNeitherPaperNorReal());
+        value.put("paperTradesWithRecommendationId", readiness.paperTradesWithRecommendationId());
+        value.put("paperTradesMissingRecommendationIdPost23", readiness.paperTradesMissingRecommendationIdPost23());
+        value.put("brokenPaperRecommendationJoins", readiness.brokenPaperRecommendationJoins());
+        value.put("realBetsWithRecommendationId", readiness.realBetsWithRecommendationId());
+        value.put("realBetsMissingRecommendationId", readiness.realBetsMissingRecommendationId());
+        value.put("realBetsTotal", readiness.realBetsTotal());
+        value.put("post25RealBets", readiness.post25RealBets());
+        value.put("post25RealBetsWithRecommendationId", readiness.post25RealBetsWithRecommendationId());
+        value.put("post25RealBetsWithoutRecommendationId", readiness.post25RealBetsWithoutRecommendationId());
+        value.put("realBetsWithRecommendationIdButMissingBetRecommendation", readiness.realBetsWithRecommendationIdButMissingBetRecommendation());
+        value.put("realBetsLinkedToCanonicalRecommendation", readiness.realBetsLinkedToCanonicalRecommendation());
+        value.put("realBetsLinkedToActiveRecommendations", readiness.realBetsLinkedToActiveRecommendations());
+        value.put("realBetsLinkedToCoveredRecommendations", readiness.realBetsLinkedToCoveredRecommendations());
+        value.put("realBetsLinkedToExpiredRecommendations", readiness.realBetsLinkedToExpiredRecommendations());
+        value.put("realEquivalentCoverageSource", readiness.realEquivalentCoverageSource());
+        value.put("readyForRealConsumption", readiness.readyForRealConsumption());
+        value.put("readyForRecommendationIdMatching", readiness.readyForRecommendationIdMatching());
+        value.put("readinessStatus", readiness.readinessStatus());
+        value.put("readinessReasons", readiness.readinessReasons());
+        return value;
     }
 
     private Map<String, Object> execution(DiagnosticsExecutionMetrics metrics) {

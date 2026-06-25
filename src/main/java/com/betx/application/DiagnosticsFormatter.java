@@ -60,6 +60,8 @@ public class DiagnosticsFormatter {
         lines.add(line("Paper consumes BetRecommendation", readiness.paperTradesWithRecommendationId() > 0 ? "yes" : "no"));
         lines.add(line("Real consumes BetRecommendation", readiness.realBetsWithRecommendationId() > 0 ? "yes" : "no"));
         lines.add(line("Matching by recommendation_id", "no"));
+        lines.add(line("Recommendation_id matching official", "no"));
+        lines.add(line("Legacy matching remains official", "yes"));
         lines.add(line("Total canonical recommendations", readiness.totalCanonicalRecommendations()));
         lines.add(line("ACTIVE recommendations", readiness.activeRecommendations()));
         lines.add(line("COVERED recommendations", readiness.coveredRecommendations()));
