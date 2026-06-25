@@ -8,9 +8,9 @@ const statusTranslations: Record<string, string> = {
   SETTLED: "Liquidada",
   CANCELLED: "Cancelada",
   REJECTED: "Rechazada",
-  AWAITING_CONFIRMATION: "Pendiente",
-  AWAITING_STAKE: "Pendiente",
-  FAILED: "Rechazada"
+  AWAITING_CONFIRMATION: "Espera confirmacion",
+  AWAITING_STAKE: "Espera importe",
+  FAILED: "Fallida"
 };
 
 const resultTranslations: Record<string, string> = {

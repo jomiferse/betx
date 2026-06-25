@@ -1,44 +1,76 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { HomePage } from "./HomePage";
-import type { ActivityItem, InterfaceStatusView } from "../types/interface";
 
 const hookState = vi.hoisted(() => ({
   value: {
-    status: null as InterfaceStatusView | null,
-    activity: [] as ActivityItem[],
-    initialLoading: false,
-    actionPending: false,
-    currentAction: null as "activate" | "pause" | null,
-    statusError: null as string | null,
-    activityError: null as string | null,
-    actionError: null as string | null,
+    range: "30D",
+    setRange: vi.fn(),
+    tradeFilters: {
+      page: 0,
+      size: 25,
+      status: "ALL",
+      result: "ALL",
+      strategy: "ALL",
+      search: "",
+      sort: "timestamp" as const,
+      order: "desc" as const
+    },
+    setTradeFilters: vi.fn(),
+    isLoading: false,
+    isRefreshing: false,
+    error: null as string | null,
+    lastUpdatedAt: "2026-06-25T10:56:38Z",
     refresh: vi.fn(),
-    activate: vi.fn(),
-    pause: vi.fn()
+    data: {
+      summary: {
+        totalPnl: 9.95,
+        roi: 12.28,
+        totalTrades: 97,
+        wonTrades: 38,
+        lostTrades: 43,
+        winRate: 46.91,
+        totalStaked: 81,
+        maxDrawdown: 5,
+        openExposure: 15,
+        lastUpdatedAt: "2026-06-25T10:56:38Z"
+      },
+      equity: [
+        { timestamp: "2026-06-23T10:00:00Z", cumulativePnl: 3, equity: 3, drawdown: 0, pnl: 3, dailyPnl: 3, trades: 1, sequenceNumber: 1, cumulativeRoi: 300 },
+        { timestamp: "2026-06-24T10:00:00Z", cumulativePnl: -2, equity: -2, drawdown: 5, pnl: -5, dailyPnl: -5, trades: 1, sequenceNumber: 2, cumulativeRoi: -100 },
+        { timestamp: "2026-06-25T10:00:00Z", cumulativePnl: 9.95, equity: 9.95, drawdown: 0, pnl: 11.95, dailyPnl: 11.95, trades: 1, sequenceNumber: 3, cumulativeRoi: 331.67 }
+      ],
+      dailyPnl: [
+        { day: "2026-06-24", trades: 5, wonTrades: 2, lostTrades: 3, totalStake: 5, pnl: -0.94, roi: -18.8 },
+        { day: "2026-06-25", trades: 6, wonTrades: 3, lostTrades: 3, totalStake: 6, pnl: 1.28, roi: 21.33 }
+      ],
+      strategyBreakdown: [
+        { name: "value-football", trades: 81, wonTrades: 38, lostTrades: 43, pnl: 9.95, roi: 12.28, winRate: 46.91 }
+      ],
+      trades: {
+        items: [{
+          timestamp: "2026-06-25T10:56:38Z",
+          marketName: "Cuiaba v Londrina",
+          selection: "Cuiaba",
+          strategy: "value-football",
+          odds: 1.76,
+          stake: 1,
+          status: "EXECUTED",
+          result: null,
+          pnl: null
+        }],
+        page: 0,
+        size: 25,
+        totalItems: 1,
+        totalPages: 1
+      }
+    }
   }
 }));
 
-vi.mock("../hooks/useInterfaceData", () => ({
-  useInterfaceData: () => hookState.value
+vi.mock("../hooks/useDashboardData", () => ({
+  useDashboardData: () => hookState.value
 }));
-
-const activeStatus: InterfaceStatusView = {
-  status: "ACTIVE",
-  message: "BetX esta activo.",
-  availableBalance: 125.5,
-  lastUpdatedAt: "2026-06-18T10:00:00Z",
-  lastCycleAt: "2026-06-18T10:00:00Z",
-  manualConfirmationEnabled: true
-};
-
-const pausedStatus: InterfaceStatusView = {
-  ...activeStatus,
-  status: "PAUSED",
-  message: "BetX esta pausado.",
-  lastCycleAt: null,
-  manualConfirmationEnabled: false
-};
 
 function render() {
   return renderToStaticMarkup(<HomePage />);
@@ -46,110 +78,90 @@ function render() {
 
 describe("HomePage", () => {
   beforeEach(() => {
-    hookState.value = {
-      status: activeStatus,
-      activity: [],
-      initialLoading: false,
-      actionPending: false,
-      currentAction: null,
-      statusError: null,
-      activityError: null,
-      actionError: null,
-      refresh: vi.fn(),
-      activate: vi.fn(),
-      pause: vi.fn()
-    };
+    hookState.value.isLoading = false;
+    hookState.value.isRefreshing = false;
+    hookState.value.error = null;
+    hookState.value.range = "30D";
   });
 
-  test("renders the active state and disables activation", () => {
+  test("renders analytics dashboard instead of bot status console", () => {
     const html = render();
 
-    expect(html).toContain("BetX esta activo.");
-    expect(html).toContain("Ultimo ciclo:");
-    expect(html).toContain("Activada");
-    expect(html).toContain("Las operaciones requieren aprobacion antes de ejecutarse.");
-    expect(html).toContain("Activar BetX</button>");
-    expect(html).toContain("<button type=\"button\" disabled=\"\"");
-  });
-
-  test("renders the paused state and disables pause", () => {
-    hookState.value.status = pausedStatus;
-
-    const html = render();
-
-    expect(html).toContain("BetX esta pausado.");
-    expect(html).toContain("Desactivada");
-    expect(html).toContain("BetX puede ejecutar operaciones sin aprobacion previa.");
-    expect(html).toContain("Pausar BetX</button>");
-  });
-
-  test("renders initial loading and status errors", () => {
-    hookState.value.status = null;
-    hookState.value.initialLoading = true;
-    hookState.value.statusError = "No se ha podido obtener el estado de BetX.";
-
-    const html = render();
-
-    expect(html).toContain("Consultando estado...");
-    expect(html).toContain("No se ha podido obtener el estado de BetX.");
-  });
-
-  test("renders empty activity and activity errors", () => {
-    let html = render();
-    expect(html).toContain("Todavia no hay actividad reciente.");
-
-    hookState.value.activityError = "No se ha podido obtener la actividad reciente.";
-    html = render();
-    expect(html).toContain("No se ha podido obtener la actividad reciente.");
-  });
-
-  test("renders won and lost operations with product translations", () => {
-    hookState.value.activity = [{
-      id: "win",
-      event: "Real Madrid vs Barcelona",
-      selection: "The Draw",
-      odds: 3.2,
-      amount: 5,
-      status: "SETTLED",
-      result: "WIN",
-      netPnl: 4,
-      updatedAt: "2026-06-18T10:00:00Z"
-    }, {
-      id: "lose",
-      event: "Atleti vs Valencia",
-      selection: "Local",
-      odds: 2,
-      amount: 1,
-      status: "SETTLED",
-      result: "LOSE",
-      netPnl: -1,
-      updatedAt: "2026-06-18T10:01:00Z"
-    }];
-
-    const html = render();
-
-    expect(html).toContain("Evento");
-    expect(html).toContain("Seleccion");
+    expect(html).toContain("BetX Dashboard");
+    expect(html).toContain("Performance, trades and risk analytics");
+    expect(html).toContain("30D");
+    expect(html).toContain("aria-label=\"Actualizar datos\"");
+    expect(html).toContain("Total PnL");
+    expect(html).toContain("ROI");
+    expect(html).toContain("Trades");
+    expect(html).toContain("Win rate");
+    expect(html).toContain("Max drawdown");
+    expect(html).toContain("Open exposure");
+    expect(html).toContain("Equity curve");
+    expect(html).toContain("Cumulative settled PnL over selected range");
+    expect(html).toContain("Initial / final");
+    expect(html).toContain("Best point");
+    expect(html).toContain("Worst point");
+    expect(html).toContain("Max drawdown");
+    expect(html).toContain("Current drawdown");
+    expect(html).toContain("Risk insights");
+    expect(html).toContain("Worst daily loss");
+    expect(html).toContain("Recovery from low");
+    expect(html).not.toContain("Drawdown mini chart");
+    expect(html).not.toContain("Distance from previous equity peak");
+    expect(html).toContain("Daily PnL");
+    expect(html).toContain("Net PnL grouped by settlement date");
+    expect(html).toContain("ROI del dia");
+    expect(html).toContain("data-bar-tone=\"positive\"");
+    expect(html).toContain("data-bar-tone=\"negative\"");
+    expect(html).toContain("Win/Loss");
+    expect(html).toContain("ROI by strategy");
+    expect(html).toContain("Trades");
+    expect(html).toContain("1 resultado");
+    expect(html).toContain("Estado");
     expect(html).toContain("Resultado");
-    expect(html).toContain("Fecha");
-    expect(html).toContain("Empate");
-    expect(html).toContain("Liquidada");
-    expect(html).toContain("Ganada");
-    expect(html).toContain("Perdida");
-    expect(html).toContain("+");
-    expect(html).toContain("-1");
-    expect(html.toLowerCase()).not.toContain("paper");
-    expect(html.toLowerCase()).not.toContain("backtest");
+    expect(html).toContain("Buscar");
+    expect(html).toContain("Cuiaba v Londrina");
+    expect(html).toContain("Cumulative PnL");
+    expect(html).toContain("Drawdown");
+    expect(html).toContain("--tooltip-x");
+    expect(html).toContain("--tooltip-y");
+    expect(html).not.toContain("tooltip-left");
+    expect(html).not.toContain("tooltip-right");
+    expect(html).not.toContain("Supervision operativa");
+    expect(html).not.toContain("Panel de seguridad operativo");
+    expect(html).not.toContain("java -jar");
+    expect(html).not.toContain("Activar BetX");
+    expect(html).not.toContain("Pausar BetX");
+    expect(html).not.toContain("Reintentar");
   });
 
-  test("shows action progress and action errors", () => {
-    hookState.value.currentAction = "activate";
-    hookState.value.actionPending = true;
-    hookState.value.actionError = "No se ha podido activar BetX. Intentalo de nuevo.";
+  test("renders useful empty states", () => {
+    hookState.value.data = {
+      ...hookState.value.data,
+      equity: [],
+      dailyPnl: [],
+      strategyBreakdown: [],
+      trades: { items: [], page: 0, size: 25, totalItems: 0, totalPages: 0 }
+    };
 
     const html = render();
 
-    expect(html).toContain("Activando...");
-    expect(html).toContain("No se ha podido activar BetX. Intentalo de nuevo.");
+    expect(html).toContain("No hay puntos de equity para este rango.");
+    expect(html).toContain("No hay PnL diario para este rango.");
+    expect(html).toContain("No hay desglose por estrategia.");
+    expect(html).toContain("No hay trades para los filtros seleccionados.");
+  });
+
+  test("shows passive error state without header retry or operational controls", () => {
+    hookState.value.isRefreshing = true;
+    hookState.value.error = "No se han podido cargar las metricas.";
+
+    const html = render();
+
+    expect(html).toContain("Actualizando...");
+    expect(html).toContain("No se han podido cargar las metricas.");
+    expect(html).not.toContain("Reintentar");
+    expect(html).not.toContain("Reanudar BetX");
   });
 });

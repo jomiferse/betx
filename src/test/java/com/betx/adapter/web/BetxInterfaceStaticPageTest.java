@@ -19,6 +19,7 @@ class BetxInterfaceStaticPageTest {
     void pageUsesOnlyCommercialInterfaceLanguage() throws IOException {
         String html = resource("/static/interface/index.html");
         String frontendSource = frontendSource("frontend/src");
+        String styles = java.nio.file.Files.readString(java.nio.file.Path.of("frontend/src/styles.css"), StandardCharsets.UTF_8);
 
         assertThat(html)
             .contains("BetX")
@@ -28,14 +29,19 @@ class BetxInterfaceStaticPageTest {
             .doesNotContain("snapshot")
             .doesNotContain("gateway");
         assertThat(frontendSource)
-            .contains("API_ROOT = \"/api/v1/interface\"")
-            .contains("readJson<InterfaceStatusView>(\"/status\")")
-            .contains("readJson<ActivityItem[]>(\"/activity\")")
-            .contains("Activar BetX")
-            .contains("Pausar BetX")
+            .contains("API_ROOT = \"/api/v1/dashboard\"")
+            .contains("BetX Dashboard")
+            .contains("Performance, trades and risk analytics")
+            .contains("getDashboardData")
+            .doesNotContain("setInterval")
+            .doesNotContain("Activar BetX")
+            .doesNotContain("Pausar BetX")
             .doesNotContain("/api/interface/status")
             .doesNotContain("paper")
             .doesNotContain("backtest");
+        assertThat(styles)
+            .contains(".chart-tooltip.floating")
+            .contains("z-index: 20;");
     }
 
     private String resource(String path) throws IOException {
