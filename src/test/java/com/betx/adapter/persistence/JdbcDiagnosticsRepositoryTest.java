@@ -102,7 +102,68 @@ class JdbcDiagnosticsRepositoryTest {
         assertThat(readiness.brokenPaperRecommendationJoins()).isEqualTo(1);
         assertThat(readiness.realBetsWithRecommendationId()).isEqualTo(1);
         assertThat(readiness.realBetsMissingRecommendationId()).isEqualTo(2);
+        assertThat(readiness.realBetsTotal()).isEqualTo(3);
+        assertThat(readiness.post25RealBets()).isEqualTo(3);
+        assertThat(readiness.post25RealBetsWithRecommendationId()).isEqualTo(1);
+        assertThat(readiness.post25RealBetsWithoutRecommendationId()).isEqualTo(2);
+        assertThat(readiness.realBetsWithRecommendationIdButMissingBetRecommendation()).isEqualTo(1);
         assertThat(readiness.readyForRecommendationIdMatching()).isEqualTo("NO");
+    }
+
+    @Test
+    void countsRealRecommendationCoverageByBetIntentCreationTimeAndLinkedStatus() {
+        String databasePath = tempDir.resolve("real-recommendation-coverage.db").toString();
+        JdbcBetRecommendationRepository recommendationRepository = new JdbcBetRecommendationRepository(databasePath);
+        JdbcBetIntentRepository betIntentRepository = new JdbcBetIntentRepository(databasePath);
+        recommendationRepository.save(
+            databasePath,
+            recommendation("rec-active-before-real-cutoff", "eval-active", "1.300", BetRecommendationStatus.ACTIVE, CUTOFF.minusSeconds(300))
+        );
+        recommendationRepository.save(
+            databasePath,
+            recommendation("rec-covered-before-real-cutoff", "eval-covered", "1.301", BetRecommendationStatus.COVERED, CUTOFF.minusSeconds(240))
+        );
+        recommendationRepository.save(
+            databasePath,
+            recommendation("rec-expired-before-real-cutoff", "eval-expired", "1.302", BetRecommendationStatus.EXPIRED, CUTOFF.minusSeconds(180))
+        );
+
+        betIntentRepository.save(databasePath, realBet("historical-without-rec", "1.299", null, CUTOFF.minusSeconds(60)));
+        betIntentRepository.save(databasePath, realBet(
+            "real-active",
+            "1.300",
+            "rec-active-before-real-cutoff",
+            CUTOFF.plusSeconds(1)
+        ));
+        betIntentRepository.save(databasePath, realBet(
+            "real-covered",
+            "1.301",
+            "rec-covered-before-real-cutoff",
+            CUTOFF.plusSeconds(2)
+        ));
+        betIntentRepository.save(databasePath, realBet(
+            "real-expired",
+            "1.302",
+            "rec-expired-before-real-cutoff",
+            CUTOFF.plusSeconds(3)
+        ));
+        betIntentRepository.save(databasePath, realBet("real-broken", "1.303", "missing-rec", CUTOFF.plusSeconds(4)));
+        betIntentRepository.save(databasePath, realBet("real-missing-post25", "1.304", null, CUTOFF.plusSeconds(5)));
+
+        var dataset = new JdbcDiagnosticsRepository().load(databasePath, CUTOFF.minusSeconds(120), TO);
+        var readiness = dataset.recommendationReadiness();
+
+        assertThat(readiness.realBetsTotal()).isEqualTo(6);
+        assertThat(readiness.realBetsWithRecommendationId()).isEqualTo(4);
+        assertThat(readiness.realBetsMissingRecommendationId()).isEqualTo(2);
+        assertThat(readiness.post25RealBets()).isEqualTo(5);
+        assertThat(readiness.post25RealBetsWithRecommendationId()).isEqualTo(4);
+        assertThat(readiness.post25RealBetsWithoutRecommendationId()).isEqualTo(1);
+        assertThat(readiness.realBetsWithRecommendationIdButMissingBetRecommendation()).isEqualTo(1);
+        assertThat(readiness.realBetsLinkedToCanonicalRecommendation()).isEqualTo(3);
+        assertThat(readiness.realBetsLinkedToActiveRecommendations()).isEqualTo(1);
+        assertThat(readiness.realBetsLinkedToCoveredRecommendations()).isEqualTo(1);
+        assertThat(readiness.realBetsLinkedToExpiredRecommendations()).isEqualTo(1);
     }
 
     private static BetRecommendation recommendation(
@@ -172,6 +233,10 @@ class JdbcDiagnosticsRepositoryTest {
     }
 
     private static BetIntent realBet(String id, String marketId, String recommendationId) {
+        return realBet(id, marketId, recommendationId, CUTOFF.plusSeconds(5));
+    }
+
+    private static BetIntent realBet(String id, String marketId, String recommendationId, Instant createdAt) {
         return new BetIntent(
             id,
             BetIntentSource.AUTOMATIC,
@@ -199,8 +264,8 @@ class JdbcDiagnosticsRepositoryTest {
             null,
             null,
             BetIntentStage.EXECUTED,
-            CUTOFF.plusSeconds(5),
-            CUTOFF.plusSeconds(6),
+            createdAt,
+            createdAt.plusSeconds(1),
             "eval-" + id,
             recommendationId,
             null,

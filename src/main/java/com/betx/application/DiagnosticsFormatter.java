@@ -86,6 +86,28 @@ public class DiagnosticsFormatter {
             readiness.readinessReasons().forEach(reason -> lines.add("- " + reason));
         }
         lines.add("");
+        lines.add("Real recommendation coverage");
+        lines.add(line("Real bets total", readiness.realBetsTotal()));
+        lines.add(line("Real bets with recommendation_id", coverage(
+            readiness.realBetsWithRecommendationId(),
+            readiness.realBetsTotal()
+        )));
+        lines.add(line("Real bets without recommendation_id", readiness.realBetsMissingRecommendationId()));
+        lines.add(line("Post-2.5 real bets", readiness.post25RealBets()));
+        lines.add(line("Post-2.5 real bets with recommendation_id", coverage(
+            readiness.post25RealBetsWithRecommendationId(),
+            readiness.post25RealBets()
+        )));
+        lines.add(line("Post-2.5 real bets without recommendation_id", readiness.post25RealBetsWithoutRecommendationId()));
+        lines.add(line(
+            "Real bets with recommendation_id but missing BetRecommendation",
+            readiness.realBetsWithRecommendationIdButMissingBetRecommendation()
+        ));
+        lines.add(line("Real bets linked to canonical recommendation", readiness.realBetsLinkedToCanonicalRecommendation()));
+        lines.add(line("Real bets linked to ACTIVE recommendations", readiness.realBetsLinkedToActiveRecommendations()));
+        lines.add(line("Real bets linked to COVERED recommendations", readiness.realBetsLinkedToCoveredRecommendations()));
+        lines.add(line("Real bets linked to EXPIRED recommendations", readiness.realBetsLinkedToExpiredRecommendations()));
+        lines.add("");
         lines.add("Paper recommendation coverage");
         DiagnosticsPaperRecommendationCoverage paperCoverage = report.paperRecommendationCoverage();
         lines.add(line("Paper trades total", paperCoverage.paperTradesTotal()));

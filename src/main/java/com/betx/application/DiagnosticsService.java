@@ -430,19 +430,27 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         if (logEventCoverage.orderSubmittedEvents() > 0 && logEventCoverage.orderResponseEvents() == 0) {
             reasons.add("order.response logs are missing while order.submitted logs exist.");
         }
-        if (base.realBetsWithRecommendationId() > 0) {
-            reasons.add("Real bets already contain recommendation_id before 2.5.");
+        if (base.post25RealBetsWithoutRecommendationId() > 0) {
+            reasons.add("Some post-2.5 real bets are missing recommendation_id.");
         }
+        if (base.realBetsWithRecommendationIdButMissingBetRecommendation() > 0) {
+            reasons.add("Some real recommendation_id values do not resolve to BetRecommendation.");
+        }
+        boolean hasRealSample = base.post25RealBets() > 0;
         String realConsumption = reasons.isEmpty() ? "YES" : hasPaperSample ? "PARTIAL" : "PARTIAL";
         List<String> finalReasons = new ArrayList<>(reasons);
-        finalReasons.add("Real betting does not consume BetRecommendation yet.");
-        if (base.realBetsWithRecommendationId() == 0) {
-            finalReasons.add("bet_intents.recommendation_id is still NULL for expected 2.4 operation.");
+        if (!hasRealSample) {
+            finalReasons.add("No post-2.5 real bet sample with recommendation_id is available yet.");
         }
+        String recommendationIdMatching = hasRealSample && base.post25RealBetsWithoutRecommendationId() == 0
+            && base.realBetsWithRecommendationIdButMissingBetRecommendation() == 0
+            ? "PARTIAL"
+            : "NO";
         return base.withReadiness(
             realConsumption,
-            "NO",
-            realConsumption.equals("YES") ? "READY_FOR_REAL_CONSUMPTION" : "PARTIAL",
+            recommendationIdMatching,
+            recommendationIdMatching.equals("PARTIAL") ? "RECOMMENDATION_ID_MATCHING_CANDIDATE" :
+                realConsumption.equals("YES") ? "READY_FOR_REAL_CONSUMPTION" : "PARTIAL",
             finalReasons
         );
     }

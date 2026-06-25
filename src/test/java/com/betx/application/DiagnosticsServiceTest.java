@@ -329,6 +329,15 @@ class DiagnosticsServiceTest {
                 0,
                 0,
                 1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 DiagnosticsDataProvenance.SQLITE_EXACT,
                 "PARTIAL",
                 "NO",
@@ -353,7 +362,72 @@ class DiagnosticsServiceTest {
             .anySatisfy(line -> assertThat(line).contains("Recommendations with both paper and real equivalent").contains("1"))
             .anySatisfy(line -> assertThat(line).contains("Ready for recommendation_id matching").contains("NO"))
             .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"))
-            .anySatisfy(line -> assertThat(line).contains("Real betting does not consume BetRecommendation yet."));
+            .anySatisfy(line -> assertThat(line).contains("No post-2.5 real bet sample with recommendation_id is available yet."));
+    }
+
+    @Test
+    void recommendationReadinessShowsRealConsumptionAsMatchingCandidateWithoutChangingOfficialMatching() {
+        DiagnosticsDataset dataset = new DiagnosticsDataset(
+            List.of(),
+            List.of(),
+            0,
+            0,
+            Map.of(),
+            Map.of(),
+            DiagnosticsBetRecommendationsSummary.empty(),
+            DiagnosticsPaperRecommendationCoverage.empty(),
+            new DiagnosticsRecommendationReadiness(
+                1,
+                1,
+                0,
+                0,
+                1,
+                0,
+                1,
+                0,
+                1,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                1,
+                0,
+                1,
+                1,
+                1,
+                0,
+                0,
+                1,
+                1,
+                0,
+                0,
+                DiagnosticsDataProvenance.SQLITE_EXACT,
+                "PARTIAL",
+                "NO",
+                "PARTIAL",
+                List.of()
+            )
+        );
+
+        DiagnosticsReport report = service(dataset, new DiagnosticsLogSummary(
+            Map.of("order.submitted", 1L, "order.response", 1L),
+            Map.of(),
+            0,
+            0,
+            List.of()
+        )).generate(request());
+
+        assertThat(report.recommendationReadiness().readyForRealConsumption()).isEqualTo("YES");
+        assertThat(report.recommendationReadiness().readyForRecommendationIdMatching()).isEqualTo("PARTIAL");
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Real recommendation coverage")
+            .anySatisfy(line -> assertThat(line).contains("Real consumes BetRecommendation").contains("yes"))
+            .anySatisfy(line -> assertThat(line).contains("Post-2.5 real bets with recommendation_id").contains("1 / 1"))
+            .anySatisfy(line -> assertThat(line).contains("Real bets linked to canonical recommendation").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("Real bets linked to ACTIVE recommendations").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"));
     }
 
     private static DiagnosticsService service(DiagnosticsDataset dataset, DiagnosticsLogSummary logs) {

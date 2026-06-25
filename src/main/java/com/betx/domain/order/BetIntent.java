@@ -607,6 +607,37 @@ public record BetIntent(
         );
     }
 
+    public BetIntent withRecommendation(String newRecommendationId, Instant newRecommendedAt, BigDecimal newRecommendedOdds) {
+        return copy(
+            availableBalance,
+            effectiveAvailableBalance,
+            reservedBalance,
+            balanceSnapshotAt,
+            selectedStake,
+            resultMessage,
+            externalOrderId,
+            settledAt,
+            settlementResult,
+            realizedProfitLoss,
+            stage,
+            updatedAt,
+            evaluationId,
+            newRecommendationId,
+            newRecommendedAt,
+            newRecommendedOdds,
+            orderSubmittedAt,
+            orderResponseAt,
+            orderAcceptedAt,
+            executedAt,
+            requestedOdds,
+            averageExecutedOdds,
+            requestedStake,
+            matchedStake,
+            remainingStake,
+            executionStatus
+        );
+    }
+
     public BetIntent withOrderSubmitted(Instant submittedAt, BigDecimal newRequestedOdds, BigDecimal newRequestedStake) {
         return copy(
             availableBalance,

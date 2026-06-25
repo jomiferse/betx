@@ -117,6 +117,41 @@ class TelegramBetConfirmationServiceTest {
     }
 
     @Test
+    void offeredConfirmationPersistsCanonicalRecommendationId() {
+        RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
+        recommendations.add(recommendation("rec-confirmation", "eval-original", "1.1", 42L, SelectionSide.UNKNOWN, "N/A"));
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3, true, true),
+            telegram,
+            gateway,
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            new RecordingMarketSnapshotRepository(),
+            new RecordingSignalHistoryRepository(),
+            new RecordingExecutionGateway(),
+            Clock.systemUTC(),
+            new RecordingStructuredEventSink(),
+            recommendations
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signalWithEvaluationId("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "eval-confirmation"),
+            analysis("Team A")
+        ));
+
+        assertThat(intents.saved()).singleElement()
+            .satisfies(intent -> {
+                assertThat(intent.stage()).isEqualTo(BetIntentStage.AWAITING_CONFIRMATION);
+                assertThat(intent.evaluationId()).isEqualTo("eval-confirmation");
+                assertThat(intent.recommendationId()).isEqualTo("rec-confirmation");
+            });
+    }
+
+    @Test
     void confirmationSkipsCoveredSelectionAsActiveMarketIntentInsteadOfAtomicDuplicate() {
         RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
         RecordingTelegramGateway gateway = new RecordingTelegramGateway();
@@ -1538,7 +1573,56 @@ class TelegramBetConfirmationServiceTest {
                 .contains("Team A v Team B")
                 .contains("Stake: 3")
                 .contains("Betfair bet id: bet-123")
-                .contains("Balance available: 12.5"));
+            .contains("Balance available: 12.5"));
+    }
+
+    @Test
+    void automaticBetPersistsAndLogsCanonicalRecommendationId() {
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway("bet-123");
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
+        recommendations.add(recommendation("rec-automatic", "eval-original", "1.1", 42L, SelectionSide.UNKNOWN, "N/A"));
+        RecordingStructuredEventSink sink = new RecordingStructuredEventSink();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(3), BigDecimal.valueOf(25), 3, true, false),
+            new RecordingTelegramConnectionService(),
+            new RecordingTelegramGateway(),
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            new RecordingMarketSnapshotRepository(),
+            new RecordingSignalHistoryRepository(),
+            executionGateway,
+            Clock.systemUTC(),
+            sink,
+            recommendations
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signalWithEvaluationId("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "eval-automatic"),
+            analysis("Team A")
+        ));
+
+        assertThat(intents.saved()).singleElement()
+            .satisfies(intent -> {
+                assertThat(intent.source()).isEqualTo(BetIntentSource.AUTOMATIC);
+                assertThat(intent.recommendationId()).isEqualTo("rec-automatic");
+                assertThat(intent.evaluationId()).isEqualTo("eval-automatic");
+                assertThat(intent.externalOrderId()).isEqualTo("bet-123");
+                assertThat(intent.selectedStake()).isEqualByComparingTo("3");
+                assertThat(intent.odds()).isEqualByComparingTo("2.5");
+            });
+        assertThat(executionGateway.orders()).hasSize(1);
+        assertThat(sink.events()).anySatisfy(event -> {
+            assertThat(event.event()).isEqualTo("order.submitted");
+            assertThat(event.fields()).containsEntry("recommendationId", "rec-automatic");
+            assertThat(event.fields()).containsEntry("evaluationId", "eval-automatic");
+        });
+        assertThat(sink.events()).anySatisfy(event -> {
+            assertThat(event.event()).isEqualTo("order.response");
+            assertThat(event.fields()).containsEntry("recommendationId", "rec-automatic");
+            assertThat(event.fields()).containsEntry("externalOrderId", "bet-123");
+        });
     }
 
     @Test
@@ -2773,6 +2857,16 @@ class TelegramBetConfirmationServiceTest {
         @Override
         public void save(String databasePath, BetRecommendation recommendation) {
             add(recommendation);
+        }
+
+        @Override
+        public BetRecommendationUpsertResult upsertActiveRecommendation(String databasePath, BetRecommendation recommendation) {
+            BetRecommendation existing = recommendations.get(recommendation.canonicalKey());
+            if (existing == null) {
+                add(recommendation);
+                return new BetRecommendationUpsertResult(recommendation, BetRecommendationUpsertAction.CREATED);
+            }
+            return new BetRecommendationUpsertResult(existing, BetRecommendationUpsertAction.OBSERVED);
         }
 
         @Override
