@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { HomePage } from "./HomePage";
+import { HomePage, tooltipPositionWithinStage } from "./HomePage";
 
 const hookState = vi.hoisted(() => ({
   value: {
@@ -163,5 +163,10 @@ describe("HomePage", () => {
     expect(html).toContain("No se han podido cargar las metricas.");
     expect(html).not.toContain("Reintentar");
     expect(html).not.toContain("Reanudar BetX");
+  });
+
+  test("keeps cursor tooltip inside the chart stage near the right edge", () => {
+    expect(tooltipPositionWithinStage(1160, 140, 1182)).toEqual({ x: 858, y: 140 });
+    expect(tooltipPositionWithinStage(240, 80, 1182)).toEqual({ x: 252, y: 80 });
   });
 });

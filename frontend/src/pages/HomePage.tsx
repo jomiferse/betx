@@ -22,6 +22,10 @@ type TooltipPosition = {
   y: number;
 };
 
+const tooltipOffset = 12;
+const tooltipMaxWidth = 310;
+const tooltipEdgePadding = 14;
+
 const emptySummary: DashboardSummary = {
   totalPnl: 0,
   roi: 0,
@@ -605,9 +609,14 @@ function tooltipStyle(x: number, y: number) {
 
 function cursorPosition(event: MouseEvent<HTMLDivElement>) {
   const rect = event.currentTarget.getBoundingClientRect();
+  return tooltipPositionWithinStage(event.clientX - rect.left, event.clientY - rect.top, rect.width);
+}
+
+export function tooltipPositionWithinStage(cursorX: number, cursorY: number, stageWidth: number) {
+  const maxX = Math.max(tooltipEdgePadding, stageWidth - tooltipMaxWidth - tooltipEdgePadding);
   return {
-    x: event.clientX - rect.left,
-    y: event.clientY - rect.top
+    x: Math.min(cursorX + tooltipOffset, maxX),
+    y: cursorY
   };
 }
 
