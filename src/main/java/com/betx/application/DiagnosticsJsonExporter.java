@@ -36,6 +36,7 @@ public class DiagnosticsJsonExporter {
         payload.put("coverage", report.coverage());
         payload.put("betRecommendations", report.betRecommendations());
         payload.put("recommendationReadiness", recommendationReadiness(report.recommendationReadiness()));
+        payload.put("recommendationIdMatchingPreview", recommendationIdMatchingPreview(report.recommendationIdMatchingPreview()));
         payload.put("paperRecommendationCoverage", report.paperRecommendationCoverage());
         payload.put("decisionFunnel", report.decisionFunnel());
         payload.put("executionMetrics", execution(report.executionMetrics()));
@@ -52,6 +53,40 @@ public class DiagnosticsJsonExporter {
         payload.put("topFindings", report.topFindings());
         payload.put("matchedPairs", report.matchedPairs().stream().map(this::match).toList());
         return payload;
+    }
+
+    private Map<String, Object> recommendationIdMatchingPreview(DiagnosticsRecommendationIdMatchingPreview preview) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("previewAvailable", preview.previewAvailable());
+        value.put("enabledAsOfficialMatching", preview.enabledAsOfficialMatching());
+        value.put("allTime", recommendationIdMatchingScope(preview.allTime()));
+        value.put("post25", recommendationIdMatchingScope(preview.post25()));
+        return value;
+    }
+
+    private Map<String, Object> recommendationIdMatchingScope(DiagnosticsRecommendationIdMatchingScope scope) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("scope", scope.scope());
+        value.put("cutoff", instant(scope.cutoff()));
+        value.put("paperTradesTotal", scope.paperTradesTotal());
+        value.put("paperTradesWithRecommendationId", scope.paperTradesWithRecommendationId());
+        value.put("paperTradesEligible", scope.paperTradesEligible());
+        value.put("realBetsTotal", scope.realBetsTotal());
+        value.put("realBetsWithRecommendationId", scope.realBetsWithRecommendationId());
+        value.put("realBetsEligible", scope.realBetsEligible());
+        value.put("recommendationsWithBothPaperAndReal", scope.recommendationsWithBothPaperAndReal());
+        value.put("recommendationsWithPaperOnly", scope.recommendationsWithPaperOnly());
+        value.put("recommendationsWithRealOnly", scope.recommendationsWithRealOnly());
+        value.put("recommendationsWithNeither", scope.recommendationsWithNeither());
+        value.put("recommendationIdPairs", scope.recommendationIdPairs());
+        value.put("recommendationIdPaperOnly", scope.recommendationIdPaperOnly());
+        value.put("recommendationIdRealOnly", scope.recommendationIdRealOnly());
+        value.put("recommendationIdAmbiguous", scope.recommendationIdAmbiguous());
+        value.put("ambiguousManyPaperToOneReal", scope.ambiguousManyPaperToOneReal());
+        value.put("ambiguousOnePaperToManyReal", scope.ambiguousOnePaperToManyReal());
+        value.put("ambiguousManyToMany", scope.ambiguousManyToMany());
+        value.put("legacyComparison", scope.legacyComparison());
+        return value;
     }
 
     private Map<String, Object> recommendationReadiness(DiagnosticsRecommendationReadiness readiness) {

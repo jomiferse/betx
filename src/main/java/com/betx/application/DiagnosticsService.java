@@ -87,6 +87,10 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             dataset.betRecommendations(),
             logEventCoverage
         );
+        DiagnosticsRecommendationIdMatchingPreview recommendationIdMatchingPreview = recommendationIdMatchingPreview(
+            dataset,
+            request.matchWindow()
+        );
         return new DiagnosticsReport(
             Instant.now(clock),
             requestedPeriod,
@@ -107,7 +111,8 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             logs.topSkippedMarkets(),
             dataset.betRecommendations(),
             dataset.paperRecommendationCoverage(),
-            recommendationReadiness
+            recommendationReadiness,
+            recommendationIdMatchingPreview
         );
     }
 
@@ -446,6 +451,9 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             && base.realBetsWithRecommendationIdButMissingBetRecommendation() == 0
             ? "PARTIAL"
             : "NO";
+        if (recommendationIdMatching.equals("PARTIAL")) {
+            finalReasons.add("Recommendation-id matching preview is available but not official. Need more prospective sample and conflict analysis before enabling.");
+        }
         return base.withReadiness(
             realConsumption,
             recommendationIdMatching,
@@ -453,6 +461,233 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
                 realConsumption.equals("YES") ? "READY_FOR_REAL_CONSUMPTION" : "PARTIAL",
             finalReasons
         );
+    }
+
+    private DiagnosticsRecommendationIdMatchingPreview recommendationIdMatchingPreview(
+        DiagnosticsDataset dataset,
+        Duration window
+    ) {
+        DiagnosticsRecommendationIdMatchingScope allTime = recommendationIdMatchingScope(
+            "all-time",
+            null,
+            dataset,
+            window
+        );
+        Instant post25Cutoff = dataset.realBets().stream()
+            .filter(row -> !isMissing(row.recommendationId()))
+            .map(RealBetDiagnosticRow::createdAt)
+            .filter(Objects::nonNull)
+            .min(Instant::compareTo)
+            .orElse(null);
+        DiagnosticsRecommendationIdMatchingScope post25 = post25Cutoff == null
+            ? DiagnosticsRecommendationIdMatchingScope.empty()
+            : recommendationIdMatchingScope("post-2.5", post25Cutoff, dataset, window);
+        return new DiagnosticsRecommendationIdMatchingPreview(
+            allTime.paperTradesEligible() > 0 || allTime.realBetsEligible() > 0,
+            false,
+            allTime,
+            post25
+        );
+    }
+
+    private DiagnosticsRecommendationIdMatchingScope recommendationIdMatchingScope(
+        String scope,
+        Instant cutoff,
+        DiagnosticsDataset dataset,
+        Duration window
+    ) {
+        List<PaperTrade> papers = filterPapersForPreview(dataset.paperTrades(), cutoff);
+        List<RealBetDiagnosticRow> reals = filterRealsForPreview(dataset.realBets(), cutoff);
+        List<DiagnosticsMatch> scopedLegacyMatches = match(reals, papers, window);
+        Map<String, List<PaperTrade>> papersByRecommendation = papers.stream()
+            .filter(row -> !isMissing(row.recommendationId()))
+            .collect(Collectors.groupingBy(PaperTrade::recommendationId));
+        Map<String, List<RealBetDiagnosticRow>> realsByRecommendation = reals.stream()
+            .filter(row -> !isMissing(row.recommendationId()))
+            .collect(Collectors.groupingBy(RealBetDiagnosticRow::recommendationId));
+        Set<String> recommendationIds = new HashSet<>();
+        recommendationIds.addAll(papersByRecommendation.keySet());
+        recommendationIds.addAll(realsByRecommendation.keySet());
+
+        long matched = 0;
+        long paperOnly = 0;
+        long realOnly = 0;
+        long manyPaperToOneReal = 0;
+        long onePaperToManyReal = 0;
+        long manyToMany = 0;
+        Set<PreviewPair> recommendationPairs = new HashSet<>();
+        Set<String> recommendationAmbiguousPaperIds = new HashSet<>();
+        Set<String> recommendationAmbiguousRealIds = new HashSet<>();
+        for (String recommendationId : recommendationIds) {
+            List<PaperTrade> recommendationPapers = papersByRecommendation.getOrDefault(recommendationId, List.of());
+            List<RealBetDiagnosticRow> recommendationReals = realsByRecommendation.getOrDefault(recommendationId, List.of());
+            if (recommendationPapers.size() == 1 && recommendationReals.size() == 1) {
+                matched++;
+                recommendationPairs.add(PreviewPair.of(recommendationPapers.getFirst(), recommendationReals.getFirst()));
+            } else if (recommendationPapers.size() == 1 && recommendationReals.isEmpty()) {
+                paperOnly++;
+            } else if (recommendationPapers.isEmpty() && recommendationReals.size() == 1) {
+                realOnly++;
+            } else if (recommendationPapers.size() > 1 && recommendationReals.size() == 1) {
+                manyPaperToOneReal++;
+                recommendationPapers.forEach(paper -> recommendationAmbiguousPaperIds.add(paper.id()));
+                recommendationAmbiguousRealIds.add(recommendationReals.getFirst().id());
+            } else if (recommendationPapers.size() == 1 && recommendationReals.size() > 1) {
+                onePaperToManyReal++;
+                recommendationAmbiguousPaperIds.add(recommendationPapers.getFirst().id());
+                recommendationReals.forEach(real -> recommendationAmbiguousRealIds.add(real.id()));
+            } else if (recommendationPapers.size() > 1 && recommendationReals.size() > 1) {
+                manyToMany++;
+                recommendationPapers.forEach(paper -> recommendationAmbiguousPaperIds.add(paper.id()));
+                recommendationReals.forEach(real -> recommendationAmbiguousRealIds.add(real.id()));
+            }
+        }
+
+        Set<PreviewPair> legacyPairs = legacyPairs(reals, papers, window);
+        DiagnosticsRecommendationLegacyComparison comparison = compareLegacyAndRecommendation(
+            legacyPairs,
+            recommendationPairs,
+            recommendationAmbiguousPaperIds,
+            recommendationAmbiguousRealIds,
+            scopedLegacyMatches
+        );
+        long recommendationsWithBoth = recommendationIds.stream()
+            .filter(id -> !papersByRecommendation.getOrDefault(id, List.of()).isEmpty())
+            .filter(id -> !realsByRecommendation.getOrDefault(id, List.of()).isEmpty())
+            .count();
+        long recommendationsWithPaperOnly = recommendationIds.stream()
+            .filter(id -> !papersByRecommendation.getOrDefault(id, List.of()).isEmpty())
+            .filter(id -> realsByRecommendation.getOrDefault(id, List.of()).isEmpty())
+            .count();
+        long recommendationsWithRealOnly = recommendationIds.stream()
+            .filter(id -> papersByRecommendation.getOrDefault(id, List.of()).isEmpty())
+            .filter(id -> !realsByRecommendation.getOrDefault(id, List.of()).isEmpty())
+            .count();
+        long totalRecommendations = "all-time".equals(scope)
+            ? dataset.recommendationReadiness().totalCanonicalRecommendations()
+            : recommendationIds.size();
+        return new DiagnosticsRecommendationIdMatchingScope(
+            scope,
+            cutoff,
+            papers.size(),
+            papers.stream().filter(row -> !isMissing(row.recommendationId())).count(),
+            papersByRecommendation.values().stream().mapToLong(List::size).sum(),
+            reals.size(),
+            reals.stream().filter(row -> !isMissing(row.recommendationId())).count(),
+            realsByRecommendation.values().stream().mapToLong(List::size).sum(),
+            recommendationsWithBoth,
+            recommendationsWithPaperOnly,
+            recommendationsWithRealOnly,
+            Math.max(0, totalRecommendations - recommendationIds.size()),
+            matched,
+            paperOnly,
+            realOnly,
+            manyPaperToOneReal + onePaperToManyReal + manyToMany,
+            manyPaperToOneReal,
+            onePaperToManyReal,
+            manyToMany,
+            comparison
+        );
+    }
+
+    private static DiagnosticsRecommendationLegacyComparison compareLegacyAndRecommendation(
+        Set<PreviewPair> legacyPairs,
+        Set<PreviewPair> recommendationPairs,
+        Set<String> recommendationAmbiguousPaperIds,
+        Set<String> recommendationAmbiguousRealIds,
+        List<DiagnosticsMatch> legacyMatches
+    ) {
+        Map<String, String> recommendationByPaper = recommendationPairs.stream()
+            .collect(Collectors.toMap(PreviewPair::paperId, PreviewPair::realId, (left, right) -> left));
+        Map<String, String> recommendationByReal = recommendationPairs.stream()
+            .collect(Collectors.toMap(PreviewPair::realId, PreviewPair::paperId, (left, right) -> left));
+        long matchedByBoth = legacyPairs.stream().filter(recommendationPairs::contains).count();
+        long conflicts = legacyPairs.stream()
+            .filter(pair -> {
+                String recommendationReal = recommendationByPaper.get(pair.paperId());
+                String recommendationPaper = recommendationByReal.get(pair.realId());
+                return recommendationReal != null && !recommendationReal.equals(pair.realId())
+                    || recommendationPaper != null && !recommendationPaper.equals(pair.paperId());
+            })
+            .count();
+        long legacyOnly = legacyPairs.size() - matchedByBoth - conflicts;
+        long recommendationOnly = recommendationPairs.stream()
+            .filter(pair -> !legacyPairs.contains(pair))
+            .filter(pair -> legacyPairs.stream().noneMatch(legacy -> legacy.paperId().equals(pair.paperId()) || legacy.realId().equals(pair.realId())))
+            .count();
+        Set<String> legacyPaperIds = legacyPairs.stream().map(PreviewPair::paperId).collect(Collectors.toSet());
+        Set<String> legacyRealIds = legacyPairs.stream().map(PreviewPair::realId).collect(Collectors.toSet());
+        long legacyRealOnlyButRecommendationMatched = recommendationPairs.stream()
+            .filter(pair -> !legacyPairs.contains(pair))
+            .filter(pair -> !legacyRealIds.contains(pair.realId()))
+            .count();
+        long legacyPaperOnlyButRecommendationMatched = recommendationPairs.stream()
+            .filter(pair -> !legacyPairs.contains(pair))
+            .filter(pair -> !legacyPaperIds.contains(pair.paperId()))
+            .count();
+        long recommendationAmbiguousButLegacyMatched = legacyPairs.stream()
+            .filter(pair -> recommendationAmbiguousPaperIds.contains(pair.paperId()) || recommendationAmbiguousRealIds.contains(pair.realId()))
+            .count();
+        long legacyAmbiguousResolvedByRecommendation = legacyMatches.stream()
+            .filter(match -> match.matchStatus() == MatchStatus.AMBIGUOUS)
+            .filter(match -> recommendationPairs.stream().anyMatch(pair ->
+                Objects.equals(match.marketId(), pair.marketId())
+                    && Objects.equals(match.selectionId(), pair.selectionId())))
+            .count();
+        return new DiagnosticsRecommendationLegacyComparison(
+            legacyPairs.size(),
+            recommendationPairs.size(),
+            matchedByBoth,
+            legacyOnly,
+            recommendationOnly,
+            conflicts,
+            legacyRealOnlyButRecommendationMatched,
+            legacyPaperOnlyButRecommendationMatched,
+            legacyAmbiguousResolvedByRecommendation,
+            recommendationAmbiguousButLegacyMatched
+        );
+    }
+
+    private static Set<PreviewPair> legacyPairs(List<RealBetDiagnosticRow> realBets, List<PaperTrade> paperTrades, Duration window) {
+        Map<Key, List<RealBetDiagnosticRow>> realByKey = realBets.stream().collect(Collectors.groupingBy(Key::from));
+        Map<Key, List<PaperTrade>> paperByKey = paperTrades.stream().collect(Collectors.groupingBy(Key::from));
+        Set<Key> keys = new HashSet<>();
+        keys.addAll(realByKey.keySet());
+        keys.addAll(paperByKey.keySet());
+        Set<PreviewPair> pairs = new HashSet<>();
+        for (Key key : keys) {
+            List<RealBetDiagnosticRow> reals = sortedReal(realByKey.getOrDefault(key, List.of()));
+            List<PaperTrade> papers = sortedPaper(paperByKey.getOrDefault(key, List.of()));
+            if (reals.size() == 1 && papers.size() == 1 && withinWindow(reals.getFirst(), papers.getFirst(), window)) {
+                pairs.add(PreviewPair.of(papers.getFirst(), reals.getFirst()));
+            } else if (reals.size() == papers.size()) {
+                Set<String> usedPapers = new HashSet<>();
+                for (RealBetDiagnosticRow real : reals) {
+                    List<PaperTrade> candidates = papers.stream()
+                        .filter(paper -> !usedPapers.contains(paper.id()))
+                        .filter(paper -> withinWindow(real, paper, window))
+                        .toList();
+                    if (candidates.size() == 1) {
+                        PaperTrade paper = candidates.getFirst();
+                        usedPapers.add(paper.id());
+                        pairs.add(PreviewPair.of(paper, real));
+                    }
+                }
+            }
+        }
+        return pairs;
+    }
+
+    private static List<PaperTrade> filterPapersForPreview(List<PaperTrade> rows, Instant cutoff) {
+        return rows.stream()
+            .filter(row -> cutoff == null || row.recommendationTimestamp() == null || !row.recommendationTimestamp().isBefore(cutoff))
+            .toList();
+    }
+
+    private static List<RealBetDiagnosticRow> filterRealsForPreview(List<RealBetDiagnosticRow> rows, Instant cutoff) {
+        return rows.stream()
+            .filter(row -> cutoff == null || row.createdAt() == null || !row.createdAt().isBefore(cutoff))
+            .toList();
     }
 
     private DiagnosticsPersistedExecutionCoverage persistedExecutionCoverage(List<RealBetDiagnosticRow> realBets) {
@@ -883,6 +1118,12 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
 
         private static String nullSafe(String value) {
             return value == null ? "" : value;
+        }
+    }
+
+    private record PreviewPair(String paperId, String realId, String marketId, Long selectionId) {
+        private static PreviewPair of(PaperTrade paper, RealBetDiagnosticRow real) {
+            return new PreviewPair(paper.id(), real.id(), real.marketId(), real.selectionId());
         }
     }
 }

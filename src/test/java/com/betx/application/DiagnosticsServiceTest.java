@@ -435,6 +435,142 @@ class DiagnosticsServiceTest {
             .anySatisfy(line -> assertThat(line).contains("Legacy matching remains official").contains("yes"));
     }
 
+    @Test
+    void previewsRecommendationIdMatchingClassificationsWithoutChangingLegacyCounts() {
+        DiagnosticsDataset dataset = dataset(
+            List.of(
+                realWithRecommendation("real-match", "m1", 10, T0.plusSeconds(1), "rec-match"),
+                realWithRecommendation("real-only", "m2", 20, T0.plusSeconds(2), "rec-real-only"),
+                realWithRecommendation("real-many-paper", "m3", 30, T0.plusSeconds(3), "rec-many-paper"),
+                realWithRecommendation("real-many-a", "m4", 40, T0.plusSeconds(4), "rec-many-real"),
+                realWithRecommendation("real-many-b", "m4", 40, T0.plusSeconds(5), "rec-many-real"),
+                realWithRecommendation("real-many-many-a", "m5", 50, T0.plusSeconds(6), "rec-many-many"),
+                realWithRecommendation("real-many-many-b", "m5", 50, T0.plusSeconds(7), "rec-many-many"),
+                real("real-historical", "m6", 60, T0.plusSeconds(8), "2.00", "1.00", null, null)
+            ),
+            List.of(
+                paper("paper-match", "m1", 10, T0, "2.00", "2.00", "1.00", null, null, "rec-match"),
+                paper("paper-only", "m7", 70, T0, "2.00", "2.00", "1.00", null, null, "rec-paper-only"),
+                paper("paper-many-a", "m3", 30, T0, "2.00", "2.00", "1.00", null, null, "rec-many-paper"),
+                paper("paper-many-b", "m3", 30, T0.plusSeconds(1), "2.00", "2.00", "1.00", null, null, "rec-many-paper"),
+                paper("paper-many-real", "m4", 40, T0, "2.00", "2.00", "1.00", null, null, "rec-many-real"),
+                paper("paper-many-many-a", "m5", 50, T0, "2.00", "2.00", "1.00", null, null, "rec-many-many"),
+                paper("paper-many-many-b", "m5", 50, T0.plusSeconds(1), "2.00", "2.00", "1.00", null, null, "rec-many-many"),
+                paper("paper-historical", "m8", 80, T0, "2.00", "2.00", "1.00", null, null)
+            )
+        );
+
+        DiagnosticsReport report = service(dataset, DiagnosticsLogSummary.empty()).generate(request());
+        DiagnosticsRecommendationIdMatchingScope preview = report.recommendationIdMatchingPreview().allTime();
+
+        assertThat(report.coverage().matchedPairs()).isEqualTo(1);
+        assertThat(report.coverage().realOnly()).isEqualTo(3);
+        assertThat(report.coverage().paperOnly()).isEqualTo(3);
+        assertThat(report.coverage().ambiguous()).isEqualTo(3);
+        assertThat(report.recommendationIdMatchingPreview().enabledAsOfficialMatching()).isFalse();
+        assertThat(preview.recommendationIdPairs()).isEqualTo(1);
+        assertThat(preview.recommendationIdPaperOnly()).isEqualTo(1);
+        assertThat(preview.recommendationIdRealOnly()).isEqualTo(1);
+        assertThat(preview.recommendationIdAmbiguous()).isEqualTo(3);
+        assertThat(preview.ambiguousManyPaperToOneReal()).isEqualTo(1);
+        assertThat(preview.ambiguousOnePaperToManyReal()).isEqualTo(1);
+        assertThat(preview.ambiguousManyToMany()).isEqualTo(1);
+        assertThat(preview.paperTradesEligible()).isEqualTo(7);
+        assertThat(preview.realBetsEligible()).isEqualTo(7);
+        assertThat(preview.paperTradesWithRecommendationId()).isEqualTo(7);
+        assertThat(preview.realBetsWithRecommendationId()).isEqualTo(7);
+    }
+
+    @Test
+    void comparesLegacyAndRecommendationIdPreviewPairs() {
+        DiagnosticsDataset dataset = dataset(
+            List.of(
+                realWithRecommendation("real-both", "same", 1, T0.plusSeconds(1), "rec-both"),
+                realWithRecommendation("real-legacy-only", "legacy-only", 2, T0.plusSeconds(2), "rec-without-paper"),
+                realWithRecommendation("real-rec-only", "rec-only-real", 3, T0.plusSeconds(3), "rec-only-preview"),
+                realWithRecommendation("real-conflict-a", "conflict", 4, T0.plusSeconds(4), "rec-conflict-real"),
+                realWithRecommendation("real-conflict-b", "other-conflict", 5, T0.plusSeconds(5), "rec-conflict-paper"),
+                realWithRecommendation("real-ambiguous", "ambiguous", 6, T0.plusSeconds(6), "rec-ambiguous"),
+                realWithRecommendation("real-rec-amb-a", "rec-amb", 7, T0.plusSeconds(7), "rec-ambiguous-preview"),
+                realWithRecommendation("real-rec-amb-b", "rec-amb-other", 8, T0.plusSeconds(8), "rec-ambiguous-preview")
+            ),
+            List.of(
+                paper("paper-both", "same", 1, T0, "2.00", "2.00", "1.00", null, null, "rec-both"),
+                paper("paper-legacy-only", "legacy-only", 2, T0, "2.00", "2.00", "1.00", null, null, "rec-without-real"),
+                paper("paper-rec-only", "rec-only-paper", 3, T0, "2.00", "2.00", "1.00", null, null, "rec-only-preview"),
+                paper("paper-conflict-a", "conflict", 4, T0, "2.00", "2.00", "1.00", null, null, "rec-conflict-paper"),
+                paper("paper-conflict-b", "other-conflict", 5, T0, "2.00", "2.00", "1.00", null, null, "rec-conflict-real"),
+                paper("paper-ambiguous-a", "ambiguous", 6, T0, "2.00", "2.00", "1.00", null, null, "rec-ambiguous"),
+                paper("paper-ambiguous-b", "ambiguous", 6, T0.plusSeconds(1), "2.00", "2.00", "1.00", null, null, "rec-other"),
+                paper("paper-rec-amb", "rec-amb", 7, T0, "2.00", "2.00", "1.00", null, null, "rec-ambiguous-preview")
+            )
+        );
+
+        DiagnosticsRecommendationLegacyComparison comparison = service(dataset, DiagnosticsLogSummary.empty())
+            .generate(request())
+            .recommendationIdMatchingPreview()
+            .allTime()
+            .legacyComparison();
+
+        assertThat(comparison.legacyMatchedPairs()).isEqualTo(5);
+        assertThat(comparison.recommendationIdMatchedPairs()).isEqualTo(5);
+        assertThat(comparison.matchedByBoth()).isEqualTo(1);
+        assertThat(comparison.legacyOnlyMatches()).isEqualTo(2);
+        assertThat(comparison.recommendationOnlyMatches()).isEqualTo(2);
+        assertThat(comparison.conflictingMatches()).isEqualTo(2);
+        assertThat(comparison.legacyRealOnlyButRecommendationMatched()).isEqualTo(2);
+        assertThat(comparison.legacyPaperOnlyButRecommendationMatched()).isEqualTo(2);
+        assertThat(comparison.legacyAmbiguousResolvedByRecommendationId()).isEqualTo(1);
+        assertThat(comparison.recommendationAmbiguousButLegacyMatched()).isEqualTo(1);
+    }
+
+    @Test
+    void recommendationIdPreviewPost25UsesFirstRealRecommendationCutoff() {
+        DiagnosticsDataset dataset = dataset(
+            List.of(
+                real("real-before", "before", 1, T0.minusSeconds(60), "2.00", "1.00", null, null),
+                realWithRecommendation("real-post", "post", 2, T0.plusSeconds(10), "rec-post")
+            ),
+            List.of(
+                paper("paper-before", "before", 1, T0.minusSeconds(120), "2.00", "2.00", "1.00", null, null, "rec-before"),
+                paper("paper-post", "post", 2, T0.plusSeconds(15), "2.00", "2.00", "1.00", null, null, "rec-post")
+            )
+        );
+
+        DiagnosticsRecommendationIdMatchingScope post25 = service(dataset, DiagnosticsLogSummary.empty())
+            .generate(request())
+            .recommendationIdMatchingPreview()
+            .post25();
+
+        assertThat(post25.cutoff()).isEqualTo(T0.plusSeconds(10));
+        assertThat(post25.paperTradesTotal()).isEqualTo(1);
+        assertThat(post25.realBetsTotal()).isEqualTo(1);
+        assertThat(post25.recommendationIdPairs()).isEqualTo(1);
+        assertThat(post25.paperTradesWithRecommendationId()).isEqualTo(1);
+        assertThat(post25.realBetsWithRecommendationId()).isEqualTo(1);
+    }
+
+    @Test
+    void formatsRecommendationIdMatchingPreviewWithoutEnablingOfficialMatching() {
+        DiagnosticsReport report = service(dataset(
+            List.of(realWithRecommendation("real-1", "m1", 10, T0.plusSeconds(1), "rec-1")),
+            List.of(paper("paper-1", "m1", 10, T0, "2.00", "2.00", "1.00", null, null, "rec-1"))
+        ), DiagnosticsLogSummary.empty()).generate(request());
+
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Recommendation-id matching preview")
+            .anySatisfy(line -> assertThat(line).contains("Enabled as official matching").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("Preview available").contains("yes"))
+            .anySatisfy(line -> assertThat(line).contains("Recommendation-id pairs").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("Recommendation-id paper-only").contains("0"))
+            .anySatisfy(line -> assertThat(line).contains("Recommendation-id real-only").contains("0"))
+            .anySatisfy(line -> assertThat(line).contains("Recommendation-id ambiguous").contains("0"))
+            .anySatisfy(line -> assertThat(line).contains("Legacy comparison").contains("post-2.5"))
+            .anySatisfy(line -> assertThat(line).contains("Conflicts").contains("0"))
+            .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("Legacy matching remains official").contains("yes"));
+    }
+
     private static DiagnosticsService service(DiagnosticsDataset dataset, DiagnosticsLogSummary logs) {
         return new DiagnosticsService(
             new TestConfigRepository(new BetxConfig(
@@ -511,6 +647,54 @@ class DiagnosticsServiceTest {
             BigDecimal.valueOf(95),
             BigDecimal.valueOf(5),
             createdAt
+        );
+    }
+
+    private static RealBetDiagnosticRow realWithRecommendation(
+        String id,
+        String marketId,
+        long selectionId,
+        Instant createdAt,
+        String recommendationId
+    ) {
+        return new RealBetDiagnosticRow(
+            id,
+            "betfair",
+            marketId,
+            selectionId,
+            "Event " + marketId,
+            "Match Odds",
+            "Runner " + selectionId,
+            SelectionSide.DRAW,
+            "League",
+            "value-football",
+            BigDecimal.valueOf(2),
+            BigDecimal.ONE,
+            BetIntentStage.EXECUTED,
+            null,
+            null,
+            "external-" + id,
+            createdAt,
+            null,
+            createdAt.plusSeconds(120),
+            BigDecimal.valueOf(100),
+            BigDecimal.valueOf(99),
+            BigDecimal.ONE,
+            createdAt,
+            "eval-" + id,
+            recommendationId,
+            createdAt,
+            BigDecimal.valueOf(2),
+            createdAt,
+            createdAt.plusMillis(100),
+            null,
+            null,
+            BigDecimal.valueOf(2),
+            null,
+            BigDecimal.ONE,
+            null,
+            null,
+            BetExecutionStatus.UNMATCHED
         );
     }
 

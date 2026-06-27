@@ -38,6 +38,11 @@ class DiagnosticsExporterTest {
             .contains("\"matchingByRecommendationId\" : false")
             .contains("\"recommendationIdMatchingOfficial\" : false")
             .contains("\"legacyMatchingRemainsOfficial\" : true")
+            .contains("\"recommendationIdMatchingPreview\"")
+            .contains("\"previewAvailable\" : true")
+            .contains("\"enabledAsOfficialMatching\" : false")
+            .contains("\"recommendationIdPairs\" : 1")
+            .contains("\"legacyComparison\"")
             .contains("\"paperTradesLinkedToExpiredRecommendations\"")
             .doesNotContain("token")
             .doesNotContain("password")
@@ -145,6 +150,33 @@ class DiagnosticsExporterTest {
                 "NO",
                 "RECOMMENDATION_ID_MATCHING_CANDIDATE",
                 List.of("recommendation_id matching is not enabled as official matching yet.")
+            ),
+            new DiagnosticsRecommendationIdMatchingPreview(
+                true,
+                false,
+                new DiagnosticsRecommendationIdMatchingScope(
+                    "all-time",
+                    null,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    new DiagnosticsRecommendationLegacyComparison(1, 1, 1, 0, 0, 0, 0, 0, 0, 0)
+                ),
+                DiagnosticsRecommendationIdMatchingScope.empty()
             )
         );
     }

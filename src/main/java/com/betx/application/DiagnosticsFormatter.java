@@ -62,6 +62,7 @@ public class DiagnosticsFormatter {
         lines.add(line("Matching by recommendation_id", "no"));
         lines.add(line("Recommendation_id matching official", "no"));
         lines.add(line("Legacy matching remains official", "yes"));
+        lines.add(line("Recommendation-id matching preview", report.recommendationIdMatchingPreview().previewAvailable() ? "available" : "unavailable"));
         lines.add(line("Total canonical recommendations", readiness.totalCanonicalRecommendations()));
         lines.add(line("ACTIVE recommendations", readiness.activeRecommendations()));
         lines.add(line("COVERED recommendations", readiness.coveredRecommendations()));
@@ -150,6 +151,8 @@ public class DiagnosticsFormatter {
         lines.add(line("BetRecommendation consumed by paper", "yes"));
         lines.add(line("BetRecommendation consumed by real", report.executionDataCoverage().withRecommendationId() > 0 ? "yes" : "no"));
         lines.add(line("Matching by recommendation_id", "no"));
+        lines.add("");
+        addRecommendationIdMatchingPreview(lines, report.recommendationIdMatchingPreview());
         lines.add("");
         lines.add("Matching gaps");
         if (report.matchingGaps().isEmpty()) {
@@ -307,6 +310,56 @@ public class DiagnosticsFormatter {
         lines.add("Limitations");
         report.limitations().forEach(limitation -> lines.add("- " + limitation));
         return lines;
+    }
+
+    private static void addRecommendationIdMatchingPreview(
+        List<String> lines,
+        DiagnosticsRecommendationIdMatchingPreview preview
+    ) {
+        lines.add("Recommendation-id matching preview");
+        lines.add(line("Enabled as official matching", preview.enabledAsOfficialMatching() ? "yes" : "no"));
+        lines.add(line("Preview available", preview.previewAvailable() ? "yes" : "no"));
+        addRecommendationIdMatchingScope(lines, "all-time", preview.allTime());
+        addRecommendationIdMatchingScope(lines, "post-2.5", preview.post25());
+    }
+
+    private static void addRecommendationIdMatchingScope(
+        List<String> lines,
+        String label,
+        DiagnosticsRecommendationIdMatchingScope scope
+    ) {
+        lines.add("Scope: " + label);
+        lines.add(line("Recommendation-id pairs", scope.recommendationIdPairs()));
+        lines.add(line("Recommendation-id paper-only", scope.recommendationIdPaperOnly()));
+        lines.add(line("Recommendation-id real-only", scope.recommendationIdRealOnly()));
+        lines.add(line("Recommendation-id ambiguous", scope.recommendationIdAmbiguous()));
+        lines.add(line("many paper to one real", scope.ambiguousManyPaperToOneReal()));
+        lines.add(line("one paper to many real", scope.ambiguousOnePaperToManyReal()));
+        lines.add(line("many to many", scope.ambiguousManyToMany()));
+        lines.add(line("Paper trades with recommendation_id", coverage(
+            scope.paperTradesWithRecommendationId(),
+            scope.paperTradesTotal()
+        )));
+        lines.add(line("Real bets with recommendation_id", coverage(
+            scope.realBetsWithRecommendationId(),
+            scope.realBetsTotal()
+        )));
+        lines.add(line("Recommendations with both paper and real", scope.recommendationsWithBothPaperAndReal()));
+        lines.add(line("Recommendations with paper only", scope.recommendationsWithPaperOnly()));
+        lines.add(line("Recommendations with real only", scope.recommendationsWithRealOnly()));
+        lines.add(line("Recommendations with neither", scope.recommendationsWithNeither()));
+        DiagnosticsRecommendationLegacyComparison comparison = scope.legacyComparison();
+        lines.add("Legacy comparison: " + label);
+        lines.add(line("Legacy matched pairs", comparison.legacyMatchedPairs()));
+        lines.add(line("Recommendation-id matched pairs", comparison.recommendationIdMatchedPairs()));
+        lines.add(line("Matched by both", comparison.matchedByBoth()));
+        lines.add(line("Legacy-only matches", comparison.legacyOnlyMatches()));
+        lines.add(line("Recommendation-only matches", comparison.recommendationOnlyMatches()));
+        lines.add(line("Conflicts", comparison.conflictingMatches()));
+        lines.add(line("Legacy real-only but recommendation matched", comparison.legacyRealOnlyButRecommendationMatched()));
+        lines.add(line("Legacy paper-only but recommendation matched", comparison.legacyPaperOnlyButRecommendationMatched()));
+        lines.add(line("Legacy ambiguous resolved by recommendation-id", comparison.legacyAmbiguousResolvedByRecommendationId()));
+        lines.add(line("Recommendation ambiguous but legacy matched", comparison.recommendationAmbiguousButLegacyMatched()));
     }
 
     private static String line(String label, Object value) {
