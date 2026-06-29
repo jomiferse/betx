@@ -571,6 +571,207 @@ class DiagnosticsServiceTest {
             .anySatisfy(line -> assertThat(line).contains("Legacy matching remains official").contains("yes"));
     }
 
+    @Test
+    void explainsRecommendationDivergenceFromExactRecommendationLogEvidence() {
+        DiagnosticsLogSummary logs = logsWithEvents(
+            logEvent("risk.blocked", "rec-paper-risk", "m-risk", 10, "MAX_OPEN_POSITIONS", T0.plusSeconds(20)),
+            logEvent("bet_signal.skipped", "rec-paper-active", "m-active", 20, "ACTIVE_MARKET_INTENT_EXISTS", T0.plusSeconds(30)),
+            logEvent("paper_trade.execution_failed", "rec-real-paper-failed", "m-paper-failed", 30, "NO_PRICE_AVAILABLE", T0.plusSeconds(40)),
+            logEvent("dependency.error", "rec-real-dependency", "m-dependency", 40, "paper_market_scan", T0.plusSeconds(50))
+        );
+        DiagnosticsReport report = service(dataset(
+            List.of(
+                realWithRecommendation("real-match", "m-match", 1, T0.plusSeconds(1), "rec-match"),
+                realWithRecommendation("real-paper-failed", "m-paper-failed", 30, T0.plusSeconds(2), "rec-real-paper-failed"),
+                realWithRecommendation("real-dependency", "m-dependency", 40, T0.plusSeconds(3), "rec-real-dependency"),
+                realWithRecommendation("real-no-paper", "m-no-paper", 50, T0.plusSeconds(4), "rec-real-no-paper")
+            ),
+            List.of(
+                paper("paper-match", "m-match", 1, T0, "2.00", "2.00", "1.00", null, null, "rec-match"),
+                paper("paper-risk", "m-risk", 10, T0, "2.00", "2.00", "1.00", null, null, "rec-paper-risk"),
+                paper("paper-active", "m-active", 20, T0, "2.00", "2.00", "1.00", null, null, "rec-paper-active"),
+                paper("paper-no-real", "m-no-real", 60, T0, "2.00", "2.00", "1.00", null, null, "rec-paper-no-real")
+            )
+        ), logs).generate(request());
+
+        DiagnosticsRecommendationDivergenceAnalysis divergence = report.recommendationDivergenceAnalysis();
+
+        assertThat(divergence.paperOnlyRecommendations()).isEqualTo(3);
+        assertThat(divergence.realOnlyRecommendations()).isEqualTo(3);
+        assertThat(divergence.ambiguousRecommendations()).isZero();
+        assertThat(divergence.paperOnlyReasonBreakdown())
+            .containsEntry(DiagnosticsRecommendationDivergenceReason.REAL_BLOCKED_BY_RISK_MAX_OPEN_POSITIONS, 1L)
+            .containsEntry(DiagnosticsRecommendationDivergenceReason.REAL_BLOCKED_BY_ACTIVE_MARKET_INTENT_EXISTS, 1L)
+            .containsEntry(DiagnosticsRecommendationDivergenceReason.REAL_NOT_ATTEMPTED, 1L);
+        assertThat(divergence.realOnlyReasonBreakdown())
+            .containsEntry(DiagnosticsRecommendationDivergenceReason.PAPER_EXECUTION_FAILED, 1L)
+            .containsEntry(DiagnosticsRecommendationDivergenceReason.PAPER_DEPENDENCY_ERROR, 1L)
+            .containsEntry(DiagnosticsRecommendationDivergenceReason.PAPER_NOT_CREATED, 1L);
+        assertThat(divergence.topPaperOnlyExamples())
+            .filteredOn(example -> example.recommendationId().equals("rec-paper-risk"))
+            .singleElement()
+            .satisfies(example -> {
+                assertThat(example.reason()).isEqualTo(DiagnosticsRecommendationDivergenceReason.REAL_BLOCKED_BY_RISK_MAX_OPEN_POSITIONS);
+                assertThat(example.evidence()).singleElement()
+                    .satisfies(evidence -> {
+                        assertThat(evidence.eventName()).isEqualTo("risk.blocked");
+                        assertThat(evidence.source()).isEqualTo(DiagnosticsModel.DiagnosticsDataProvenance.STRUCTURED_LOGS);
+                    });
+            });
+        assertThat(divergence.topRealOnlyExamples())
+            .filteredOn(example -> example.recommendationId().equals("rec-real-paper-failed"))
+            .singleElement()
+            .extracting(DiagnosticsRecommendationDivergenceExample::reason)
+            .isEqualTo(DiagnosticsRecommendationDivergenceReason.PAPER_EXECUTION_FAILED);
+    }
+
+    @Test
+    void exactRecommendationEvidenceWinsOverTemporalHeuristicAndOtherSelectionsAreIgnored() {
+        DiagnosticsLogSummary logs = logsWithEvents(
+            logEvent("risk.blocked", "other-rec", "m-risk", 10, "MAX_OPEN_POSITIONS", T0.plusSeconds(20)),
+            logEvent("bet_signal.skipped", null, "other-market", 10, "ACTIVE_MARKET_INTENT_EXISTS", T0.plusSeconds(25)),
+            logEvent("risk.blocked", "rec-paper-risk", "m-risk", 10, "DAILY_LOSS_LIMIT", T0.plusSeconds(30))
+        );
+        DiagnosticsReport report = service(dataset(
+            List.of(),
+            List.of(paper("paper-risk", "m-risk", 10, T0, "2.00", "2.00", "1.00", null, null, "rec-paper-risk"))
+        ), logs).generate(request());
+
+        DiagnosticsRecommendationDivergenceExample example = report.recommendationDivergenceAnalysis()
+            .topPaperOnlyExamples()
+            .getFirst();
+
+        assertThat(example.reason()).isEqualTo(DiagnosticsRecommendationDivergenceReason.REAL_BLOCKED_BY_RISK_DAILY_LOSS);
+        assertThat(example.evidence()).singleElement()
+            .satisfies(evidence -> {
+                assertThat(evidence.recommendationId()).isEqualTo("rec-paper-risk");
+                assertThat(evidence.source()).isEqualTo(DiagnosticsModel.DiagnosticsDataProvenance.STRUCTURED_LOGS);
+            });
+    }
+
+    @Test
+    void temporalFallbackIsMarkedAsLegacyApproximation() {
+        DiagnosticsLogSummary logs = logsWithEvents(
+            logEvent("bet_signal.skipped", null, "m-active", 20, "ACTIVE_MARKET_INTENT_EXISTS", T0.plusSeconds(30))
+        );
+        DiagnosticsReport report = service(dataset(
+            List.of(),
+            List.of(paper("paper-active", "m-active", 20, T0, "2.00", "2.00", "1.00", null, null, "rec-paper-active"))
+        ), logs).generate(request());
+
+        DiagnosticsRecommendationDivergenceExample example = report.recommendationDivergenceAnalysis()
+            .topPaperOnlyExamples()
+            .getFirst();
+
+        assertThat(example.reason()).isEqualTo(DiagnosticsRecommendationDivergenceReason.REAL_BLOCKED_BY_ACTIVE_MARKET_INTENT_EXISTS);
+        assertThat(example.evidence()).singleElement()
+            .extracting(DiagnosticsRecommendationDivergenceEvidence::source)
+            .isEqualTo(DiagnosticsModel.DiagnosticsDataProvenance.LEGACY_APPROXIMATION);
+    }
+
+    @Test
+    void formatsRecommendationDivergenceAnalysisWithoutEnablingOfficialRecommendationMatching() {
+        DiagnosticsReport report = service(dataset(
+            List.of(realWithRecommendation("real-only", "m-real", 10, T0.plusSeconds(1), "rec-real")),
+            List.of(paper("paper-only", "m-paper", 20, T0, "2.00", "2.00", "1.00", null, null, "rec-paper"))
+        ), DiagnosticsLogSummary.empty()).generate(request());
+
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Recommendation divergence analysis")
+            .contains("Paper-only reason breakdown:")
+            .contains("Real-only reason breakdown:")
+            .contains("Top paper-only examples:")
+            .contains("Top real-only examples:")
+            .anySatisfy(line -> assertThat(line).contains("Paper-only recommendations").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("Real-only recommendations").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("REAL_NOT_ATTEMPTED").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("PAPER_NOT_CREATED").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("Legacy matching remains official").contains("yes"));
+    }
+
+    @Test
+    void calculatesStrategyPerformanceSegmentsFromSettledRealBetsOnly() {
+        DiagnosticsReport report = service(dataset(
+            List.of(
+                settledReal("home-win", SelectionSide.HOME, "2.00", "10.00", BetSettlementResult.WIN, "10.00", T0),
+                settledReal("draw-loss", SelectionSide.DRAW, "3.50", "10.00", BetSettlementResult.LOSE, "-10.00", T0.plusSeconds(60)),
+                settledReal("away-void", SelectionSide.AWAY, "5.50", "10.00", BetSettlementResult.VOID, "0.00", T0.plusSeconds(120)),
+                openReal("open-home", SelectionSide.HOME, "2.50", "10.00", T0.plusSeconds(180))
+            ),
+            List.of()
+        ), DiagnosticsLogSummary.empty()).generate(request());
+
+        DiagnosticsStrategyPerformance performance = report.strategyPerformance();
+        DiagnosticsStrategyPerformanceSegment baseline = performance.allTime();
+
+        assertThat(baseline.bets()).isEqualTo(4);
+        assertThat(baseline.settled()).isEqualTo(3);
+        assertThat(baseline.open()).isEqualTo(1);
+        assertThat(baseline.wins()).isEqualTo(1);
+        assertThat(baseline.losses()).isEqualTo(1);
+        assertThat(baseline.voids()).isEqualTo(1);
+        assertThat(baseline.averageOdds()).isEqualByComparingTo("3.66666667");
+        assertThat(baseline.turnover()).isEqualByComparingTo("30.00");
+        assertThat(baseline.netPnl()).isEqualByComparingTo("0.00");
+        assertThat(baseline.roi()).isEqualByComparingTo("0.00000000");
+        assertThat(baseline.expectedBreakEvenOdds()).isEqualByComparingTo("2.00000000");
+        assertThat(baseline.maxDrawdown()).isEqualByComparingTo("10.00");
+        assertThat(performance.bySelectionSide()).containsKeys("HOME", "DRAW", "AWAY");
+        assertThat(performance.bySelectionSide().get("HOME").settled()).isEqualTo(1);
+        assertThat(performance.bySelectionSide().get("DRAW").netPnl()).isEqualByComparingTo("-10.00");
+        assertThat(performance.byOddsRange()).containsKeys("2.00-2.49", "3.00-3.99", "5.00+");
+    }
+
+    @Test
+    void simulatesCandidateFiltersWithoutChangingLegacyMatching() {
+        DiagnosticsReport report = service(dataset(
+            List.of(
+                settledReal("home-win", SelectionSide.HOME, "2.00", "10.00", BetSettlementResult.WIN, "10.00", T0),
+                settledReal("draw-loss", SelectionSide.DRAW, "3.50", "10.00", BetSettlementResult.LOSE, "-10.00", T0.plusSeconds(60)),
+                settledReal("away-high-loss", SelectionSide.AWAY, "5.50", "10.00", BetSettlementResult.LOSE, "-10.00", T0.plusSeconds(120)),
+                settledReal("home-high-win", SelectionSide.HOME, "5.00", "10.00", BetSettlementResult.WIN, "40.00", T0.plusSeconds(180))
+            ),
+            List.of(paper("paper-legacy", "m-legacy", 10, T0, "2.00", "2.00", "1.00", null, null))
+        ), DiagnosticsLogSummary.empty()).generate(request());
+
+        DiagnosticsCandidateFilterResult excludeDraw = filter(report, "EXCLUDE_DRAW");
+        DiagnosticsCandidateFilterResult excludeOdds5Plus = filter(report, "EXCLUDE_ODDS_5_PLUS");
+        DiagnosticsCandidateFilterResult onlyHome = filter(report, "ONLY_HOME");
+        DiagnosticsCandidateFilterResult combined = filter(report, "EXCLUDE_DRAW_AND_ODDS_4_PLUS");
+
+        assertThat(excludeDraw.includedBets()).isEqualTo(3);
+        assertThat(excludeDraw.excludedBets()).isEqualTo(1);
+        assertThat(excludeDraw.includedNetPnl()).isEqualByComparingTo("40.00");
+        assertThat(excludeDraw.deltaPnl()).isEqualByComparingTo("10.00");
+        assertThat(excludeDraw.volumeRetentionPct()).isEqualByComparingTo("75.00000000");
+        assertThat(excludeOdds5Plus.includedBets()).isEqualTo(2);
+        assertThat(excludeOdds5Plus.includedNetPnl()).isEqualByComparingTo("0.00");
+        assertThat(onlyHome.includedBets()).isEqualTo(2);
+        assertThat(onlyHome.includedNetPnl()).isEqualByComparingTo("50.00");
+        assertThat(combined.includedBets()).isEqualTo(1);
+        assertThat(combined.includedNetPnl()).isEqualByComparingTo("10.00");
+        assertThat(report.candidateFilterSimulation().recommendation().shouldApplyLive()).isFalse();
+        assertThat(report.recommendationIdMatchingPreview().enabledAsOfficialMatching()).isFalse();
+        assertThat(report.coverage().paperOnly()).isEqualTo(1);
+    }
+
+    @Test
+    void formatsStrategyPerformanceAndCandidateSimulation() {
+        DiagnosticsReport report = service(dataset(
+            List.of(settledReal("home-win", SelectionSide.HOME, "2.00", "10.00", BetSettlementResult.WIN, "10.00", T0)),
+            List.of()
+        ), DiagnosticsLogSummary.empty()).generate(request());
+
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Strategy performance diagnostics")
+            .contains("Candidate filter simulation")
+            .contains("Recommended next experiment")
+            .anySatisfy(line -> assertThat(line).contains("should_apply_live").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("Legacy matching remains official").contains("yes"));
+    }
+
     private static DiagnosticsService service(DiagnosticsDataset dataset, DiagnosticsLogSummary logs) {
         return new DiagnosticsService(
             new TestConfigRepository(new BetxConfig(
@@ -597,6 +798,35 @@ class DiagnosticsServiceTest {
 
     private static DiagnosticsDataset dataset(List<RealBetDiagnosticRow> real, List<PaperTrade> paper) {
         return new DiagnosticsDataset(real, paper, 20, 40, Map.of("APPROVE", 2L), Map.of("INSUFFICIENT_EDGE", 3L));
+    }
+
+    private static DiagnosticsLogSummary logsWithEvents(DiagnosticsLogEvent... events) {
+        return new DiagnosticsLogSummary(Map.of(), Map.of(), List.of(), 0, 0, List.of(), List.of(events));
+    }
+
+    private static DiagnosticsLogEvent logEvent(
+        String eventName,
+        String recommendationId,
+        String marketId,
+        long selectionId,
+        String reason,
+        Instant timestamp
+    ) {
+        return new DiagnosticsLogEvent(
+            timestamp,
+            eventName,
+            recommendationId,
+            BetRecommendation.canonicalKey("betfair", marketId, selectionId, SelectionSide.DRAW, "value-football"),
+            "betfair",
+            marketId,
+            selectionId,
+            "DRAW",
+            "value-football",
+            reason,
+            reason,
+            "Event " + marketId,
+            "Runner " + selectionId
+        );
     }
 
     private static RealBetDiagnosticRow real(
@@ -795,6 +1025,97 @@ class DiagnosticsServiceTest {
             null,
             BetExecutionStatus.UNMATCHED
         );
+    }
+
+    private static RealBetDiagnosticRow settledReal(
+        String id,
+        SelectionSide selectionSide,
+        String odds,
+        String stake,
+        BetSettlementResult result,
+        String pnl,
+        Instant createdAt
+    ) {
+        return new RealBetDiagnosticRow(
+            id,
+            "betfair",
+            "m-" + id,
+            Math.abs(id.hashCode()) + 1L,
+            "Event " + id,
+            "Match Odds",
+            "Runner " + id,
+            selectionSide,
+            "League",
+            "value-football",
+            decimal(odds),
+            decimal(stake),
+            BetIntentStage.SETTLED,
+            result,
+            decimal(pnl),
+            "external-" + id,
+            createdAt,
+            createdAt.plusSeconds(3600),
+            createdAt.plusSeconds(120),
+            BigDecimal.valueOf(100),
+            BigDecimal.valueOf(90),
+            decimal(stake),
+            createdAt,
+            "eval-" + id,
+            "rec-" + id,
+            createdAt,
+            decimal(odds),
+            createdAt,
+            createdAt.plusMillis(100),
+            null,
+            result == BetSettlementResult.WIN ? createdAt.plusMillis(200) : null,
+            decimal(odds),
+            result == BetSettlementResult.WIN ? decimal(odds) : null,
+            decimal(stake),
+            result == BetSettlementResult.VOID ? BigDecimal.ZERO : decimal(stake),
+            BigDecimal.ZERO,
+            result == BetSettlementResult.WIN ? BetExecutionStatus.FULLY_MATCHED : BetExecutionStatus.UNMATCHED
+        );
+    }
+
+    private static RealBetDiagnosticRow openReal(
+        String id,
+        SelectionSide selectionSide,
+        String odds,
+        String stake,
+        Instant createdAt
+    ) {
+        return new RealBetDiagnosticRow(
+            id,
+            "betfair",
+            "m-" + id,
+            Math.abs(id.hashCode()) + 1L,
+            "Event " + id,
+            "Match Odds",
+            "Runner " + id,
+            selectionSide,
+            "League",
+            "value-football",
+            decimal(odds),
+            decimal(stake),
+            BetIntentStage.EXECUTED,
+            null,
+            null,
+            "external-" + id,
+            createdAt,
+            null,
+            createdAt.plusSeconds(120),
+            BigDecimal.valueOf(100),
+            BigDecimal.valueOf(90),
+            decimal(stake),
+            createdAt
+        );
+    }
+
+    private static DiagnosticsCandidateFilterResult filter(DiagnosticsReport report, String filterName) {
+        return report.candidateFilterSimulation().results().stream()
+            .filter(result -> result.filterName().equals(filterName))
+            .findFirst()
+            .orElseThrow();
     }
 
     private static PaperTrade paper(

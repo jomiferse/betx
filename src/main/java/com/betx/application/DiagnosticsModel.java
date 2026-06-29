@@ -26,7 +26,9 @@ public final class DiagnosticsModel {
 
     public enum DiagnosticsDataProvenance {
         SQLITE_EXACT,
+        STRUCTURED_LOGS,
         LOG_CORRELATED,
+        DIAGNOSTICS,
         LEGACY_APPROXIMATION,
         APPROXIMATED,
         UNAVAILABLE

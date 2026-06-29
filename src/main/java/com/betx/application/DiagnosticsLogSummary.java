@@ -10,7 +10,8 @@ public record DiagnosticsLogSummary(
     List<DiagnosticsSkippedMarket> topSkippedMarkets,
     long invalidLines,
     long ignoredLines,
-    List<String> limitations
+    List<String> limitations,
+    List<DiagnosticsLogEvent> events
 ) {
     public DiagnosticsLogSummary {
         eventCounts = eventCounts == null ? Map.of() : Map.copyOf(eventCounts);
@@ -19,6 +20,7 @@ public record DiagnosticsLogSummary(
             : Map.copyOf(acceptedLatenciesByExternalOrderId);
         topSkippedMarkets = topSkippedMarkets == null ? List.of() : List.copyOf(topSkippedMarkets);
         limitations = limitations == null ? List.of() : List.copyOf(limitations);
+        events = events == null ? List.of() : List.copyOf(events);
     }
 
     public DiagnosticsLogSummary(
@@ -28,10 +30,21 @@ public record DiagnosticsLogSummary(
         long ignoredLines,
         List<String> limitations
     ) {
-        this(eventCounts, acceptedLatenciesByExternalOrderId, List.of(), invalidLines, ignoredLines, limitations);
+        this(eventCounts, acceptedLatenciesByExternalOrderId, List.of(), invalidLines, ignoredLines, limitations, List.of());
+    }
+
+    public DiagnosticsLogSummary(
+        Map<String, Long> eventCounts,
+        Map<String, Duration> acceptedLatenciesByExternalOrderId,
+        List<DiagnosticsSkippedMarket> topSkippedMarkets,
+        long invalidLines,
+        long ignoredLines,
+        List<String> limitations
+    ) {
+        this(eventCounts, acceptedLatenciesByExternalOrderId, topSkippedMarkets, invalidLines, ignoredLines, limitations, List.of());
     }
 
     public static DiagnosticsLogSummary empty() {
-        return new DiagnosticsLogSummary(Map.of(), Map.of(), List.of(), 0, 0, List.of());
+        return new DiagnosticsLogSummary(Map.of(), Map.of(), List.of(), 0, 0, List.of(), List.of());
     }
 }

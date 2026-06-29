@@ -19,15 +19,18 @@ import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -35,6 +38,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class DiagnosticsService implements GenerateDiagnosticsUseCase {
     private static final int SCALE = 8;
+    private static final Duration DIVERGENCE_LOG_WINDOW = Duration.ofMinutes(2);
 
     private final BetxConfigRepository configRepository;
     private final DiagnosticsRepository diagnosticsRepository;
@@ -78,9 +82,6 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         DiagnosticsPlaceOrdersResponseDuration placeOrdersResponseDuration = placeOrdersResponseDuration(dataset.realBets());
         DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort = prospectiveRealBettingCohort(dataset.realBets());
         DiagnosticsDecisionFunnel funnel = decisionFunnel(dataset, logs);
-        List<DiagnosticFinding> findings = integrityFindings(dataset, matches);
-        List<String> limitations = limitations(logs, persistedExecutionCoverage, logEventCoverage);
-        List<String> topFindings = topFindings(coverage, paperVsReal, execution, findings);
         Map<MatchGapReason, Long> matchingGaps = matchingGaps(matches);
         DiagnosticsRecommendationReadiness recommendationReadiness = recommendationReadiness(
             dataset.recommendationReadiness(),
@@ -90,6 +91,19 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         DiagnosticsRecommendationIdMatchingPreview recommendationIdMatchingPreview = recommendationIdMatchingPreview(
             dataset,
             request.matchWindow()
+        );
+        DiagnosticsRecommendationDivergenceAnalysis recommendationDivergenceAnalysis = recommendationDivergenceAnalysis(dataset, logs);
+        DiagnosticsStrategyPerformance strategyPerformance = strategyPerformance(dataset.realBets(), matches);
+        DiagnosticsCandidateFilterSimulation candidateFilterSimulation = candidateFilterSimulation(dataset.realBets(), strategyPerformance.allTime());
+        List<DiagnosticFinding> findings = integrityFindings(dataset, matches);
+        List<String> limitations = limitations(logs, persistedExecutionCoverage, logEventCoverage);
+        List<String> topFindings = topFindings(
+            coverage,
+            paperVsReal,
+            execution,
+            strategyPerformance,
+            candidateFilterSimulation,
+            findings
         );
         return new DiagnosticsReport(
             Instant.now(clock),
@@ -112,7 +126,10 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             dataset.betRecommendations(),
             dataset.paperRecommendationCoverage(),
             recommendationReadiness,
-            recommendationIdMatchingPreview
+            recommendationIdMatchingPreview,
+            recommendationDivergenceAnalysis,
+            strategyPerformance,
+            candidateFilterSimulation
         );
     }
 
@@ -678,6 +695,242 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         return pairs;
     }
 
+    private DiagnosticsRecommendationDivergenceAnalysis recommendationDivergenceAnalysis(
+        DiagnosticsDataset dataset,
+        DiagnosticsLogSummary logs
+    ) {
+        Map<String, List<PaperTrade>> papersByRecommendation = dataset.paperTrades().stream()
+            .filter(row -> !isMissing(row.recommendationId()))
+            .collect(Collectors.groupingBy(PaperTrade::recommendationId));
+        Map<String, List<RealBetDiagnosticRow>> realsByRecommendation = dataset.realBets().stream()
+            .filter(row -> !isMissing(row.recommendationId()))
+            .collect(Collectors.groupingBy(RealBetDiagnosticRow::recommendationId));
+        Set<String> recommendationIds = new HashSet<>();
+        recommendationIds.addAll(papersByRecommendation.keySet());
+        recommendationIds.addAll(realsByRecommendation.keySet());
+
+        List<DiagnosticsRecommendationDivergenceExample> paperOnly = new ArrayList<>();
+        List<DiagnosticsRecommendationDivergenceExample> realOnly = new ArrayList<>();
+        long ambiguous = 0;
+        for (String recommendationId : recommendationIds.stream().sorted().toList()) {
+            List<PaperTrade> papers = papersByRecommendation.getOrDefault(recommendationId, List.of());
+            List<RealBetDiagnosticRow> reals = realsByRecommendation.getOrDefault(recommendationId, List.of());
+            if (papers.size() == 1 && reals.isEmpty()) {
+                paperOnly.add(divergenceExample(recommendationId, papers, reals, "PAPER_ONLY", logs.events()));
+            } else if (papers.isEmpty() && reals.size() == 1) {
+                realOnly.add(divergenceExample(recommendationId, papers, reals, "REAL_ONLY", logs.events()));
+            } else if (!papers.isEmpty() || !reals.isEmpty()) {
+                if (!(papers.size() == 1 && reals.size() == 1)) {
+                    ambiguous++;
+                }
+            }
+        }
+
+        Map<DiagnosticsRecommendationDivergenceReason, Long> paperBreakdown = reasonBreakdown(paperOnly);
+        Map<DiagnosticsRecommendationDivergenceReason, Long> realBreakdown = reasonBreakdown(realOnly);
+        return new DiagnosticsRecommendationDivergenceAnalysis(
+            paperOnly.size(),
+            realOnly.size(),
+            ambiguous,
+            paperBreakdown,
+            realBreakdown,
+            paperBreakdown.getOrDefault(DiagnosticsRecommendationDivergenceReason.UNKNOWN, 0L),
+            realBreakdown.getOrDefault(DiagnosticsRecommendationDivergenceReason.UNKNOWN, 0L),
+            paperOnly.stream().limit(10).toList(),
+            realOnly.stream().limit(10).toList()
+        );
+    }
+
+    private DiagnosticsRecommendationDivergenceExample divergenceExample(
+        String recommendationId,
+        List<PaperTrade> papers,
+        List<RealBetDiagnosticRow> reals,
+        String classification,
+        List<DiagnosticsLogEvent> logEvents
+    ) {
+        DivergenceSubject subject = DivergenceSubject.from(recommendationId, papers, reals);
+        EvidenceMatch evidence = evidenceFor(subject, classification, logEvents);
+        return new DiagnosticsRecommendationDivergenceExample(
+            recommendationId,
+            subject.canonicalKey(),
+            subject.eventName(),
+            subject.runnerName(),
+            subject.marketId(),
+            subject.selectionId(),
+            subject.selectionSide(),
+            subject.strategyName(),
+            subject.firstSeenAt(),
+            subject.lastSeenAt(),
+            papers.size(),
+            reals.size(),
+            classification,
+            evidence.reason(),
+            evidence.evidence()
+        );
+    }
+
+    private EvidenceMatch evidenceFor(DivergenceSubject subject, String classification, List<DiagnosticsLogEvent> logEvents) {
+        List<DiagnosticsLogEvent> exactEvents = logEvents.stream()
+            .filter(event -> Objects.equals(event.recommendationId(), subject.recommendationId()))
+            .toList();
+        EvidenceMatch exact = classifyEvidence(subject, classification, exactEvents, DiagnosticsDataProvenance.STRUCTURED_LOGS);
+        if (exact != null) {
+            return exact;
+        }
+        List<DiagnosticsLogEvent> temporalEvents = logEvents.stream()
+            .filter(event -> isMissing(event.recommendationId()))
+            .filter(event -> sameMarketSelection(subject, event))
+            .filter(event -> withinDivergenceWindow(subject, event.timestamp()))
+            .toList();
+        EvidenceMatch temporal = classifyEvidence(subject, classification, temporalEvents, DiagnosticsDataProvenance.LEGACY_APPROXIMATION);
+        if (temporal != null) {
+            return temporal;
+        }
+        DiagnosticsRecommendationDivergenceReason reason = "PAPER_ONLY".equals(classification)
+            ? DiagnosticsRecommendationDivergenceReason.REAL_NOT_ATTEMPTED
+            : DiagnosticsRecommendationDivergenceReason.PAPER_NOT_CREATED;
+        String message = "PAPER_ONLY".equals(classification)
+            ? "No real-side evidence was found for this recommendation."
+            : "No paper-side evidence was found for this recommendation.";
+        return new EvidenceMatch(
+            reason,
+            List.of(new DiagnosticsRecommendationDivergenceEvidence(
+                "diagnostics.divergence",
+                subject.firstSeenAt(),
+                message,
+                DiagnosticsDataProvenance.DIAGNOSTICS,
+                subject.recommendationId()
+            ))
+        );
+    }
+
+    private static EvidenceMatch classifyEvidence(
+        DivergenceSubject subject,
+        String classification,
+        List<DiagnosticsLogEvent> events,
+        DiagnosticsDataProvenance source
+    ) {
+        for (DiagnosticsLogEvent event : events) {
+            DiagnosticsRecommendationDivergenceReason reason = "PAPER_ONLY".equals(classification)
+                ? realSideReason(event)
+                : paperSideReason(event);
+            if (reason != null) {
+                return new EvidenceMatch(
+                    reason,
+                    List.of(new DiagnosticsRecommendationDivergenceEvidence(
+                        event.eventName(),
+                        event.timestamp(),
+                        evidenceMessage(event),
+                        source,
+                        event.recommendationId() == null ? subject.recommendationId() : event.recommendationId()
+                    ))
+                );
+            }
+        }
+        return null;
+    }
+
+    private static DiagnosticsRecommendationDivergenceReason realSideReason(DiagnosticsLogEvent event) {
+        String reason = normalizeReason(event.reason());
+        if ("risk.blocked".equals(event.eventName())) {
+            if (reason.contains("max_open_positions")) {
+                return DiagnosticsRecommendationDivergenceReason.REAL_BLOCKED_BY_RISK_MAX_OPEN_POSITIONS;
+            }
+            if (reason.contains("daily_loss")) {
+                return DiagnosticsRecommendationDivergenceReason.REAL_BLOCKED_BY_RISK_DAILY_LOSS;
+            }
+        }
+        if ("bet_signal.skipped".equals(event.eventName()) && reason.contains("active_market_intent_exists")) {
+            return DiagnosticsRecommendationDivergenceReason.REAL_BLOCKED_BY_ACTIVE_MARKET_INTENT_EXISTS;
+        }
+        if ("bet_intent.skipped".equals(event.eventName())) {
+            if (reason.contains("duplicate_real_bet")) {
+                return DiagnosticsRecommendationDivergenceReason.REAL_BLOCKED_BY_DUPLICATE_GUARD;
+            }
+            if (reason.contains("disabled") || reason.contains("config")) {
+                return DiagnosticsRecommendationDivergenceReason.REAL_SKIPPED_BY_CONFIG;
+            }
+        }
+        if (reason.contains("confirmation")) {
+            return DiagnosticsRecommendationDivergenceReason.REAL_REJECTED_BY_CONFIRMATION;
+        }
+        if ("dependency.error".equals(event.eventName()) || "market.scan.failed".equals(event.eventName())) {
+            return DiagnosticsRecommendationDivergenceReason.REAL_DEPENDENCY_ERROR;
+        }
+        if ("order.rejected".equals(event.eventName()) || reason.contains("order_failed")) {
+            return DiagnosticsRecommendationDivergenceReason.REAL_ORDER_FAILED;
+        }
+        if (reason.contains("market_closed")) {
+            return DiagnosticsRecommendationDivergenceReason.MARKET_CLOSED_BEFORE_REAL;
+        }
+        return null;
+    }
+
+    private static DiagnosticsRecommendationDivergenceReason paperSideReason(DiagnosticsLogEvent event) {
+        String reason = normalizeReason(event.reason());
+        if ("paper_trade.execution_failed".equals(event.eventName())) {
+            return DiagnosticsRecommendationDivergenceReason.PAPER_EXECUTION_FAILED;
+        }
+        if ("market.scan.failed".equals(event.eventName())) {
+            return DiagnosticsRecommendationDivergenceReason.PAPER_MARKET_SCAN_FAILED;
+        }
+        if ("dependency.error".equals(event.eventName())) {
+            if (reason.contains("paper_settlement") || reason.contains("market_data")) {
+                return DiagnosticsRecommendationDivergenceReason.PAPER_SETTLEMENT_OR_MARKET_DATA_ERROR;
+            }
+            return DiagnosticsRecommendationDivergenceReason.PAPER_DEPENDENCY_ERROR;
+        }
+        if (reason.contains("disabled")) {
+            return DiagnosticsRecommendationDivergenceReason.PAPER_DISABLED;
+        }
+        if (reason.contains("dedup")) {
+            return DiagnosticsRecommendationDivergenceReason.PAPER_SKIPPED_BY_DEDUP;
+        }
+        if (reason.contains("market_closed")) {
+            return DiagnosticsRecommendationDivergenceReason.MARKET_CLOSED_BEFORE_PAPER;
+        }
+        return null;
+    }
+
+    private static String evidenceMessage(DiagnosticsLogEvent event) {
+        if (!isMissing(event.message())) {
+            return event.message();
+        }
+        if (!isMissing(event.reason())) {
+            return event.reason();
+        }
+        return event.eventName();
+    }
+
+    private static String normalizeReason(String reason) {
+        return reason == null ? "" : reason.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static boolean sameMarketSelection(DivergenceSubject subject, DiagnosticsLogEvent event) {
+        return Objects.equals(subject.exchange(), event.exchange())
+            && Objects.equals(subject.marketId(), event.marketId())
+            && subject.selectionId() == event.selectionId();
+    }
+
+    private static boolean withinDivergenceWindow(DivergenceSubject subject, Instant timestamp) {
+        if (timestamp == null || subject.firstSeenAt() == null || subject.lastSeenAt() == null) {
+            return false;
+        }
+        return !timestamp.isBefore(subject.firstSeenAt().minus(DIVERGENCE_LOG_WINDOW))
+            && !timestamp.isAfter(subject.lastSeenAt().plus(DIVERGENCE_LOG_WINDOW));
+    }
+
+    private static Map<DiagnosticsRecommendationDivergenceReason, Long> reasonBreakdown(
+        List<DiagnosticsRecommendationDivergenceExample> examples
+    ) {
+        return examples.stream()
+            .collect(Collectors.groupingBy(
+                DiagnosticsRecommendationDivergenceExample::reason,
+                java.util.LinkedHashMap::new,
+                Collectors.counting()
+            ));
+    }
+
     private static List<PaperTrade> filterPapersForPreview(List<PaperTrade> rows, Instant cutoff) {
         return rows.stream()
             .filter(row -> cutoff == null || row.recommendationTimestamp() == null || !row.recommendationTimestamp().isBefore(cutoff))
@@ -688,6 +941,404 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         return rows.stream()
             .filter(row -> cutoff == null || row.createdAt() == null || !row.createdAt().isBefore(cutoff))
             .toList();
+    }
+
+    private DiagnosticsStrategyPerformance strategyPerformance(
+        List<RealBetDiagnosticRow> realBets,
+        List<DiagnosticsMatch> matches
+    ) {
+        Map<String, String> matchingByRealId = matches.stream()
+            .filter(match -> match.realRecordedTimestamp() != null || match.realRecordedOdds() != null)
+            .collect(Collectors.toMap(
+                match -> match.marketId() + "|" + match.selectionId() + "|" + match.realRecordedTimestamp(),
+                match -> match.matchProvenance() == MatchProvenance.LEGACY_MARKET_SELECTION_TIME
+                    ? "legacy matched"
+                    : match.matchStatus().name().toLowerCase(java.util.Locale.ROOT).replace('_', '-'),
+                (left, right) -> left
+            ));
+        DiagnosticsStrategyPerformanceSegment allTime = performanceSegment("all-time", realBets);
+        List<DiagnosticsStrategyPerformanceSegment> scopes = List.of(
+            allTime,
+            performanceSegment("post-2.5", sinceFirstRecommendationId(realBets)),
+            performanceSegment("post-2.6", sinceFirstRecommendationId(realBets)),
+            performanceSegment("last 25 settled", lastSettled(realBets, 25)),
+            performanceSegment("last 50 settled", lastSettled(realBets, 50)),
+            performanceSegment("last 100 settled", lastSettled(realBets, 100))
+        );
+        return new DiagnosticsStrategyPerformance(
+            allTime,
+            scopes,
+            groupPerformance(realBets, row -> row.selectionSide().name()),
+            groupPerformance(realBets, row -> oddsBucket(effectiveOdds(row))),
+            groupPerformance(realBets, RealBetDiagnosticRow::competitionName),
+            groupPerformance(realBets, RealBetDiagnosticRow::strategyName),
+            groupPerformance(realBets, row -> row.createdAt() == null ? "UNKNOWN" : row.createdAt().atZone(ZoneOffset.UTC).toLocalDate().toString()),
+            groupPerformance(realBets, row -> row.createdAt() == null ? "UNKNOWN" : row.createdAt().atZone(ZoneOffset.UTC).getYear()
+                + "-" + "%02d".formatted(row.createdAt().atZone(ZoneOffset.UTC).getMonthValue())),
+            groupPerformance(realBets, row -> row.createdAt() == null ? "UNKNOWN" : "%02d:00".formatted(row.createdAt().atZone(ZoneOffset.UTC).getHour())),
+            Map.of("UNAVAILABLE", DiagnosticsStrategyPerformanceSegment.empty("UNAVAILABLE")),
+            Map.of("UNAVAILABLE", DiagnosticsStrategyPerformanceSegment.empty("UNAVAILABLE")),
+            groupPerformance(realBets, row -> matchingByRealId.getOrDefault(
+                row.marketId() + "|" + row.selectionId() + "|" + row.createdAt(),
+                isMissing(row.recommendationId()) ? "real-only" : "matched by recommendation_id preview"
+            )),
+            List.of(
+                "Real separated commission is not persisted in bet_intents; net PnL is SQLITE_EXACT and gross/commission are unavailable.",
+                "Real edge, confidence, liquidity, closing odds and CLV are not persisted for bet_intents, so those candidate filters are not simulated.",
+                "market_start_time is not persisted for bet_intents, so time-to-event buckets are unavailable for real-bet performance."
+            )
+        );
+    }
+
+    private DiagnosticsCandidateFilterSimulation candidateFilterSimulation(
+        List<RealBetDiagnosticRow> realBets,
+        DiagnosticsStrategyPerformanceSegment baseline
+    ) {
+        List<RealBetDiagnosticRow> settled = settledRealBets(realBets);
+        Set<String> negativeSides = negativeSegments(settled, row -> row.selectionSide().name());
+        Set<String> negativeOddsBuckets = negativeSegments(settled, row -> oddsBucket(effectiveOdds(row)));
+        List<CandidateFilter> filters = List.of(
+            new CandidateFilter("EXCLUDE_DRAW", row -> row.selectionSide() != SelectionSide.DRAW),
+            new CandidateFilter("EXCLUDE_AWAY", row -> row.selectionSide() != SelectionSide.AWAY),
+            new CandidateFilter("EXCLUDE_DRAW_AND_AWAY", row -> row.selectionSide() != SelectionSide.DRAW && row.selectionSide() != SelectionSide.AWAY),
+            new CandidateFilter("EXCLUDE_ODDS_5_PLUS", row -> lessThan(effectiveOdds(row), "5.00")),
+            new CandidateFilter("EXCLUDE_ODDS_4_PLUS", row -> lessThan(effectiveOdds(row), "4.00")),
+            new CandidateFilter("ONLY_HOME", row -> row.selectionSide() == SelectionSide.HOME),
+            new CandidateFilter("ONLY_ODDS_1_50_TO_3_99", row -> oddsBetween(row, "1.50", "3.99")),
+            new CandidateFilter("ONLY_ODDS_2_00_TO_3_99", row -> oddsBetween(row, "2.00", "3.99")),
+            new CandidateFilter("EXCLUDE_DRAW_AND_ODDS_4_PLUS", row -> row.selectionSide() != SelectionSide.DRAW && lessThan(effectiveOdds(row), "4.00")),
+            new CandidateFilter("EXCLUDE_NEGATIVE_SEGMENTS_CURRENT", row ->
+                !negativeSides.contains(row.selectionSide().name()) && !negativeOddsBuckets.contains(oddsBucket(effectiveOdds(row))))
+        );
+        List<DiagnosticsCandidateFilterResult> results = filters.stream()
+            .map(filter -> candidateFilterResult(filter, settled, baseline))
+            .toList();
+        return new DiagnosticsCandidateFilterSimulation(
+            baseline,
+            results,
+            top(results, Comparator.comparing(DiagnosticsCandidateFilterResult::deltaPnl, Comparator.nullsFirst(Comparator.naturalOrder())).reversed()),
+            top(results, Comparator.comparing(DiagnosticsCandidateFilterResult::includedRoi, Comparator.nullsFirst(Comparator.naturalOrder())).reversed()),
+            top(results, Comparator.comparing(
+                (DiagnosticsCandidateFilterResult result) -> subtract(result.baselineMaxDrawdown(), result.includedMaxDrawdown()),
+                Comparator.nullsFirst(Comparator.naturalOrder())
+            ).reversed()),
+            top(results.stream()
+                .filter(result -> result.status() == DiagnosticsCandidateFilterStatus.CANDIDATE
+                    || result.status() == DiagnosticsCandidateFilterStatus.WEAK_EVIDENCE)
+                .toList(), Comparator.comparing(DiagnosticsCandidateFilterResult::deltaPnl, Comparator.nullsFirst(Comparator.naturalOrder())).reversed()),
+            top(results, Comparator.comparing(DiagnosticsCandidateFilterResult::volumeRetentionPct, Comparator.nullsLast(Comparator.naturalOrder()))),
+            recommendation(results)
+        );
+    }
+
+    private DiagnosticsStrategyPerformanceSegment performanceSegment(String name, List<RealBetDiagnosticRow> rows) {
+        List<RealBetDiagnosticRow> settled = settledRealBets(rows);
+        BigDecimal turnover = sumReal(settled, this::stake);
+        BigDecimal netPnl = sumReal(settled, RealBetDiagnosticRow::realizedProfitLoss);
+        List<BigDecimal> odds = settled.stream().map(this::effectiveOdds).filter(Objects::nonNull).toList();
+        List<BigDecimal> stakes = settled.stream().map(this::stake).filter(Objects::nonNull).toList();
+        long wins = settled.stream().filter(row -> row.settlementResult() == BetSettlementResult.WIN).count();
+        long losses = settled.stream().filter(row -> row.settlementResult() == BetSettlementResult.LOSE).count();
+        long voids = settled.stream().filter(row -> row.settlementResult() == BetSettlementResult.VOID).count();
+        long decided = wins + losses;
+        BigDecimal strikeRate = decided == 0
+            ? null
+            : decimal(BigDecimal.valueOf(wins).divide(BigDecimal.valueOf(decided), SCALE + 2, RoundingMode.HALF_UP));
+        BigDecimal positive = sumReal(settled.stream()
+            .filter(row -> row.realizedProfitLoss() != null && row.realizedProfitLoss().compareTo(BigDecimal.ZERO) > 0)
+            .toList(), RealBetDiagnosticRow::realizedProfitLoss);
+        BigDecimal negative = sumReal(settled.stream()
+            .filter(row -> row.realizedProfitLoss() != null && row.realizedProfitLoss().compareTo(BigDecimal.ZERO) < 0)
+            .toList(), RealBetDiagnosticRow::realizedProfitLoss).abs();
+        BigDecimal averageWin = wins == 0 ? null : money(positive.divide(BigDecimal.valueOf(wins), SCALE + 2, RoundingMode.HALF_UP));
+        BigDecimal averageLoss = losses == 0 ? null : money(negative.divide(BigDecimal.valueOf(losses), SCALE + 2, RoundingMode.HALF_UP));
+        return new DiagnosticsStrategyPerformanceSegment(
+            name,
+            rows.size(),
+            settled.size(),
+            rows.stream().filter(row -> row.stage() != BetIntentStage.SETTLED).count(),
+            wins,
+            losses,
+            voids,
+            rows.stream().filter(row -> row.stage() == BetIntentStage.CANCELLED).count(),
+            strikeRate,
+            average(odds),
+            average(stakes) == null ? null : money(average(stakes)),
+            money(turnover),
+            null,
+            null,
+            money(netPnl),
+            rate(netPnl, turnover),
+            maxDrawdown(settled),
+            currentDrawdown(settled),
+            negative.compareTo(BigDecimal.ZERO) == 0 ? null : decimal(positive.divide(negative, SCALE + 2, RoundingMode.HALF_UP)),
+            averageWin,
+            averageLoss,
+            strikeRate == null || strikeRate.compareTo(BigDecimal.ZERO) == 0
+                ? null
+                : decimal(BigDecimal.ONE.divide(strikeRate, SCALE + 2, RoundingMode.HALF_UP))
+        );
+    }
+
+    private Map<String, DiagnosticsStrategyPerformanceSegment> groupPerformance(
+        List<RealBetDiagnosticRow> rows,
+        Function<RealBetDiagnosticRow, String> classifier
+    ) {
+        return rows.stream()
+            .collect(Collectors.groupingBy(
+                row -> {
+                    String value = classifier.apply(row);
+                    return value == null || value.isBlank() ? "UNKNOWN" : value;
+                },
+                LinkedHashMap::new,
+                Collectors.toList()
+            ))
+            .entrySet()
+            .stream()
+            .sorted(Map.Entry.comparingByKey())
+            .collect(Collectors.toMap(
+                Map.Entry::getKey,
+                entry -> performanceSegment(entry.getKey(), entry.getValue()),
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+    }
+
+    private DiagnosticsCandidateFilterResult candidateFilterResult(
+        CandidateFilter filter,
+        List<RealBetDiagnosticRow> settled,
+        DiagnosticsStrategyPerformanceSegment baseline
+    ) {
+        List<RealBetDiagnosticRow> included = settled.stream().filter(filter.predicate()).toList();
+        List<RealBetDiagnosticRow> excluded = settled.stream().filter(filter.predicate().negate()).toList();
+        DiagnosticsStrategyPerformanceSegment includedMetrics = performanceSegment(filter.name(), included);
+        BigDecimal volumeRetention = baseline.settled() == 0
+            ? null
+            : decimal(BigDecimal.valueOf(includedMetrics.settled())
+                .multiply(BigDecimal.valueOf(100))
+                .divide(BigDecimal.valueOf(baseline.settled()), SCALE + 2, RoundingMode.HALF_UP));
+        BigDecimal deltaPnl = subtract(includedMetrics.netPnl(), baseline.netPnl());
+        BigDecimal deltaRoi = subtract(includedMetrics.roi(), baseline.roi());
+        DiagnosticsCandidateFilterStatus status = candidateStatus(includedMetrics, baseline, deltaPnl, deltaRoi, volumeRetention);
+        return new DiagnosticsCandidateFilterResult(
+            filter.name(),
+            "all-time",
+            baseline.settled(),
+            includedMetrics.settled(),
+            excluded.size(),
+            includedMetrics.turnover(),
+            money(sumReal(excluded, this::stake)),
+            includedMetrics.strikeRate(),
+            includedMetrics.averageOdds(),
+            includedMetrics.netPnl(),
+            includedMetrics.roi(),
+            includedMetrics.maxDrawdown(),
+            baseline.netPnl(),
+            baseline.roi(),
+            baseline.maxDrawdown(),
+            deltaPnl,
+            deltaRoi,
+            volumeRetention,
+            status,
+            riskNote(status, includedMetrics),
+            sampleWarning(includedMetrics)
+        );
+    }
+
+    private DiagnosticsCandidateFilterStatus candidateStatus(
+        DiagnosticsStrategyPerformanceSegment included,
+        DiagnosticsStrategyPerformanceSegment baseline,
+        BigDecimal deltaPnl,
+        BigDecimal deltaRoi,
+        BigDecimal volumeRetention
+    ) {
+        if (included.settled() < 10) {
+            return DiagnosticsCandidateFilterStatus.INSUFFICIENT_SAMPLE;
+        }
+        if (deltaPnl == null || deltaRoi == null || deltaPnl.compareTo(BigDecimal.ZERO) <= 0 || deltaRoi.compareTo(BigDecimal.ZERO) <= 0) {
+            return DiagnosticsCandidateFilterStatus.REJECTED;
+        }
+        if (volumeRetention == null || volumeRetention.compareTo(BigDecimal.valueOf(50)) < 0) {
+            return DiagnosticsCandidateFilterStatus.OVERFIT_RISK;
+        }
+        if (included.settled() < 30) {
+            return DiagnosticsCandidateFilterStatus.WEAK_EVIDENCE;
+        }
+        BigDecimal drawdownDelta = subtract(baseline.maxDrawdown(), included.maxDrawdown());
+        if (drawdownDelta != null && drawdownDelta.compareTo(BigDecimal.ZERO) < 0) {
+            return DiagnosticsCandidateFilterStatus.WEAK_EVIDENCE;
+        }
+        return DiagnosticsCandidateFilterStatus.CANDIDATE;
+    }
+
+    private static String riskNote(DiagnosticsCandidateFilterStatus status, DiagnosticsStrategyPerformanceSegment included) {
+        return switch (status) {
+            case CANDIDATE -> "Diagnostics-only candidate; validate on more prospective sample before live use.";
+            case WEAK_EVIDENCE -> "Improves historical metrics but evidence is still weak or drawdown is not clearly better.";
+            case INSUFFICIENT_SAMPLE -> "Sample too small for statistical confidence.";
+            case OVERFIT_RISK -> "Volume retained is too low; high overfit risk.";
+            case REJECTED -> "Does not improve both PnL and ROI against baseline.";
+        } + " Observations: " + included.settled() + ".";
+    }
+
+    private static String sampleWarning(DiagnosticsStrategyPerformanceSegment included) {
+        if (included.settled() < 10) {
+            return "sample size too small";
+        }
+        if (included.settled() < 30) {
+            return "sample still small";
+        }
+        return "";
+    }
+
+    private DiagnosticsStrategyExperimentRecommendation recommendation(List<DiagnosticsCandidateFilterResult> results) {
+        return results.stream()
+            .filter(result -> result.status() == DiagnosticsCandidateFilterStatus.CANDIDATE
+                || result.status() == DiagnosticsCandidateFilterStatus.WEAK_EVIDENCE)
+            .max(Comparator.comparing(DiagnosticsCandidateFilterResult::deltaPnl, Comparator.nullsFirst(Comparator.naturalOrder())))
+            .map(result -> new DiagnosticsStrategyExperimentRecommendation(
+                result.filterName(),
+                "Best conservative diagnostics-only delta PnL among non-rejected filters.",
+                "delta_pnl=" + result.deltaPnl() + ", delta_roi=" + result.deltaRoi() + ", observations=" + result.includedBets(),
+                result.riskNote(),
+                false
+            ))
+            .orElseGet(DiagnosticsStrategyExperimentRecommendation::none);
+    }
+
+    private static List<DiagnosticsCandidateFilterResult> top(
+        List<DiagnosticsCandidateFilterResult> results,
+        Comparator<DiagnosticsCandidateFilterResult> comparator
+    ) {
+        return results.stream().sorted(comparator).limit(3).toList();
+    }
+
+    private Set<String> negativeSegments(List<RealBetDiagnosticRow> rows, Function<RealBetDiagnosticRow, String> classifier) {
+        return groupPerformance(rows, classifier).entrySet().stream()
+            .filter(entry -> entry.getValue().roi() != null && entry.getValue().roi().compareTo(BigDecimal.ZERO) < 0)
+            .map(Map.Entry::getKey)
+            .collect(Collectors.toSet());
+    }
+
+    private List<RealBetDiagnosticRow> sinceFirstRecommendationId(List<RealBetDiagnosticRow> rows) {
+        Instant cutoff = rows.stream()
+            .filter(row -> !isMissing(row.recommendationId()))
+            .map(RealBetDiagnosticRow::createdAt)
+            .filter(Objects::nonNull)
+            .min(Instant::compareTo)
+            .orElse(null);
+        return cutoff == null
+            ? List.of()
+            : rows.stream().filter(row -> row.createdAt() == null || !row.createdAt().isBefore(cutoff)).toList();
+    }
+
+    private List<RealBetDiagnosticRow> lastSettled(List<RealBetDiagnosticRow> rows, int limit) {
+        List<RealBetDiagnosticRow> settled = settledRealBets(rows).stream()
+            .sorted(Comparator.comparing(RealBetDiagnosticRow::settledAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(RealBetDiagnosticRow::createdAt, Comparator.nullsLast(Comparator.naturalOrder())))
+            .toList();
+        int from = Math.max(0, settled.size() - limit);
+        return settled.subList(from, settled.size());
+    }
+
+    private static List<RealBetDiagnosticRow> settledRealBets(List<RealBetDiagnosticRow> rows) {
+        return rows.stream().filter(RealBetDiagnosticRow::settledWithPnl).toList();
+    }
+
+    private BigDecimal stake(RealBetDiagnosticRow row) {
+        if (row.matchedStake() != null && row.matchedStake().compareTo(BigDecimal.ZERO) > 0) {
+            return row.matchedStake();
+        }
+        if (row.requestedStake() != null) {
+            return row.requestedStake();
+        }
+        return row.selectedStake();
+    }
+
+    private BigDecimal effectiveOdds(RealBetDiagnosticRow row) {
+        if (row.averageExecutedOdds() != null) {
+            return row.averageExecutedOdds();
+        }
+        if (row.requestedOdds() != null) {
+            return row.requestedOdds();
+        }
+        return row.recordedOdds();
+    }
+
+    private static boolean oddsBetween(RealBetDiagnosticRow row, String min, String max) {
+        BigDecimal odds = row.averageExecutedOdds() != null
+            ? row.averageExecutedOdds()
+            : row.requestedOdds() != null ? row.requestedOdds() : row.recordedOdds();
+        return odds != null
+            && odds.compareTo(new BigDecimal(min)) >= 0
+            && odds.compareTo(new BigDecimal(max)) <= 0;
+    }
+
+    private static boolean lessThan(BigDecimal value, String limit) {
+        return value != null && value.compareTo(new BigDecimal(limit)) < 0;
+    }
+
+    private static String oddsBucket(BigDecimal odds) {
+        if (odds == null) {
+            return "UNKNOWN";
+        }
+        if (odds.compareTo(new BigDecimal("1.50")) < 0) {
+            return "1.00-1.49";
+        }
+        if (odds.compareTo(new BigDecimal("2.00")) < 0) {
+            return "1.50-1.99";
+        }
+        if (odds.compareTo(new BigDecimal("2.50")) < 0) {
+            return "2.00-2.49";
+        }
+        if (odds.compareTo(new BigDecimal("3.00")) < 0) {
+            return "2.50-2.99";
+        }
+        if (odds.compareTo(new BigDecimal("4.00")) < 0) {
+            return "3.00-3.99";
+        }
+        if (odds.compareTo(new BigDecimal("5.00")) < 0) {
+            return "4.00-4.99";
+        }
+        return "5.00+";
+    }
+
+    private static BigDecimal maxDrawdown(List<RealBetDiagnosticRow> settled) {
+        BigDecimal peak = BigDecimal.ZERO;
+        BigDecimal equity = BigDecimal.ZERO;
+        BigDecimal maxDrawdown = BigDecimal.ZERO;
+        for (RealBetDiagnosticRow row : settled.stream()
+            .sorted(Comparator.comparing(RealBetDiagnosticRow::settledAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(RealBetDiagnosticRow::createdAt, Comparator.nullsLast(Comparator.naturalOrder())))
+            .toList()) {
+            equity = equity.add(row.realizedProfitLoss() == null ? BigDecimal.ZERO : row.realizedProfitLoss());
+            if (equity.compareTo(peak) > 0) {
+                peak = equity;
+            }
+            BigDecimal drawdown = peak.subtract(equity);
+            if (drawdown.compareTo(maxDrawdown) > 0) {
+                maxDrawdown = drawdown;
+            }
+        }
+        return money(maxDrawdown);
+    }
+
+    private static BigDecimal currentDrawdown(List<RealBetDiagnosticRow> settled) {
+        BigDecimal peak = BigDecimal.ZERO;
+        BigDecimal equity = BigDecimal.ZERO;
+        for (RealBetDiagnosticRow row : settled.stream()
+            .sorted(Comparator.comparing(RealBetDiagnosticRow::settledAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(RealBetDiagnosticRow::createdAt, Comparator.nullsLast(Comparator.naturalOrder())))
+            .toList()) {
+            equity = equity.add(row.realizedProfitLoss() == null ? BigDecimal.ZERO : row.realizedProfitLoss());
+            if (equity.compareTo(peak) > 0) {
+                peak = equity;
+            }
+        }
+        return money(peak.subtract(equity));
+    }
+
+    private record CandidateFilter(String name, Predicate<RealBetDiagnosticRow> predicate) {
     }
 
     private DiagnosticsPersistedExecutionCoverage persistedExecutionCoverage(List<RealBetDiagnosticRow> realBets) {
@@ -905,10 +1556,33 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         DiagnosticsCoverage coverage,
         DiagnosticsPaperVsRealMetrics paperVsReal,
         DiagnosticsExecutionMetrics execution,
+        DiagnosticsStrategyPerformance strategyPerformance,
+        DiagnosticsCandidateFilterSimulation candidateFilterSimulation,
         List<DiagnosticFinding> findings
     ) {
         List<String> values = new ArrayList<>();
         values.add("Matched paper-real pairs: " + coverage.matchedPairs() + " observations.");
+        DiagnosticsStrategyPerformanceSegment allTime = strategyPerformance.allTime();
+        values.add("Strategy all-time settled sample: "
+            + allTime.settled()
+            + " observations, win rate "
+            + allTime.strikeRate()
+            + ", average odds "
+            + allTime.averageOdds()
+            + ", break-even odds "
+            + allTime.expectedBreakEvenOdds()
+            + ".");
+        candidateFilterSimulation.bestDeltaPnl().stream().findFirst().ifPresent(result -> values.add(
+            "Best candidate filter by historical delta PnL is "
+                + result.filterName()
+                + " with delta "
+                + result.deltaPnl()
+                + " across "
+                + result.includedBets()
+                + " included settled observations; status "
+                + result.status()
+                + "."
+        ));
         if (paperVsReal.averageRealVsPaperOddsDifference() != null) {
             values.add("Average real recorded vs paper odds difference is "
                 + paperVsReal.averageRealVsPaperOddsDifference()
@@ -1124,6 +1798,75 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
     private record PreviewPair(String paperId, String realId, String marketId, Long selectionId) {
         private static PreviewPair of(PaperTrade paper, RealBetDiagnosticRow real) {
             return new PreviewPair(paper.id(), real.id(), real.marketId(), real.selectionId());
+        }
+    }
+
+    private record EvidenceMatch(
+        DiagnosticsRecommendationDivergenceReason reason,
+        List<DiagnosticsRecommendationDivergenceEvidence> evidence
+    ) {
+    }
+
+    private record DivergenceSubject(
+        String recommendationId,
+        String canonicalKey,
+        String exchange,
+        String marketId,
+        long selectionId,
+        String eventName,
+        String runnerName,
+        String selectionSide,
+        String strategyName,
+        Instant firstSeenAt,
+        Instant lastSeenAt
+    ) {
+        private static DivergenceSubject from(
+            String recommendationId,
+            List<PaperTrade> papers,
+            List<RealBetDiagnosticRow> reals
+        ) {
+            RealBetDiagnosticRow real = reals.isEmpty() ? null : reals.getFirst();
+            PaperTrade paper = papers.isEmpty() ? null : papers.getFirst();
+            String exchange = real == null ? paper.exchange() : real.exchange();
+            String marketId = real == null ? paper.marketId() : real.marketId();
+            long selectionId = real == null ? paper.selectionId() : real.selectionId();
+            String side = real == null ? "UNKNOWN" : real.selectionSide().name();
+            String strategy = real == null ? "value-football" : real.strategyName();
+            Instant firstSeen = firstSeen(papers, reals);
+            Instant lastSeen = lastSeen(papers, reals);
+            return new DivergenceSubject(
+                recommendationId,
+                BetRecommendation.canonicalKey(exchange, marketId, selectionId, real == null ? SelectionSide.UNKNOWN : real.selectionSide(), strategy),
+                exchange,
+                marketId,
+                selectionId,
+                real == null ? paper.eventName() : real.eventName(),
+                real == null ? paper.runnerName() : real.runnerName(),
+                side,
+                strategy,
+                firstSeen,
+                lastSeen == null ? firstSeen : lastSeen
+            );
+        }
+
+        private static Instant firstSeen(List<PaperTrade> papers, List<RealBetDiagnosticRow> reals) {
+            return java.util.stream.Stream.concat(
+                    papers.stream().map(PaperTrade::recommendationTimestamp),
+                    reals.stream().map(RealBetDiagnosticRow::createdAt)
+                )
+                .filter(Objects::nonNull)
+                .min(Instant::compareTo)
+                .orElse(null);
+        }
+
+        private static Instant lastSeen(List<PaperTrade> papers, List<RealBetDiagnosticRow> reals) {
+            return java.util.stream.Stream.concat(
+                    papers.stream().map(PaperTrade::recommendationTimestamp),
+                    reals.stream().map(RealBetDiagnosticRow::createdAt)
+                )
+                .filter(Objects::nonNull)
+                .max(Instant::compareTo)
+                .orElse(null);
         }
     }
 }

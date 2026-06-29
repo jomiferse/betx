@@ -946,6 +946,7 @@ public class RunPaperTradingService {
             .field("paperTradeId", trade.id())
             .field("status", trade.status())
             .field("runner", trade.runnerName())
+            .field("recommendationId", trade.recommendationId())
             .field("stake", trade.stake())
             .field("requestedOdds", trade.requestedOdds())
             .field("matched", trade.matched());

@@ -154,6 +154,8 @@ public class DiagnosticsFormatter {
         lines.add("");
         addRecommendationIdMatchingPreview(lines, report.recommendationIdMatchingPreview());
         lines.add("");
+        addRecommendationDivergenceAnalysis(lines, report.recommendationDivergenceAnalysis());
+        lines.add("");
         lines.add("Matching gaps");
         if (report.matchingGaps().isEmpty()) {
             lines.add(line("None", 0));
@@ -267,6 +269,10 @@ public class DiagnosticsFormatter {
         lines.add(line("Partially matched", cohort.partiallyMatched()));
         lines.add(line("Unmatched", cohort.unmatched()));
         lines.add("");
+        addStrategyPerformance(lines, report.strategyPerformance());
+        lines.add("");
+        addCandidateFilterSimulation(lines, report.candidateFilterSimulation());
+        lines.add("");
         lines.add("Paper vs real");
         lines.add(line("Settled matched pairs", report.paperVsRealMetrics().settledMatchedPairs()));
         lines.add(line("Average real vs paper odds difference", number(report.paperVsRealMetrics().averageRealVsPaperOddsDifference())));
@@ -360,6 +366,187 @@ public class DiagnosticsFormatter {
         lines.add(line("Legacy paper-only but recommendation matched", comparison.legacyPaperOnlyButRecommendationMatched()));
         lines.add(line("Legacy ambiguous resolved by recommendation-id", comparison.legacyAmbiguousResolvedByRecommendationId()));
         lines.add(line("Recommendation ambiguous but legacy matched", comparison.recommendationAmbiguousButLegacyMatched()));
+    }
+
+    private static void addRecommendationDivergenceAnalysis(
+        List<String> lines,
+        DiagnosticsRecommendationDivergenceAnalysis analysis
+    ) {
+        lines.add("Recommendation divergence analysis");
+        lines.add(line("Paper-only recommendations", analysis.paperOnlyRecommendations()));
+        lines.add(line("Real-only recommendations", analysis.realOnlyRecommendations()));
+        lines.add(line("Ambiguous recommendations", analysis.ambiguousRecommendations()));
+        lines.add(line("Unknown paper-only", analysis.unknownPaperOnly()));
+        lines.add(line("Unknown real-only", analysis.unknownRealOnly()));
+        addReasonBreakdown(lines, "Paper-only reason breakdown", analysis.paperOnlyReasonBreakdown());
+        addReasonBreakdown(lines, "Real-only reason breakdown", analysis.realOnlyReasonBreakdown());
+        addDivergenceExamples(lines, "Top paper-only examples", analysis.topPaperOnlyExamples());
+        addDivergenceExamples(lines, "Top real-only examples", analysis.topRealOnlyExamples());
+    }
+
+    private static void addReasonBreakdown(
+        List<String> lines,
+        String title,
+        java.util.Map<DiagnosticsRecommendationDivergenceReason, Long> breakdown
+    ) {
+        lines.add(title + ":");
+        if (breakdown.isEmpty()) {
+            lines.add(line("None", 0));
+            return;
+        }
+        breakdown.forEach((reason, count) -> lines.add(line(reason.name(), count)));
+    }
+
+    private static void addDivergenceExamples(
+        List<String> lines,
+        String title,
+        List<DiagnosticsRecommendationDivergenceExample> examples
+    ) {
+        lines.add(title + ":");
+        if (examples.isEmpty()) {
+            lines.add(line("None", 0));
+            return;
+        }
+        examples.forEach(example -> lines.add("- "
+            + text(example.recommendationId())
+            + " | "
+            + text(example.eventName())
+            + " / "
+            + text(example.runnerName())
+            + " | "
+            + example.classification()
+            + " | reason "
+            + example.reason()
+            + " | evidence "
+            + evidenceSummary(example.evidence())));
+    }
+
+    private static void addStrategyPerformance(List<String> lines, DiagnosticsStrategyPerformance performance) {
+        DiagnosticsStrategyPerformanceSegment allTime = performance.allTime();
+        lines.add("Strategy performance diagnostics");
+        lines.add(line("Scope", allTime.name()));
+        lines.add(line("Bets", allTime.bets()));
+        lines.add(line("Settled", allTime.settled()));
+        lines.add(line("Open", allTime.open()));
+        lines.add(line("Wins", allTime.wins()));
+        lines.add(line("Losses", allTime.losses()));
+        lines.add(line("Voids/cancelled", allTime.voids() + "/" + allTime.cancelled()));
+        lines.add(line("Win rate", number(allTime.strikeRate())));
+        lines.add(line("Average odds", number(allTime.averageOdds())));
+        lines.add(line("Average stake", money(allTime.averageStake())));
+        lines.add(line("Turnover", money(allTime.turnover())));
+        lines.add(line("Net PnL", money(allTime.netPnl())));
+        lines.add(line("ROI", number(allTime.roi())));
+        lines.add(line("Max drawdown", money(allTime.maxDrawdown())));
+        lines.add(line("Current drawdown", money(allTime.currentDrawdown())));
+        lines.add(line("Profit factor", number(allTime.profitFactor())));
+        lines.add(line("Average win", money(allTime.averageWin())));
+        lines.add(line("Average loss", money(allTime.averageLoss())));
+        lines.add(line("Expected break-even odds", number(allTime.expectedBreakEvenOdds())));
+        addPerformanceMap(lines, "By selection_side", performance.bySelectionSide());
+        addPerformanceMap(lines, "By odds range", performance.byOddsRange());
+        addPerformanceMap(lines, "By competition", performance.byCompetition());
+        addPerformanceMap(lines, "By strategy_name", performance.byStrategy());
+        if (!performance.unavailableMetrics().isEmpty()) {
+            lines.add("Unavailable metrics:");
+            performance.unavailableMetrics().forEach(value -> lines.add("- " + value));
+        }
+    }
+
+    private static void addCandidateFilterSimulation(
+        List<String> lines,
+        DiagnosticsCandidateFilterSimulation simulation
+    ) {
+        lines.add("Candidate filter simulation");
+        lines.add("Baseline:");
+        lines.add(line("settled", simulation.baseline().settled()));
+        lines.add(line("pnl", money(simulation.baseline().netPnl())));
+        lines.add(line("roi", number(simulation.baseline().roi())));
+        lines.add("Filters:");
+        if (simulation.results().isEmpty()) {
+            lines.add(line("None", 0));
+        } else {
+            simulation.results().forEach(result -> lines.add("- "
+                + result.filterName()
+                + " | included settled "
+                + result.includedBets()
+                + " | excluded settled "
+                + result.excludedBets()
+                + " | pnl "
+                + money(result.includedNetPnl())
+                + " | roi "
+                + number(result.includedRoi())
+                + " | delta pnl "
+                + money(result.deltaPnl())
+                + " | volume retention "
+                + number(result.volumeRetentionPct())
+                + "%"
+                + " | status "
+                + result.status()
+                + (result.sampleWarning() == null || result.sampleWarning().isBlank() ? "" : " | warning " + result.sampleWarning())));
+        }
+        addFilterRanking(lines, "Best delta PnL", simulation.bestDeltaPnl());
+        addFilterRanking(lines, "Best ROI", simulation.bestRoi());
+        addFilterRanking(lines, "Best drawdown reduction", simulation.bestDrawdownReduction());
+        addFilterRanking(lines, "Best risk-adjusted candidate", simulation.bestRiskAdjustedCandidates());
+        addFilterRanking(lines, "Worst volume loss", simulation.worstVolumeLoss());
+        DiagnosticsStrategyExperimentRecommendation recommendation = simulation.recommendation();
+        lines.add("Recommended next experiment");
+        lines.add(line("filter", recommendation.filterName()));
+        lines.add(line("reason", recommendation.reason()));
+        lines.add(line("evidence", recommendation.evidence()));
+        lines.add(line("risk", recommendation.risk()));
+        lines.add(line("should_apply_live", recommendation.shouldApplyLive() ? "yes" : "no"));
+    }
+
+    private static void addPerformanceMap(
+        List<String> lines,
+        String title,
+        java.util.Map<String, DiagnosticsStrategyPerformanceSegment> segments
+    ) {
+        lines.add(title + ":");
+        if (segments.isEmpty()) {
+            lines.add("- None: 0");
+            return;
+        }
+        segments.forEach((name, segment) -> lines.add("- "
+            + text(name)
+            + " | settled "
+            + segment.settled()
+            + " | pnl "
+            + money(segment.netPnl())
+            + " | roi "
+            + number(segment.roi())
+            + " | avg odds "
+            + number(segment.averageOdds())));
+    }
+
+    private static void addFilterRanking(
+        List<String> lines,
+        String title,
+        List<DiagnosticsCandidateFilterResult> results
+    ) {
+        lines.add(title + ":");
+        if (results.isEmpty()) {
+            lines.add("- None: 0");
+            return;
+        }
+        results.forEach(result -> lines.add("- "
+            + result.filterName()
+            + " | delta pnl "
+            + money(result.deltaPnl())
+            + " | roi "
+            + number(result.includedRoi())
+            + " | status "
+            + result.status()));
+    }
+
+    private static String evidenceSummary(List<DiagnosticsRecommendationDivergenceEvidence> evidence) {
+        if (evidence.isEmpty()) {
+            return "N/A";
+        }
+        DiagnosticsRecommendationDivergenceEvidence first = evidence.getFirst();
+        return first.source() + ":" + text(first.eventName()) + ":" + text(first.message());
     }
 
     private static String line(String label, Object value) {

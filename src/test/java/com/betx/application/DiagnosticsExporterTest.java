@@ -43,6 +43,17 @@ class DiagnosticsExporterTest {
             .contains("\"enabledAsOfficialMatching\" : false")
             .contains("\"recommendationIdPairs\" : 1")
             .contains("\"legacyComparison\"")
+            .contains("\"recommendationDivergenceAnalysis\"")
+            .contains("\"paperOnlyReasonBreakdown\"")
+            .contains("\"realOnlyReasonBreakdown\"")
+            .contains("\"reason\" : \"REAL_NOT_ATTEMPTED\"")
+            .contains("\"evidence\"")
+            .contains("\"source\" : \"DIAGNOSTICS\"")
+            .contains("\"strategyPerformance\"")
+            .contains("\"candidateFilterSimulation\"")
+            .contains("\"bySelectionSide\"")
+            .contains("\"filterName\" : \"EXCLUDE_DRAW\"")
+            .contains("\"shouldApplyLive\" : false")
             .contains("\"paperTradesLinkedToExpiredRecommendations\"")
             .doesNotContain("token")
             .doesNotContain("password")
@@ -177,6 +188,115 @@ class DiagnosticsExporterTest {
                     new DiagnosticsRecommendationLegacyComparison(1, 1, 1, 0, 0, 0, 0, 0, 0, 0)
                 ),
                 DiagnosticsRecommendationIdMatchingScope.empty()
+            ),
+            new DiagnosticsRecommendationDivergenceAnalysis(
+                1,
+                0,
+                0,
+                java.util.Map.of(DiagnosticsRecommendationDivergenceReason.REAL_NOT_ATTEMPTED, 1L),
+                java.util.Map.of(),
+                0,
+                0,
+                List.of(new DiagnosticsRecommendationDivergenceExample(
+                    "rec-paper-only",
+                    "betfair|m2|20|DRAW|value-football",
+                    "A v B",
+                    "Draw",
+                    "m2",
+                    20L,
+                    "DRAW",
+                    "value-football",
+                    Instant.parse("2026-06-01T10:00:00Z"),
+                    Instant.parse("2026-06-01T10:00:00Z"),
+                    1,
+                    0,
+                    "PAPER_ONLY",
+                    DiagnosticsRecommendationDivergenceReason.REAL_NOT_ATTEMPTED,
+                    List.of(new DiagnosticsRecommendationDivergenceEvidence(
+                        "diagnostics.divergence",
+                        Instant.parse("2026-06-01T10:00:00Z"),
+                        "No real-side evidence was found for this recommendation.",
+                        DiagnosticsModel.DiagnosticsDataProvenance.DIAGNOSTICS,
+                        "rec-paper-only"
+                    ))
+                )),
+                List.of()
+            ),
+            new DiagnosticsStrategyPerformance(
+                new DiagnosticsStrategyPerformanceSegment(
+                    "all-time",
+                    2,
+                    2,
+                    0,
+                    1,
+                    1,
+                    0,
+                    0,
+                    new BigDecimal("0.50000000"),
+                    new BigDecimal("2.50000000"),
+                    new BigDecimal("10.00"),
+                    new BigDecimal("20.00"),
+                    null,
+                    null,
+                    BigDecimal.ZERO.setScale(2),
+                    BigDecimal.ZERO.setScale(8),
+                    new BigDecimal("10.00"),
+                    new BigDecimal("10.00"),
+                    BigDecimal.ONE.setScale(8),
+                    new BigDecimal("10.00"),
+                    new BigDecimal("10.00"),
+                    new BigDecimal("2.00000000")
+                ),
+                List.of(),
+                java.util.Map.of("DRAW", DiagnosticsStrategyPerformanceSegment.empty("DRAW")),
+                java.util.Map.of("2.00-2.49", DiagnosticsStrategyPerformanceSegment.empty("2.00-2.49")),
+                java.util.Map.of(),
+                java.util.Map.of(),
+                java.util.Map.of(),
+                java.util.Map.of(),
+                java.util.Map.of(),
+                java.util.Map.of(),
+                java.util.Map.of(),
+                java.util.Map.of(),
+                List.of("edge/confidence/liquidity unavailable")
+            ),
+            new DiagnosticsCandidateFilterSimulation(
+                DiagnosticsStrategyPerformanceSegment.empty("baseline"),
+                List.of(new DiagnosticsCandidateFilterResult(
+                    "EXCLUDE_DRAW",
+                    "all-time",
+                    2,
+                    1,
+                    1,
+                    new BigDecimal("10.00"),
+                    new BigDecimal("10.00"),
+                    BigDecimal.ONE.setScale(8),
+                    new BigDecimal("2.00000000"),
+                    new BigDecimal("10.00"),
+                    BigDecimal.ONE.setScale(8),
+                    BigDecimal.ZERO.setScale(2),
+                    BigDecimal.ZERO.setScale(2),
+                    BigDecimal.ZERO.setScale(8),
+                    new BigDecimal("10.00"),
+                    new BigDecimal("10.00"),
+                    BigDecimal.ONE.setScale(8),
+                    new BigDecimal("50.00000000"),
+                    DiagnosticsCandidateFilterStatus.INSUFFICIENT_SAMPLE,
+                    "Sample too small for statistical confidence. Observations: 1.",
+                    "sample size too small"
+                )),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                new DiagnosticsStrategyExperimentRecommendation(
+                    "EXCLUDE_DRAW",
+                    "diagnostics-only",
+                    "sample",
+                    "risk",
+                    false
+                )
             )
         );
     }

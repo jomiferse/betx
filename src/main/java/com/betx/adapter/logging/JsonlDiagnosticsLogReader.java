@@ -1,6 +1,7 @@
 package com.betx.adapter.logging;
 
 import com.betx.application.DiagnosticsLogReader;
+import com.betx.application.DiagnosticsLogEvent;
 import com.betx.application.DiagnosticsLogSummary;
 import com.betx.application.DiagnosticsSkippedMarket;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -40,6 +41,7 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
         Map<String, Instant> submittedByExternalOrderId = new HashMap<>();
         Map<String, Duration> acceptedLatenciesByExternalOrderId = new HashMap<>();
         Map<String, SkippedMarketAccumulator> skippedMarkets = new HashMap<>();
+        List<DiagnosticsLogEvent> diagnosticEvents = new ArrayList<>();
         List<String> limitations = new ArrayList<>();
         long invalidLines = 0;
         long ignoredLines = 0;
@@ -66,6 +68,9 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
                             skippedMarkets.computeIfAbsent(event.skipKey(), ignored -> new SkippedMarketAccumulator(event))
                                 .increment();
                         }
+                        if (isDiagnosticEvent(event.event())) {
+                            diagnosticEvents.add(event.toDiagnosticEvent());
+                        }
                         String externalOrderId = event.externalOrderId();
                         if (externalOrderId == null) {
                             continue;
@@ -90,7 +95,8 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
             topSkippedMarkets(skippedMarkets),
             invalidLines,
             ignoredLines,
-            limitations
+            limitations,
+            diagnosticEvents
         );
     }
 
@@ -112,9 +118,15 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
                 String.valueOf(event),
                 externalOrderId(json, fields),
                 string(fields.get("reason")),
+                string(fields.get("message")),
+                string(fields.get("resultMessage")),
+                string(json.get("exchange")),
                 string(json.get("marketId")),
                 longValue(json.get("selectionId")),
-                string(fields.get("side")),
+                coalesce(string(fields.get("side")), string(json.get("side"))),
+                coalesce(string(fields.get("strategyName")), string(json.get("strategy"))),
+                string(fields.get("recommendationId")),
+                string(fields.get("canonicalKey")),
                 string(fields.get("existingBetIntentId")),
                 string(fields.get("eventName")),
                 string(fields.get("runnerName")),
@@ -123,6 +135,21 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
         } catch (RuntimeException | IOException exc) {
             return null;
         }
+    }
+
+    private static boolean isDiagnosticEvent(String event) {
+        return List.of(
+            "risk.blocked",
+            "bet_intent.skipped",
+            "bet_signal.skipped",
+            "paper_trade.execution_failed",
+            "dependency.error",
+            "market.scan.failed",
+            "order.rejected",
+            "order.response",
+            "order.submitted",
+            "order.accepted"
+        ).contains(event);
     }
 
     private static List<DiagnosticsSkippedMarket> topSkippedMarkets(Map<String, SkippedMarketAccumulator> skippedMarkets) {
@@ -154,6 +181,10 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
         return null;
     }
 
+    private static String coalesce(String first, String second) {
+        return first == null ? second : first;
+    }
+
     private static long longValue(Object value) {
         if (value instanceof Number number) {
             return number.longValue();
@@ -176,9 +207,15 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
         String event,
         String externalOrderId,
         String reason,
+        String message,
+        String resultMessage,
+        String exchange,
         String marketId,
         long selectionId,
         String side,
+        String strategyName,
+        String recommendationId,
+        String canonicalKey,
         String existingBetIntentId,
         String eventName,
         String runnerName,
@@ -191,6 +228,28 @@ public class JsonlDiagnosticsLogReader implements DiagnosticsLogReader {
                 Long.toString(selectionId),
                 side == null ? "" : side,
                 existingBetIntentId == null ? "" : existingBetIntentId
+            );
+        }
+
+        private DiagnosticsLogEvent toDiagnosticEvent() {
+            String evidenceMessage = resultMessage == null ? message : resultMessage;
+            if (evidenceMessage == null) {
+                evidenceMessage = reason;
+            }
+            return new DiagnosticsLogEvent(
+                timestamp,
+                event,
+                recommendationId,
+                canonicalKey,
+                exchange,
+                marketId,
+                selectionId,
+                side,
+                strategyName,
+                reason,
+                evidenceMessage,
+                eventName,
+                runnerName
             );
         }
     }

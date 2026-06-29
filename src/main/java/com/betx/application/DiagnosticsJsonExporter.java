@@ -37,6 +37,9 @@ public class DiagnosticsJsonExporter {
         payload.put("betRecommendations", report.betRecommendations());
         payload.put("recommendationReadiness", recommendationReadiness(report.recommendationReadiness()));
         payload.put("recommendationIdMatchingPreview", recommendationIdMatchingPreview(report.recommendationIdMatchingPreview()));
+        payload.put("recommendationDivergenceAnalysis", recommendationDivergenceAnalysis(report.recommendationDivergenceAnalysis()));
+        payload.put("strategyPerformance", report.strategyPerformance());
+        payload.put("candidateFilterSimulation", report.candidateFilterSimulation());
         payload.put("paperRecommendationCoverage", report.paperRecommendationCoverage());
         payload.put("decisionFunnel", report.decisionFunnel());
         payload.put("executionMetrics", execution(report.executionMetrics()));
@@ -86,6 +89,50 @@ public class DiagnosticsJsonExporter {
         value.put("ambiguousOnePaperToManyReal", scope.ambiguousOnePaperToManyReal());
         value.put("ambiguousManyToMany", scope.ambiguousManyToMany());
         value.put("legacyComparison", scope.legacyComparison());
+        return value;
+    }
+
+    private Map<String, Object> recommendationDivergenceAnalysis(DiagnosticsRecommendationDivergenceAnalysis analysis) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("paperOnlyRecommendations", analysis.paperOnlyRecommendations());
+        value.put("realOnlyRecommendations", analysis.realOnlyRecommendations());
+        value.put("ambiguousRecommendations", analysis.ambiguousRecommendations());
+        value.put("paperOnlyReasonBreakdown", analysis.paperOnlyReasonBreakdown());
+        value.put("realOnlyReasonBreakdown", analysis.realOnlyReasonBreakdown());
+        value.put("unknownPaperOnly", analysis.unknownPaperOnly());
+        value.put("unknownRealOnly", analysis.unknownRealOnly());
+        value.put("topPaperOnlyExamples", analysis.topPaperOnlyExamples().stream().map(this::recommendationDivergenceExample).toList());
+        value.put("topRealOnlyExamples", analysis.topRealOnlyExamples().stream().map(this::recommendationDivergenceExample).toList());
+        return value;
+    }
+
+    private Map<String, Object> recommendationDivergenceExample(DiagnosticsRecommendationDivergenceExample example) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("recommendationId", example.recommendationId());
+        value.put("canonicalKey", example.canonicalKey());
+        value.put("eventName", example.eventName());
+        value.put("runnerName", example.runnerName());
+        value.put("marketId", example.marketId());
+        value.put("selectionId", example.selectionId());
+        value.put("selectionSide", example.selectionSide());
+        value.put("strategyName", example.strategyName());
+        value.put("firstSeenAt", instant(example.firstSeenAt()));
+        value.put("lastSeenAt", instant(example.lastSeenAt()));
+        value.put("paperCount", example.paperCount());
+        value.put("realCount", example.realCount());
+        value.put("classification", example.classification());
+        value.put("reason", example.reason());
+        value.put("evidence", example.evidence().stream().map(this::recommendationDivergenceEvidence).toList());
+        return value;
+    }
+
+    private Map<String, Object> recommendationDivergenceEvidence(DiagnosticsRecommendationDivergenceEvidence evidence) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("eventName", evidence.eventName());
+        value.put("timestamp", instant(evidence.timestamp()));
+        value.put("message", evidence.message());
+        value.put("source", evidence.source());
+        value.put("recommendationId", evidence.recommendationId());
         return value;
     }
 
