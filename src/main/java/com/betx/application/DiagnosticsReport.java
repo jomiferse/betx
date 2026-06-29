@@ -29,7 +29,8 @@ public record DiagnosticsReport(
     DiagnosticsRecommendationIdMatchingPreview recommendationIdMatchingPreview,
     DiagnosticsRecommendationDivergenceAnalysis recommendationDivergenceAnalysis,
     DiagnosticsStrategyPerformance strategyPerformance,
-    DiagnosticsCandidateFilterSimulation candidateFilterSimulation
+    DiagnosticsCandidateFilterSimulation candidateFilterSimulation,
+    DiagnosticsCandidateFilterShadowValidation candidateFilterShadowValidation
 ) {
     public DiagnosticsReport(
         Instant generatedAt,
@@ -92,7 +93,10 @@ public record DiagnosticsReport(
             DiagnosticsPaperRecommendationCoverage.empty(),
             DiagnosticsRecommendationReadiness.empty(),
             DiagnosticsRecommendationIdMatchingPreview.empty(),
-            DiagnosticsRecommendationDivergenceAnalysis.empty()
+            DiagnosticsRecommendationDivergenceAnalysis.empty(),
+            DiagnosticsStrategyPerformance.empty(),
+            DiagnosticsCandidateFilterSimulation.empty(),
+            DiagnosticsCandidateFilterShadowValidation.empty()
         );
     }
 
@@ -193,7 +197,8 @@ public record DiagnosticsReport(
             recommendationIdMatchingPreview,
             DiagnosticsRecommendationDivergenceAnalysis.empty(),
             DiagnosticsStrategyPerformance.empty(),
-            DiagnosticsCandidateFilterSimulation.empty()
+            DiagnosticsCandidateFilterSimulation.empty(),
+            DiagnosticsCandidateFilterShadowValidation.empty()
         );
     }
 
@@ -245,7 +250,63 @@ public record DiagnosticsReport(
             recommendationIdMatchingPreview,
             recommendationDivergenceAnalysis,
             DiagnosticsStrategyPerformance.empty(),
-            DiagnosticsCandidateFilterSimulation.empty()
+            DiagnosticsCandidateFilterSimulation.empty(),
+            DiagnosticsCandidateFilterShadowValidation.empty()
+        );
+    }
+
+    public DiagnosticsReport(
+        Instant generatedAt,
+        DiagnosticsPeriod period,
+        DiagnosticsCoverage coverage,
+        DiagnosticsDecisionFunnel decisionFunnel,
+        DiagnosticsExecutionMetrics executionMetrics,
+        DiagnosticsPaperVsRealMetrics paperVsRealMetrics,
+        List<DiagnosticFinding> integrityFindings,
+        List<String> limitations,
+        List<String> topFindings,
+        List<DiagnosticsMatch> matchedPairs,
+        Map<MatchGapReason, Long> matchingGaps,
+        DiagnosticsExecutionDataCoverage executionDataCoverage,
+        DiagnosticsLogEventCoverage logEventCoverage,
+        DiagnosticsPersistedExecutionCoverage persistedExecutionCoverage,
+        DiagnosticsPlaceOrdersResponseDuration placeOrdersResponseDuration,
+        DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort,
+        List<DiagnosticsSkippedMarket> topSkippedMarkets,
+        DiagnosticsBetRecommendationsSummary betRecommendations,
+        DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage,
+        DiagnosticsRecommendationReadiness recommendationReadiness,
+        DiagnosticsRecommendationIdMatchingPreview recommendationIdMatchingPreview,
+        DiagnosticsRecommendationDivergenceAnalysis recommendationDivergenceAnalysis,
+        DiagnosticsStrategyPerformance strategyPerformance,
+        DiagnosticsCandidateFilterSimulation candidateFilterSimulation
+    ) {
+        this(
+            generatedAt,
+            period,
+            coverage,
+            decisionFunnel,
+            executionMetrics,
+            paperVsRealMetrics,
+            integrityFindings,
+            limitations,
+            topFindings,
+            matchedPairs,
+            matchingGaps,
+            executionDataCoverage,
+            logEventCoverage,
+            persistedExecutionCoverage,
+            placeOrdersResponseDuration,
+            prospectiveRealBettingCohort,
+            topSkippedMarkets,
+            betRecommendations,
+            paperRecommendationCoverage,
+            recommendationReadiness,
+            recommendationIdMatchingPreview,
+            recommendationDivergenceAnalysis,
+            strategyPerformance,
+            candidateFilterSimulation,
+            DiagnosticsCandidateFilterShadowValidation.empty()
         );
     }
 
@@ -266,5 +327,8 @@ public record DiagnosticsReport(
         candidateFilterSimulation = candidateFilterSimulation == null
             ? DiagnosticsCandidateFilterSimulation.empty()
             : candidateFilterSimulation;
+        candidateFilterShadowValidation = candidateFilterShadowValidation == null
+            ? DiagnosticsCandidateFilterShadowValidation.empty()
+            : candidateFilterShadowValidation;
     }
 }

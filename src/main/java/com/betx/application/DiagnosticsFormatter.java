@@ -273,6 +273,8 @@ public class DiagnosticsFormatter {
         lines.add("");
         addCandidateFilterSimulation(lines, report.candidateFilterSimulation());
         lines.add("");
+        addCandidateFilterShadowValidation(lines, report.candidateFilterShadowValidation());
+        lines.add("");
         lines.add("Paper vs real");
         lines.add(line("Settled matched pairs", report.paperVsRealMetrics().settledMatchedPairs()));
         lines.add(line("Average real vs paper odds difference", number(report.paperVsRealMetrics().averageRealVsPaperOddsDifference())));
@@ -497,6 +499,51 @@ public class DiagnosticsFormatter {
         lines.add(line("evidence", recommendation.evidence()));
         lines.add(line("risk", recommendation.risk()));
         lines.add(line("should_apply_live", recommendation.shouldApplyLive() ? "yes" : "no"));
+    }
+
+    private static void addCandidateFilterShadowValidation(
+        List<String> lines,
+        DiagnosticsCandidateFilterShadowValidation validation
+    ) {
+        lines.add("Candidate filter shadow validation");
+        lines.add(line("Available", validation.enabled() ? "yes" : "no"));
+        lines.add(line("Officially applied", validation.officiallyApplied() ? "yes" : "no"));
+        lines.add(line("post-3.2 cutoff", validation.post32Cutoff()));
+        lines.add(line("should_apply_live", validation.shouldApplyLive() ? "yes" : "no"));
+        if (validation.filters().isEmpty()) {
+            lines.add(line("Filters", 0));
+            return;
+        }
+        validation.filters().forEach(result -> lines.add("- "
+            + result.filterName()
+            + " | evaluations "
+            + result.evaluations()
+            + " | would_pass "
+            + result.wouldPass()
+            + " | would_filter "
+            + result.wouldFilter()
+            + " | real observed "
+            + result.realBetsObserved()
+            + " | paper observed "
+            + result.paperTradesObserved()
+            + " | settled included "
+            + result.settledIncluded()
+            + " | settled excluded "
+            + result.settledExcluded()
+            + " | included pnl "
+            + money(result.shadowIncludedPnl())
+            + " | excluded pnl "
+            + money(result.shadowExcludedPnl())
+            + " | delta pnl "
+            + money(result.deltaPnl())
+            + " | volume retention "
+            + number(result.volumeRetentionPct())
+            + "%"
+            + " | status "
+            + result.status()
+            + " | should_apply_live "
+            + (result.shouldApplyLive() ? "yes" : "no")
+            + (result.warning() == null || result.warning().isBlank() ? "" : " | warning " + result.warning())));
     }
 
     private static void addPerformanceMap(

@@ -51,6 +51,8 @@ class DiagnosticsExporterTest {
             .contains("\"source\" : \"DIAGNOSTICS\"")
             .contains("\"strategyPerformance\"")
             .contains("\"candidateFilterSimulation\"")
+            .contains("\"candidateFilterShadowValidation\"")
+            .contains("\"officiallyApplied\" : false")
             .contains("\"bySelectionSide\"")
             .contains("\"filterName\" : \"EXCLUDE_DRAW\"")
             .contains("\"shouldApplyLive\" : false")

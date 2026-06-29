@@ -2,6 +2,7 @@ package com.betx.application;
 
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.BetRecommendationRepository;
+import com.betx.application.port.out.CandidateFilterEvaluationRepository;
 import com.betx.application.port.out.ExchangeMarketDataGateway;
 import com.betx.application.port.out.MarketSnapshotRepository;
 import com.betx.application.port.out.PaperSignalEvaluationRepository;
@@ -55,6 +56,8 @@ public class RunPaperTradingService {
     private final PaperTradeRepository paperTradeRepository;
     private final PaperSignalEvaluationRepository paperSignalEvaluationRepository;
     private final BetRecommendationRepository betRecommendationRepository;
+    private final CandidateFilterEvaluationRepository candidateFilterEvaluationRepository;
+    private final CandidateFilterEvaluator candidateFilterEvaluator;
     private final Map<String, PaperTradeSettlementGateway> settlementGateways;
     private final Clock clock;
     private final EventMarketAnalyzer analyzer;
@@ -68,6 +71,7 @@ public class RunPaperTradingService {
         PaperTradeRepository paperTradeRepository,
         PaperSignalEvaluationRepository paperSignalEvaluationRepository,
         BetRecommendationRepository betRecommendationRepository,
+        CandidateFilterEvaluationRepository candidateFilterEvaluationRepository,
         List<PaperTradeSettlementGateway> settlementGateways,
         BetxEventLogger eventLogger
     ) {
@@ -78,6 +82,7 @@ public class RunPaperTradingService {
             paperTradeRepository,
             paperSignalEvaluationRepository,
             betRecommendationRepository,
+            candidateFilterEvaluationRepository,
             settlementGateways,
             Clock.systemUTC(),
             eventLogger
@@ -161,6 +166,32 @@ public class RunPaperTradingService {
         Clock clock,
         BetxEventLogger eventLogger
     ) {
+        this(
+            configRepository,
+            marketDataGateways,
+            snapshotRepository,
+            paperTradeRepository,
+            paperSignalEvaluationRepository,
+            betRecommendationRepository,
+            new NoopCandidateFilterEvaluationRepository(),
+            settlementGateways,
+            clock,
+            eventLogger
+        );
+    }
+
+    RunPaperTradingService(
+        BetxConfigRepository configRepository,
+        List<ExchangeMarketDataGateway> marketDataGateways,
+        MarketSnapshotRepository snapshotRepository,
+        PaperTradeRepository paperTradeRepository,
+        PaperSignalEvaluationRepository paperSignalEvaluationRepository,
+        BetRecommendationRepository betRecommendationRepository,
+        CandidateFilterEvaluationRepository candidateFilterEvaluationRepository,
+        List<PaperTradeSettlementGateway> settlementGateways,
+        Clock clock,
+        BetxEventLogger eventLogger
+    ) {
         this.configRepository = configRepository;
         this.marketDataGateways = marketDataGateways.stream()
             .collect(Collectors.toMap(ExchangeMarketDataGateway::exchangeName, Function.identity(), (left, right) -> left));
@@ -172,6 +203,10 @@ public class RunPaperTradingService {
         this.betRecommendationRepository = betRecommendationRepository == null
             ? new NoopBetRecommendationRepository()
             : betRecommendationRepository;
+        this.candidateFilterEvaluationRepository = candidateFilterEvaluationRepository == null
+            ? new NoopCandidateFilterEvaluationRepository()
+            : candidateFilterEvaluationRepository;
+        this.candidateFilterEvaluator = new CandidateFilterEvaluator();
         this.settlementGateways = (settlementGateways == null ? List.<PaperTradeSettlementGateway>of() : settlementGateways).stream()
             .collect(Collectors.toMap(PaperTradeSettlementGateway::exchangeName, Function.identity(), (left, right) -> left));
         this.clock = clock;
@@ -630,6 +665,7 @@ public class RunPaperTradingService {
                 recommendation
             );
             logRecommendation(cycleId, result);
+            shadowEvaluateCandidateFilters(config, cycleId, result.recommendation(), CandidateFilterSource.RECOMMENDATION);
             return Optional.of(result);
         } catch (RuntimeException exc) {
             eventLogger.warn(BetxEventCategory.ERROR, "bet_recommendation.persist_failed")
@@ -695,6 +731,52 @@ public class RunPaperTradingService {
 
     private boolean shouldLogObservedRecommendation(BetRecommendation recommendation) {
         return recommendation.observedCount() == 2 || recommendation.observedCount() % 100 == 0;
+    }
+
+    private void shadowEvaluateCandidateFilters(
+        BetxConfig config,
+        String cycleId,
+        BetRecommendation recommendation,
+        CandidateFilterSource source
+    ) {
+        try {
+            candidateFilterEvaluator.evaluateAll(recommendation, source, Instant.now(clock))
+                .forEach(evaluation -> {
+                    candidateFilterEvaluationRepository.upsert(config.storage().path(), evaluation);
+                    eventLogger.info(BetxEventCategory.ANALYTICS, "candidate_filter.shadow_evaluated")
+                        .correlationId("recommendation-" + recommendation.id())
+                        .cycleId(cycleId)
+                        .exchange(recommendation.exchange())
+                        .marketId(recommendation.marketId())
+                        .selectionId(recommendation.selectionId())
+                        .strategy(recommendation.strategyName())
+                        .executionMode("shadow")
+                        .result(evaluation.decision().name())
+                        .field("recommendationId", evaluation.recommendationId())
+                        .field("canonicalKey", evaluation.canonicalKey())
+                        .field("filterName", evaluation.filterName().name())
+                        .field("decision", evaluation.decision().name())
+                        .field("reason", evaluation.reason().name())
+                        .field("selectionSide", evaluation.selectionSide().name())
+                        .field("odds", evaluation.odds())
+                        .field("strategyName", evaluation.strategyName())
+                        .field("source", evaluation.source().name())
+                        .emit();
+                });
+        } catch (RuntimeException exc) {
+            eventLogger.warn(BetxEventCategory.ERROR, "candidate_filter.shadow_failed")
+                .cycleId(cycleId)
+                .exchange(recommendation.exchange())
+                .marketId(recommendation.marketId())
+                .selectionId(recommendation.selectionId())
+                .strategy(recommendation.strategyName())
+                .executionMode("shadow")
+                .result("failed")
+                .field("recommendationId", recommendation.id())
+                .field("errorType", exc.getClass().getSimpleName())
+                .field("message", exc.getMessage())
+                .emit();
+        }
     }
 
     private SelectionSide selectionSide(RunnerAnalysis analysis) {
@@ -1012,6 +1094,17 @@ public class RunPaperTradingService {
 
         @Override
         public List<BetRecommendation> findByEvaluationId(String databasePath, String evaluationId) {
+            return List.of();
+        }
+    }
+
+    private static final class NoopCandidateFilterEvaluationRepository implements CandidateFilterEvaluationRepository {
+        @Override
+        public void upsert(String databasePath, CandidateFilterEvaluation evaluation) {
+        }
+
+        @Override
+        public List<CandidateFilterEvaluation> list(String databasePath, Instant from, Instant to) {
             return List.of();
         }
     }

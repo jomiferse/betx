@@ -1,6 +1,11 @@
 package com.betx.adapter.persistence;
 
 import com.betx.application.BacktestOutcome;
+import com.betx.application.CandidateFilterDecision;
+import com.betx.application.CandidateFilterDecisionReason;
+import com.betx.application.CandidateFilterEvaluation;
+import com.betx.application.CandidateFilterName;
+import com.betx.application.CandidateFilterSource;
 import com.betx.application.DiagnosticsBetRecommendationsSummary;
 import com.betx.application.DiagnosticsModel.DiagnosticsDataProvenance;
 import com.betx.application.DiagnosticsModel.DiagnosticsDataset;
@@ -70,6 +75,9 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             DiagnosticsRecommendationReadiness recommendationReadiness = tableExists(connection, "bet_recommendations")
                 ? recommendationReadiness(connection, from, to, paperRecommendationCoverage)
                 : DiagnosticsRecommendationReadiness.empty();
+            List<CandidateFilterEvaluation> candidateFilterEvaluations = tableExists(connection, "candidate_filter_evaluations")
+                ? candidateFilterEvaluations(connection, from, to)
+                : List.of();
             return new DiagnosticsDataset(
                 realBets,
                 paperTrades,
@@ -79,7 +87,8 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
                 rejections,
                 betRecommendations,
                 paperRecommendationCoverage,
-                recommendationReadiness
+                recommendationReadiness,
+                candidateFilterEvaluations
             );
         } catch (SQLException exc) {
             throw new IllegalStateException("Could not read diagnostics data.", exc);
@@ -103,6 +112,9 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
                     "execution_timestamp",
                     "settlement_timestamp"
                 ));
+            }
+            if (tableExists(connection, "candidate_filter_evaluations")) {
+                addBounds(connection, instants, "candidate_filter_evaluations", List.of("last_evaluated_at"));
             }
             if (instants.isEmpty()) {
                 return new DiagnosticsPeriod(null, null);
@@ -236,6 +248,44 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
                         decimal(resultSet, "implied_probability_change"),
                         resultSet.getInt("paper_mode") == 1,
                         hasColumn(connection, "paper_trades", "recommendation_id") ? resultSet.getString("recommendation_id") : null
+                    ));
+                }
+                return rows;
+            }
+        }
+    }
+
+    private static List<CandidateFilterEvaluation> candidateFilterEvaluations(
+        Connection connection,
+        Instant from,
+        Instant to
+    ) throws SQLException {
+        String sql = """
+            SELECT *
+            FROM candidate_filter_evaluations
+            WHERE (%s)
+            ORDER BY last_evaluated_at ASC, id ASC
+            """.formatted(periodPredicate(List.of("last_evaluated_at")));
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            bindPeriod(statement, from, to, 1);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<CandidateFilterEvaluation> rows = new ArrayList<>();
+                while (resultSet.next()) {
+                    rows.add(new CandidateFilterEvaluation(
+                        resultSet.getString("id"),
+                        resultSet.getString("recommendation_id"),
+                        resultSet.getString("canonical_key"),
+                        CandidateFilterName.valueOf(resultSet.getString("filter_name")),
+                        CandidateFilterDecision.valueOf(resultSet.getString("decision")),
+                        CandidateFilterDecisionReason.valueOf(resultSet.getString("reason")),
+                        selectionSide(resultSet.getString("selection_side")),
+                        decimal(resultSet, "odds"),
+                        resultSet.getString("strategy_name"),
+                        CandidateFilterSource.valueOf(resultSet.getString("source")),
+                        instant(resultSet, "evaluated_at"),
+                        instant(resultSet, "created_at"),
+                        instant(resultSet, "last_evaluated_at"),
+                        resultSet.getLong("observed_count")
                     ));
                 }
                 return rows;

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.betx.application.port.out.BetxConfigRepository;
 import com.betx.application.port.out.BetRecommendationRepository;
+import com.betx.application.port.out.CandidateFilterEvaluationRepository;
 import com.betx.application.port.out.ExchangeMarketDataGateway;
 import com.betx.application.port.out.MarketSnapshotRepository;
 import com.betx.application.port.out.PaperSignalEvaluationRepository;
@@ -217,6 +218,61 @@ class RunPaperTradingServiceTest {
             .filteredOn(event -> event.event().equals("paper_trade.executed"))
             .singleElement()
             .satisfies(event -> assertThat(event.fields()).containsEntry("recommendationId", recommendationId));
+    }
+
+    @Test
+    void evaluatesCandidateFiltersInShadowAndDoesNotEmitLiveSkipEvents() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        PaperSignalEvaluationRepositoryStub evaluations = new PaperSignalEvaluationRepositoryStub();
+        BetRecommendationRepositoryStub recommendations = new BetRecommendationRepositoryStub();
+        CandidateFilterEvaluationRepositoryStub candidateFilters = new CandidateFilterEvaluationRepositoryStub();
+        RecordingEventSink sink = new RecordingEventSink();
+        repository.recent.add(new ObservedMarketSnapshot(
+            observedAt.minusSeconds(3600),
+            snapshot(2L, "Draw", "3.70")
+        ));
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(snapshot(2L, "Draw", "3.70")))),
+            repository,
+            paperTrades,
+            evaluations,
+            recommendations,
+            candidateFilters,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC),
+            new BetxEventLogger(sink, Clock.fixed(observedAt, ZoneOffset.UTC))
+        );
+
+        service.run(
+            new ConfigPath(Path.of("betx.yml")),
+            new BigDecimal("0.02"),
+            BacktestSlippageModel.PROFIT_HAIRCUT
+        );
+
+        String recommendationId = recommendations.upserted.getFirst().id();
+        assertThat(candidateFilters.saved)
+            .hasSize(5)
+            .allSatisfy(evaluation -> assertThat(evaluation.recommendationId()).isEqualTo(recommendationId));
+        assertThat(candidateFilters.saved)
+            .filteredOn(evaluation -> evaluation.filterName() == CandidateFilterName.EXCLUDE_DRAW_AND_ODDS_4_PLUS)
+            .singleElement()
+            .satisfies(evaluation -> {
+                assertThat(evaluation.decision()).isEqualTo(CandidateFilterDecision.WOULD_FILTER);
+                assertThat(evaluation.reason()).isEqualTo(CandidateFilterDecisionReason.SELECTION_SIDE_DRAW);
+                assertThat(evaluation.source()).isEqualTo(CandidateFilterSource.RECOMMENDATION);
+            });
+        assertThat(sink.events)
+            .filteredOn(event -> event.event().equals("candidate_filter.shadow_evaluated"))
+            .hasSize(5)
+            .allSatisfy(event -> assertThat(event.fields())
+                .containsEntry("recommendationId", recommendationId)
+                .containsKeys("filterName", "decision", "reason"));
+        assertThat(sink.events)
+            .noneSatisfy(event -> assertThat(event.event()).contains("skipped"));
+        assertThat(paperTrades.saved).hasSize(1);
     }
 
     @Test
@@ -951,6 +1007,20 @@ class RunPaperTradingServiceTest {
             return saved.stream()
                 .filter(recommendation -> java.util.Objects.equals(recommendation.evaluationId(), evaluationId))
                 .toList();
+        }
+    }
+
+    private static final class CandidateFilterEvaluationRepositoryStub implements CandidateFilterEvaluationRepository {
+        private final List<CandidateFilterEvaluation> saved = new ArrayList<>();
+
+        @Override
+        public void upsert(String databasePath, CandidateFilterEvaluation evaluation) {
+            saved.add(evaluation);
+        }
+
+        @Override
+        public List<CandidateFilterEvaluation> list(String databasePath, Instant from, Instant to) {
+            return saved;
         }
     }
 

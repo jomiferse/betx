@@ -95,6 +95,7 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         DiagnosticsRecommendationDivergenceAnalysis recommendationDivergenceAnalysis = recommendationDivergenceAnalysis(dataset, logs);
         DiagnosticsStrategyPerformance strategyPerformance = strategyPerformance(dataset.realBets(), matches);
         DiagnosticsCandidateFilterSimulation candidateFilterSimulation = candidateFilterSimulation(dataset.realBets(), strategyPerformance.allTime());
+        DiagnosticsCandidateFilterShadowValidation candidateFilterShadowValidation = candidateFilterShadowValidation(dataset);
         List<DiagnosticFinding> findings = integrityFindings(dataset, matches);
         List<String> limitations = limitations(logs, persistedExecutionCoverage, logEventCoverage);
         List<String> topFindings = topFindings(
@@ -129,7 +130,8 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             recommendationIdMatchingPreview,
             recommendationDivergenceAnalysis,
             strategyPerformance,
-            candidateFilterSimulation
+            candidateFilterSimulation,
+            candidateFilterShadowValidation
         );
     }
 
@@ -1204,6 +1206,144 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
                 false
             ))
             .orElseGet(DiagnosticsStrategyExperimentRecommendation::none);
+    }
+
+    private DiagnosticsCandidateFilterShadowValidation candidateFilterShadowValidation(DiagnosticsDataset dataset) {
+        List<CandidateFilterEvaluation> evaluations = dataset.candidateFilterEvaluations();
+        if (evaluations.isEmpty()) {
+            return DiagnosticsCandidateFilterShadowValidation.empty();
+        }
+        List<RealBetDiagnosticRow> settled = settledRealBets(dataset.realBets());
+        DiagnosticsStrategyPerformanceSegment baseline = performanceSegment("shadow baseline", settled);
+        Map<String, List<RealBetDiagnosticRow>> realByRecommendationId = dataset.realBets().stream()
+            .filter(row -> !isMissing(row.recommendationId()))
+            .collect(Collectors.groupingBy(RealBetDiagnosticRow::recommendationId));
+        List<DiagnosticsCandidateFilterShadowResult> filters = evaluations.stream()
+            .collect(Collectors.groupingBy(
+                CandidateFilterEvaluation::filterName,
+                LinkedHashMap::new,
+                Collectors.toList()
+            ))
+            .entrySet()
+            .stream()
+            .map(entry -> candidateFilterShadowResult(entry.getKey(), entry.getValue(), realByRecommendationId, baseline))
+            .toList();
+        Instant cutoff = evaluations.stream()
+            .map(CandidateFilterEvaluation::createdAt)
+            .filter(Objects::nonNull)
+            .min(Instant::compareTo)
+            .orElse(null);
+        return new DiagnosticsCandidateFilterShadowValidation(true, false, cutoff, filters, false);
+    }
+
+    private DiagnosticsCandidateFilterShadowResult candidateFilterShadowResult(
+        CandidateFilterName filterName,
+        List<CandidateFilterEvaluation> evaluations,
+        Map<String, List<RealBetDiagnosticRow>> realByRecommendationId,
+        DiagnosticsStrategyPerformanceSegment baseline
+    ) {
+        long wouldPass = evaluations.stream().filter(evaluation -> evaluation.decision() == CandidateFilterDecision.WOULD_PASS).count();
+        long wouldFilter = evaluations.stream().filter(evaluation -> evaluation.decision() == CandidateFilterDecision.WOULD_FILTER).count();
+        List<RealBetDiagnosticRow> included = realRowsForDecision(evaluations, realByRecommendationId, CandidateFilterDecision.WOULD_PASS);
+        List<RealBetDiagnosticRow> excluded = realRowsForDecision(evaluations, realByRecommendationId, CandidateFilterDecision.WOULD_FILTER);
+        DiagnosticsStrategyPerformanceSegment includedMetrics = performanceSegment(filterName.name(), included);
+        DiagnosticsStrategyPerformanceSegment excludedMetrics = performanceSegment(filterName.name() + " excluded", excluded);
+        long paperObserved = evaluations.stream().filter(evaluation -> evaluation.source() == CandidateFilterSource.PAPER).count();
+        long realObserved = evaluations.stream()
+            .filter(evaluation -> evaluation.source() == CandidateFilterSource.REAL
+                || realByRecommendationId.containsKey(evaluation.recommendationId()))
+            .map(CandidateFilterEvaluation::recommendationId)
+            .distinct()
+            .count();
+        BigDecimal deltaPnl = subtract(includedMetrics.netPnl(), baseline.netPnl());
+        BigDecimal deltaRoi = subtract(includedMetrics.roi(), baseline.roi());
+        BigDecimal volumeRetention = baseline.settled() == 0
+            ? null
+            : decimal(BigDecimal.valueOf(includedMetrics.settled())
+                .multiply(BigDecimal.valueOf(100))
+                .divide(BigDecimal.valueOf(baseline.settled()), SCALE + 2, RoundingMode.HALF_UP));
+        DiagnosticsCandidateFilterStatus status = shadowStatus(filterName, includedMetrics, baseline, deltaPnl, deltaRoi, volumeRetention);
+        return new DiagnosticsCandidateFilterShadowResult(
+            filterName.name(),
+            "all-time shadow",
+            evaluations.stream().mapToLong(CandidateFilterEvaluation::observedCount).sum(),
+            wouldPass,
+            wouldFilter,
+            rate(BigDecimal.valueOf(wouldPass), BigDecimal.valueOf(Math.max(1, wouldPass + wouldFilter))),
+            rate(BigDecimal.valueOf(wouldFilter), BigDecimal.valueOf(Math.max(1, wouldPass + wouldFilter))),
+            realObserved,
+            paperObserved,
+            includedMetrics.settled(),
+            excludedMetrics.settled(),
+            baseline.netPnl(),
+            includedMetrics.netPnl(),
+            excludedMetrics.netPnl(),
+            baseline.roi(),
+            includedMetrics.roi(),
+            excludedMetrics.roi(),
+            deltaPnl,
+            deltaRoi,
+            includedMetrics.maxDrawdown(),
+            volumeRetention,
+            status,
+            shadowWarning(filterName, status, includedMetrics),
+            false
+        );
+    }
+
+    private List<RealBetDiagnosticRow> realRowsForDecision(
+        List<CandidateFilterEvaluation> evaluations,
+        Map<String, List<RealBetDiagnosticRow>> realByRecommendationId,
+        CandidateFilterDecision decision
+    ) {
+        return evaluations.stream()
+            .filter(evaluation -> evaluation.source() == CandidateFilterSource.RECOMMENDATION)
+            .filter(evaluation -> evaluation.decision() == decision)
+            .flatMap(evaluation -> realByRecommendationId.getOrDefault(evaluation.recommendationId(), List.of()).stream())
+            .distinct()
+            .toList();
+    }
+
+    private DiagnosticsCandidateFilterStatus shadowStatus(
+        CandidateFilterName filterName,
+        DiagnosticsStrategyPerformanceSegment included,
+        DiagnosticsStrategyPerformanceSegment baseline,
+        BigDecimal deltaPnl,
+        BigDecimal deltaRoi,
+        BigDecimal volumeRetention
+    ) {
+        if (filterName == CandidateFilterName.EXCLUDE_NEGATIVE_SEGMENTS_CURRENT) {
+            return DiagnosticsCandidateFilterStatus.OVERFIT_RISK;
+        }
+        if (included.settled() < 25) {
+            return DiagnosticsCandidateFilterStatus.INSUFFICIENT_SAMPLE;
+        }
+        if (deltaPnl == null || deltaRoi == null || deltaPnl.compareTo(BigDecimal.ZERO) <= 0 || deltaRoi.compareTo(BigDecimal.ZERO) <= 0) {
+            return DiagnosticsCandidateFilterStatus.REJECTED;
+        }
+        BigDecimal drawdownDelta = subtract(baseline.maxDrawdown(), included.maxDrawdown());
+        if (drawdownDelta != null && drawdownDelta.compareTo(BigDecimal.ZERO) < 0) {
+            return DiagnosticsCandidateFilterStatus.WEAK_EVIDENCE;
+        }
+        if (volumeRetention == null || volumeRetention.compareTo(BigDecimal.valueOf(50)) < 0) {
+            return DiagnosticsCandidateFilterStatus.WEAK_EVIDENCE;
+        }
+        return DiagnosticsCandidateFilterStatus.CANDIDATE;
+    }
+
+    private static String shadowWarning(
+        CandidateFilterName filterName,
+        DiagnosticsCandidateFilterStatus status,
+        DiagnosticsStrategyPerformanceSegment included
+    ) {
+        if (filterName == CandidateFilterName.EXCLUDE_NEGATIVE_SEGMENTS_CURRENT) {
+            return "OVERFIT_RISK: derived from current negative historical segments; not recommended as first live candidate.";
+        }
+        if (status == DiagnosticsCandidateFilterStatus.INSUFFICIENT_SAMPLE) {
+            return "INSUFFICIENT_SAMPLE: fewer than 25 settled real bets in shadow included cohort. Observations: "
+                + included.settled() + ".";
+        }
+        return "Shadow-only validation; should_apply_live remains no.";
     }
 
     private static List<DiagnosticsCandidateFilterResult> top(

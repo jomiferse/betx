@@ -772,6 +772,56 @@ class DiagnosticsServiceTest {
             .anySatisfy(line -> assertThat(line).contains("Legacy matching remains official").contains("yes"));
     }
 
+    @Test
+    void validatesCandidateFilterShadowEvaluationsAgainstSettledRealBets() {
+        DiagnosticsDataset dataset = new DiagnosticsDataset(
+            List.of(
+                settledReal("included-win", SelectionSide.HOME, "2.00", "10.00", BetSettlementResult.WIN, "10.00", T0),
+                settledReal("excluded-loss", SelectionSide.DRAW, "3.50", "10.00", BetSettlementResult.LOSE, "-10.00", T0.plusSeconds(60)),
+                openReal("open-excluded", SelectionSide.HOME, "5.00", "10.00", T0.plusSeconds(120))
+            ),
+            List.of(),
+            20,
+            40,
+            Map.of(),
+            Map.of(),
+            DiagnosticsBetRecommendationsSummary.empty(),
+            DiagnosticsPaperRecommendationCoverage.empty(),
+            DiagnosticsRecommendationReadiness.empty(),
+            List.of(
+                shadowEvaluation("rec-included-win", CandidateFilterName.EXCLUDE_DRAW_AND_ODDS_4_PLUS, CandidateFilterDecision.WOULD_PASS, CandidateFilterSource.RECOMMENDATION, T0),
+                shadowEvaluation("rec-excluded-loss", CandidateFilterName.EXCLUDE_DRAW_AND_ODDS_4_PLUS, CandidateFilterDecision.WOULD_FILTER, CandidateFilterSource.RECOMMENDATION, T0.plusSeconds(60)),
+                shadowEvaluation("rec-open-excluded", CandidateFilterName.EXCLUDE_DRAW_AND_ODDS_4_PLUS, CandidateFilterDecision.WOULD_FILTER, CandidateFilterSource.RECOMMENDATION, T0.plusSeconds(120)),
+                shadowEvaluation("rec-included-win", CandidateFilterName.EXCLUDE_DRAW_AND_ODDS_4_PLUS, CandidateFilterDecision.WOULD_PASS, CandidateFilterSource.PAPER, T0)
+            )
+        );
+
+        DiagnosticsReport report = service(dataset, DiagnosticsLogSummary.empty()).generate(request());
+        DiagnosticsCandidateFilterShadowResult result = report.candidateFilterShadowValidation().filters().getFirst();
+
+        assertThat(report.candidateFilterShadowValidation().enabled()).isTrue();
+        assertThat(report.candidateFilterShadowValidation().officiallyApplied()).isFalse();
+        assertThat(result.filterName()).isEqualTo("EXCLUDE_DRAW_AND_ODDS_4_PLUS");
+        assertThat(result.evaluations()).isEqualTo(4);
+        assertThat(result.wouldPass()).isEqualTo(2);
+        assertThat(result.wouldFilter()).isEqualTo(2);
+        assertThat(result.realBetsObserved()).isEqualTo(2);
+        assertThat(result.paperTradesObserved()).isEqualTo(1);
+        assertThat(result.settledIncluded()).isEqualTo(1);
+        assertThat(result.settledExcluded()).isEqualTo(1);
+        assertThat(result.baselinePnl()).isEqualByComparingTo("0.00");
+        assertThat(result.shadowIncludedPnl()).isEqualByComparingTo("10.00");
+        assertThat(result.shadowExcludedPnl()).isEqualByComparingTo("-10.00");
+        assertThat(result.deltaPnl()).isEqualByComparingTo("10.00");
+        assertThat(result.status()).isEqualTo(DiagnosticsCandidateFilterStatus.INSUFFICIENT_SAMPLE);
+        assertThat(result.shouldApplyLive()).isFalse();
+
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Candidate filter shadow validation")
+            .anySatisfy(line -> assertThat(line).contains("Officially applied").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("should_apply_live").contains("no"));
+    }
+
     private static DiagnosticsService service(DiagnosticsDataset dataset, DiagnosticsLogSummary logs) {
         return new DiagnosticsService(
             new TestConfigRepository(new BetxConfig(
@@ -798,6 +848,33 @@ class DiagnosticsServiceTest {
 
     private static DiagnosticsDataset dataset(List<RealBetDiagnosticRow> real, List<PaperTrade> paper) {
         return new DiagnosticsDataset(real, paper, 20, 40, Map.of("APPROVE", 2L), Map.of("INSUFFICIENT_EDGE", 3L));
+    }
+
+    private static CandidateFilterEvaluation shadowEvaluation(
+        String recommendationId,
+        CandidateFilterName filterName,
+        CandidateFilterDecision decision,
+        CandidateFilterSource source,
+        Instant evaluatedAt
+    ) {
+        return new CandidateFilterEvaluation(
+            recommendationId + "-" + filterName.name() + "-" + source.name(),
+            recommendationId,
+            BetRecommendation.canonicalKey("betfair", "m-" + recommendationId.substring(4), 1L, SelectionSide.HOME, "value-football"),
+            filterName,
+            decision,
+            decision == CandidateFilterDecision.WOULD_FILTER
+                ? CandidateFilterDecisionReason.SELECTION_SIDE_DRAW
+                : CandidateFilterDecisionReason.PASSED,
+            SelectionSide.HOME,
+            new BigDecimal("2.00"),
+            "value-football",
+            source,
+            evaluatedAt,
+            evaluatedAt,
+            evaluatedAt,
+            1
+        );
     }
 
     private static DiagnosticsLogSummary logsWithEvents(DiagnosticsLogEvent... events) {

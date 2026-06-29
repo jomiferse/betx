@@ -40,6 +40,7 @@ public class DiagnosticsJsonExporter {
         payload.put("recommendationDivergenceAnalysis", recommendationDivergenceAnalysis(report.recommendationDivergenceAnalysis()));
         payload.put("strategyPerformance", report.strategyPerformance());
         payload.put("candidateFilterSimulation", report.candidateFilterSimulation());
+        payload.put("candidateFilterShadowValidation", candidateFilterShadowValidation(report.candidateFilterShadowValidation()));
         payload.put("paperRecommendationCoverage", report.paperRecommendationCoverage());
         payload.put("decisionFunnel", report.decisionFunnel());
         payload.put("executionMetrics", execution(report.executionMetrics()));
@@ -174,6 +175,45 @@ public class DiagnosticsJsonExporter {
         value.put("readyForRecommendationIdMatching", readiness.readyForRecommendationIdMatching());
         value.put("readinessStatus", readiness.readinessStatus());
         value.put("readinessReasons", readiness.readinessReasons());
+        return value;
+    }
+
+    private Map<String, Object> candidateFilterShadowValidation(DiagnosticsCandidateFilterShadowValidation validation) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("enabled", validation.enabled());
+        value.put("officiallyApplied", validation.officiallyApplied());
+        value.put("post32Cutoff", instant(validation.post32Cutoff()));
+        value.put("shouldApplyLive", validation.shouldApplyLive());
+        value.put("filters", validation.filters().stream().map(this::candidateFilterShadowResult).toList());
+        return value;
+    }
+
+    private Map<String, Object> candidateFilterShadowResult(DiagnosticsCandidateFilterShadowResult result) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("name", result.filterName());
+        value.put("scope", result.scope());
+        value.put("evaluations", result.evaluations());
+        value.put("wouldPass", result.wouldPass());
+        value.put("wouldFilter", result.wouldFilter());
+        value.put("passRate", result.passRate());
+        value.put("filterRate", result.filterRate());
+        value.put("realBetsObserved", result.realBetsObserved());
+        value.put("paperTradesObserved", result.paperTradesObserved());
+        value.put("settledIncluded", result.settledIncluded());
+        value.put("settledExcluded", result.settledExcluded());
+        value.put("baselinePnl", result.baselinePnl());
+        value.put("includedPnl", result.shadowIncludedPnl());
+        value.put("excludedPnl", result.shadowExcludedPnl());
+        value.put("baselineRoi", result.baselineRoi());
+        value.put("includedRoi", result.shadowIncludedRoi());
+        value.put("excludedRoi", result.shadowExcludedRoi());
+        value.put("deltaPnl", result.deltaPnl());
+        value.put("deltaRoi", result.deltaRoi());
+        value.put("maxDrawdownIncluded", result.maxDrawdownIncluded());
+        value.put("volumeRetentionPct", result.volumeRetentionPct());
+        value.put("status", result.status());
+        value.put("warning", result.warning());
+        value.put("shouldApplyLive", result.shouldApplyLive());
         return value;
     }
 
