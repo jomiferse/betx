@@ -696,7 +696,13 @@ public class RunDryRunSignalsService {
         try {
             candidateFilterEvaluator.evaluateAll(recommendation, source, Instant.now(clock))
                 .forEach(evaluation -> {
-                    candidateFilterEvaluationRepository.upsert(config.storage().path(), evaluation);
+                    CandidateFilterEvaluationUpsertResult result = candidateFilterEvaluationRepository.upsert(
+                        config.storage().path(),
+                        evaluation
+                    );
+                    if (!shouldLogCandidateFilterEvaluation(result.action())) {
+                        return;
+                    }
                     eventLogger.info(BetxEventCategory.ANALYTICS, "candidate_filter.shadow_evaluated")
                         .correlationId("recommendation-" + recommendation.id())
                         .cycleId(cycleId)
@@ -731,6 +737,12 @@ public class RunDryRunSignalsService {
                 .field("message", safeMessage(exc))
                 .emit();
         }
+    }
+
+    private boolean shouldLogCandidateFilterEvaluation(CandidateFilterEvaluationUpsertAction action) {
+        return action == CandidateFilterEvaluationUpsertAction.CREATED
+            || action == CandidateFilterEvaluationUpsertAction.UPDATED_DECISION_CHANGED
+            || action == CandidateFilterEvaluationUpsertAction.UPDATED_REASON_CHANGED;
     }
 
     private SelectionSide selectionSide(RunnerAnalysis analysis) {
@@ -1079,7 +1091,11 @@ public class RunDryRunSignalsService {
 
     private static final class NoopCandidateFilterEvaluationRepository implements CandidateFilterEvaluationRepository {
         @Override
-        public void upsert(String databasePath, CandidateFilterEvaluation evaluation) {
+        public CandidateFilterEvaluationUpsertResult upsert(String databasePath, CandidateFilterEvaluation evaluation) {
+            return new CandidateFilterEvaluationUpsertResult(
+                evaluation,
+                CandidateFilterEvaluationUpsertAction.OBSERVED_UNCHANGED
+            );
         }
 
         @Override

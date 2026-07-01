@@ -276,6 +276,48 @@ class RunPaperTradingServiceTest {
     }
 
     @Test
+    void doesNotLogCandidateFilterShadowEvaluationWhenUpsertOnlyObservesUnchangedEvaluation() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        PaperSignalEvaluationRepositoryStub evaluations = new PaperSignalEvaluationRepositoryStub();
+        BetRecommendationRepositoryStub recommendations = new BetRecommendationRepositoryStub();
+        CandidateFilterEvaluationRepositoryStub candidateFilters = new CandidateFilterEvaluationRepositoryStub();
+        candidateFilters.nextAction = CandidateFilterEvaluationUpsertAction.OBSERVED_UNCHANGED;
+        RecordingEventSink sink = new RecordingEventSink();
+        repository.recent.add(new ObservedMarketSnapshot(
+            observedAt.minusSeconds(3600),
+            snapshot(2L, "Draw", "3.70")
+        ));
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(snapshot(2L, "Draw", "3.70")))),
+            repository,
+            paperTrades,
+            evaluations,
+            recommendations,
+            candidateFilters,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC),
+            new BetxEventLogger(sink, Clock.fixed(observedAt, ZoneOffset.UTC))
+        );
+
+        service.run(
+            new ConfigPath(Path.of("betx.yml")),
+            new BigDecimal("0.02"),
+            BacktestSlippageModel.PROFIT_HAIRCUT
+        );
+
+        assertThat(candidateFilters.saved).hasSize(5);
+        assertThat(sink.events)
+            .filteredOn(event -> event.event().equals("candidate_filter.shadow_evaluated"))
+            .isEmpty();
+        assertThat(sink.events)
+            .noneSatisfy(event -> assertThat(event.event()).contains("skipped"));
+        assertThat(paperTrades.saved).hasSize(1);
+    }
+
+    @Test
     void linksNewPaperTradeToAlreadyCoveredCanonicalRecommendationWithoutLoggingCoveredAgain() {
         Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
         MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
@@ -1012,10 +1054,12 @@ class RunPaperTradingServiceTest {
 
     private static final class CandidateFilterEvaluationRepositoryStub implements CandidateFilterEvaluationRepository {
         private final List<CandidateFilterEvaluation> saved = new ArrayList<>();
+        private CandidateFilterEvaluationUpsertAction nextAction = CandidateFilterEvaluationUpsertAction.CREATED;
 
         @Override
-        public void upsert(String databasePath, CandidateFilterEvaluation evaluation) {
+        public CandidateFilterEvaluationUpsertResult upsert(String databasePath, CandidateFilterEvaluation evaluation) {
             saved.add(evaluation);
+            return new CandidateFilterEvaluationUpsertResult(evaluation, nextAction);
         }
 
         @Override

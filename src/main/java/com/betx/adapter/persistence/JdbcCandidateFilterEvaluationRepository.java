@@ -3,6 +3,8 @@ package com.betx.adapter.persistence;
 import com.betx.application.CandidateFilterDecision;
 import com.betx.application.CandidateFilterDecisionReason;
 import com.betx.application.CandidateFilterEvaluation;
+import com.betx.application.CandidateFilterEvaluationUpsertAction;
+import com.betx.application.CandidateFilterEvaluationUpsertResult;
 import com.betx.application.CandidateFilterName;
 import com.betx.application.CandidateFilterSource;
 import com.betx.application.port.out.CandidateFilterEvaluationRepository;
@@ -40,27 +42,34 @@ public class JdbcCandidateFilterEvaluationRepository implements CandidateFilterE
     }
 
     @Override
-    public void upsert(String databasePath, CandidateFilterEvaluation evaluation) {
+    public CandidateFilterEvaluationUpsertResult upsert(String databasePath, CandidateFilterEvaluation evaluation) {
         ensureSchemaInitialized(databasePath);
         String path = resolvedDatabasePath(databasePath);
-        try (Connection connection = connection(path);
-             PreparedStatement statement = connection.prepareStatement("""
-                 INSERT INTO candidate_filter_evaluations (
-                     id, recommendation_id, canonical_key, filter_name, decision, reason,
-                     selection_side, odds, strategy_name, source, evaluated_at, created_at,
-                     last_evaluated_at, observed_count
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(recommendation_id, filter_name, source) DO UPDATE SET
-                     decision = excluded.decision,
-                     reason = excluded.reason,
-                     selection_side = excluded.selection_side,
-                     odds = excluded.odds,
-                     strategy_name = excluded.strategy_name,
-                     last_evaluated_at = excluded.last_evaluated_at,
-                     observed_count = candidate_filter_evaluations.observed_count + 1
-                 """)) {
-            bind(statement, evaluation);
-            statement.executeUpdate();
+        try (Connection connection = connection(path)) {
+            try (Statement statement = connection.createStatement()) {
+                statement.executeUpdate("BEGIN IMMEDIATE");
+            }
+            try {
+                CandidateFilterEvaluation existing = findExisting(connection, evaluation);
+                CandidateFilterEvaluationUpsertAction action;
+                if (existing == null) {
+                    insert(connection, evaluation);
+                    action = CandidateFilterEvaluationUpsertAction.CREATED;
+                } else {
+                    action = action(existing, evaluation);
+                    updateExisting(connection, evaluation);
+                }
+                CandidateFilterEvaluation saved = findExisting(connection, evaluation);
+                try (Statement statement = connection.createStatement()) {
+                    statement.executeUpdate("COMMIT");
+                }
+                return new CandidateFilterEvaluationUpsertResult(saved, action);
+            } catch (SQLException | RuntimeException exc) {
+                try (Statement statement = connection.createStatement()) {
+                    statement.executeUpdate("ROLLBACK");
+                }
+                throw exc;
+            }
         } catch (SQLException exc) {
             throw new IllegalStateException("Could not upsert candidate filter evaluation.", exc);
         }
@@ -185,6 +194,79 @@ public class JdbcCandidateFilterEvaluationRepository implements CandidateFilterE
         statement.setString(12, instant(evaluation.createdAt()));
         statement.setString(13, instant(evaluation.lastEvaluatedAt()));
         statement.setLong(14, evaluation.observedCount());
+    }
+
+    private void insert(Connection connection, CandidateFilterEvaluation evaluation) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            INSERT INTO candidate_filter_evaluations (
+                id, recommendation_id, canonical_key, filter_name, decision, reason,
+                selection_side, odds, strategy_name, source, evaluated_at, created_at,
+                last_evaluated_at, observed_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """)) {
+            bind(statement, evaluation);
+            statement.executeUpdate();
+        }
+    }
+
+    private void updateExisting(Connection connection, CandidateFilterEvaluation evaluation) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            UPDATE candidate_filter_evaluations
+            SET decision = ?,
+                reason = ?,
+                selection_side = ?,
+                odds = ?,
+                strategy_name = ?,
+                last_evaluated_at = ?,
+                observed_count = observed_count + 1
+            WHERE recommendation_id = ?
+              AND filter_name = ?
+              AND source = ?
+            """)) {
+            statement.setString(1, evaluation.decision().name());
+            statement.setString(2, evaluation.reason().name());
+            statement.setString(3, evaluation.selectionSide().name());
+            statement.setString(4, evaluation.odds() == null ? null : evaluation.odds().toPlainString());
+            statement.setString(5, evaluation.strategyName());
+            statement.setString(6, instant(evaluation.lastEvaluatedAt()));
+            statement.setString(7, evaluation.recommendationId());
+            statement.setString(8, evaluation.filterName().name());
+            statement.setString(9, evaluation.source().name());
+            statement.executeUpdate();
+        }
+    }
+
+    private CandidateFilterEvaluation findExisting(Connection connection, CandidateFilterEvaluation evaluation) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+            SELECT *
+            FROM candidate_filter_evaluations
+            WHERE recommendation_id = ?
+              AND filter_name = ?
+              AND source = ?
+            """)) {
+            statement.setString(1, evaluation.recommendationId());
+            statement.setString(2, evaluation.filterName().name());
+            statement.setString(3, evaluation.source().name());
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (resultSet.next()) {
+                    return map(resultSet);
+                }
+                return null;
+            }
+        }
+    }
+
+    private CandidateFilterEvaluationUpsertAction action(
+        CandidateFilterEvaluation existing,
+        CandidateFilterEvaluation evaluation
+    ) {
+        if (existing.decision() != evaluation.decision()) {
+            return CandidateFilterEvaluationUpsertAction.UPDATED_DECISION_CHANGED;
+        }
+        if (existing.reason() != evaluation.reason()) {
+            return CandidateFilterEvaluationUpsertAction.UPDATED_REASON_CHANGED;
+        }
+        return CandidateFilterEvaluationUpsertAction.OBSERVED_UNCHANGED;
     }
 
     private CandidateFilterEvaluation map(ResultSet resultSet) throws SQLException {
