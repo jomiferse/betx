@@ -58,6 +58,7 @@ public class RunPaperTradingService {
     private final BetRecommendationRepository betRecommendationRepository;
     private final CandidateFilterEvaluationRepository candidateFilterEvaluationRepository;
     private final CandidateFilterEvaluator candidateFilterEvaluator;
+    private final StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService;
     private final Map<String, PaperTradeSettlementGateway> settlementGateways;
     private final Clock clock;
     private final EventMarketAnalyzer analyzer;
@@ -72,6 +73,7 @@ public class RunPaperTradingService {
         PaperSignalEvaluationRepository paperSignalEvaluationRepository,
         BetRecommendationRepository betRecommendationRepository,
         CandidateFilterEvaluationRepository candidateFilterEvaluationRepository,
+        StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService,
         List<PaperTradeSettlementGateway> settlementGateways,
         BetxEventLogger eventLogger
     ) {
@@ -85,7 +87,8 @@ public class RunPaperTradingService {
             candidateFilterEvaluationRepository,
             settlementGateways,
             Clock.systemUTC(),
-            eventLogger
+            eventLogger,
+            stakeSizingShadowEvaluationService
         );
     }
 
@@ -104,6 +107,7 @@ public class RunPaperTradingService {
             paperTradeRepository,
             new NoopPaperSignalEvaluationRepository(),
             new NoopBetRecommendationRepository(),
+            new NoopCandidateFilterEvaluationRepository(),
             settlementGateways,
             clock,
             new BetxEventLogger(StructuredEventSink.noop(), clock)
@@ -126,6 +130,7 @@ public class RunPaperTradingService {
             paperTradeRepository,
             paperSignalEvaluationRepository,
             new NoopBetRecommendationRepository(),
+            new NoopCandidateFilterEvaluationRepository(),
             settlementGateways,
             clock,
             new BetxEventLogger(StructuredEventSink.noop(), clock)
@@ -149,6 +154,7 @@ public class RunPaperTradingService {
             paperTradeRepository,
             paperSignalEvaluationRepository,
             betRecommendationRepository,
+            new NoopCandidateFilterEvaluationRepository(),
             settlementGateways,
             clock,
             new BetxEventLogger(StructuredEventSink.noop(), clock)
@@ -176,7 +182,8 @@ public class RunPaperTradingService {
             new NoopCandidateFilterEvaluationRepository(),
             settlementGateways,
             clock,
-            eventLogger
+            eventLogger,
+            null
         );
     }
 
@@ -191,6 +198,61 @@ public class RunPaperTradingService {
         List<PaperTradeSettlementGateway> settlementGateways,
         Clock clock,
         BetxEventLogger eventLogger
+    ) {
+        this(
+            configRepository,
+            marketDataGateways,
+            snapshotRepository,
+            paperTradeRepository,
+            paperSignalEvaluationRepository,
+            betRecommendationRepository,
+            candidateFilterEvaluationRepository,
+            settlementGateways,
+            clock,
+            eventLogger,
+            null
+        );
+    }
+
+    RunPaperTradingService(
+        BetxConfigRepository configRepository,
+        List<ExchangeMarketDataGateway> marketDataGateways,
+        MarketSnapshotRepository snapshotRepository,
+        PaperTradeRepository paperTradeRepository,
+        PaperSignalEvaluationRepository paperSignalEvaluationRepository,
+        BetRecommendationRepository betRecommendationRepository,
+        List<PaperTradeSettlementGateway> settlementGateways,
+        Clock clock,
+        BetxEventLogger eventLogger,
+        StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService
+    ) {
+        this(
+            configRepository,
+            marketDataGateways,
+            snapshotRepository,
+            paperTradeRepository,
+            paperSignalEvaluationRepository,
+            betRecommendationRepository,
+            new NoopCandidateFilterEvaluationRepository(),
+            settlementGateways,
+            clock,
+            eventLogger,
+            stakeSizingShadowEvaluationService
+        );
+    }
+
+    RunPaperTradingService(
+        BetxConfigRepository configRepository,
+        List<ExchangeMarketDataGateway> marketDataGateways,
+        MarketSnapshotRepository snapshotRepository,
+        PaperTradeRepository paperTradeRepository,
+        PaperSignalEvaluationRepository paperSignalEvaluationRepository,
+        BetRecommendationRepository betRecommendationRepository,
+        CandidateFilterEvaluationRepository candidateFilterEvaluationRepository,
+        List<PaperTradeSettlementGateway> settlementGateways,
+        Clock clock,
+        BetxEventLogger eventLogger,
+        StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService
     ) {
         this.configRepository = configRepository;
         this.marketDataGateways = marketDataGateways.stream()
@@ -207,6 +269,9 @@ public class RunPaperTradingService {
             ? new NoopCandidateFilterEvaluationRepository()
             : candidateFilterEvaluationRepository;
         this.candidateFilterEvaluator = new CandidateFilterEvaluator();
+        this.stakeSizingShadowEvaluationService = stakeSizingShadowEvaluationService == null
+            ? new StakeSizingShadowEvaluationService(null, new BetxEventLogger(StructuredEventSink.noop(), clock), clock)
+            : stakeSizingShadowEvaluationService;
         this.settlementGateways = (settlementGateways == null ? List.<PaperTradeSettlementGateway>of() : settlementGateways).stream()
             .collect(Collectors.toMap(PaperTradeSettlementGateway::exchangeName, Function.identity(), (left, right) -> left));
         this.clock = clock;
@@ -227,6 +292,7 @@ public class RunPaperTradingService {
             new NoopPaperTradeRepository(),
             new NoopPaperSignalEvaluationRepository(),
             new NoopBetRecommendationRepository(),
+            new NoopCandidateFilterEvaluationRepository(),
             List.of(),
             clock,
             new BetxEventLogger(StructuredEventSink.noop(), clock)
@@ -666,6 +732,7 @@ public class RunPaperTradingService {
             );
             logRecommendation(cycleId, result);
             shadowEvaluateCandidateFilters(config, cycleId, result.recommendation(), CandidateFilterSource.RECOMMENDATION);
+            safeEvaluateStakeSizingShadow(config, cycleId, result.recommendation());
             return Optional.of(result);
         } catch (RuntimeException exc) {
             eventLogger.warn(BetxEventCategory.ERROR, "bet_recommendation.persist_failed")
@@ -682,6 +749,27 @@ public class RunPaperTradingService {
                 .field("message", exc.getMessage())
                 .emit();
             return Optional.empty();
+        }
+    }
+
+    private void safeEvaluateStakeSizingShadow(BetxConfig config, String cycleId, BetRecommendation recommendation) {
+        try {
+            stakeSizingShadowEvaluationService.evaluate(config, cycleId, recommendation);
+        } catch (RuntimeException exc) {
+            eventLogger.warn(BetxEventCategory.ERROR, "stake_sizing.shadow_failed")
+                .correlationId("recommendation-" + recommendation.id())
+                .cycleId(cycleId)
+                .exchange(recommendation.exchange())
+                .marketId(recommendation.marketId())
+                .selectionId(recommendation.selectionId())
+                .strategy(recommendation.strategyName())
+                .executionMode("paper")
+                .result("failed")
+                .field("recommendationId", recommendation.id())
+                .field("canonicalKey", recommendation.canonicalKey())
+                .field("errorType", exc.getClass().getSimpleName())
+                .field("message", exc.getMessage())
+                .emit();
         }
     }
 

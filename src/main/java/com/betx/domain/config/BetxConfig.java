@@ -18,7 +18,8 @@ public record BetxConfig(
     MlConfig ml,
     IntelligenceConfig intelligence,
     ResilienceConfig resilience,
-    ExecutionConfig execution
+    ExecutionConfig execution,
+    StakingConfig staking
 ) {
     public BetxConfig {
         app = app == null ? new AppConfig(null) : app;
@@ -34,6 +35,7 @@ public record BetxConfig(
         intelligence = intelligence == null ? new IntelligenceConfig(null, null, null, null, null, null, null, null) : intelligence;
         resilience = resilience == null ? ResilienceConfig.defaults() : resilience;
         execution = execution == null ? ExecutionConfig.defaults() : execution;
+        staking = staking == null ? StakingConfig.defaults() : staking;
     }
 
     public BetxConfig(
@@ -47,7 +49,7 @@ public record BetxConfig(
         List<StrategyConfig> strategies,
         MlConfig ml
     ) {
-        this(app, telegram, betfair, exchanges, marketData, storage, null, risk, strategies, ml, null, null, null);
+        this(app, telegram, betfair, exchanges, marketData, storage, null, risk, strategies, ml, null, null, null, null);
     }
 
     public BetxConfig(
@@ -62,7 +64,7 @@ public record BetxConfig(
         MlConfig ml,
         IntelligenceConfig intelligence
     ) {
-        this(app, telegram, betfair, exchanges, marketData, storage, null, risk, strategies, ml, intelligence, null, null);
+        this(app, telegram, betfair, exchanges, marketData, storage, null, risk, strategies, ml, intelligence, null, null, null);
     }
 
     public BetxConfig(
@@ -78,7 +80,7 @@ public record BetxConfig(
         MlConfig ml,
         IntelligenceConfig intelligence
     ) {
-        this(app, telegram, betfair, exchanges, marketData, storage, paper, risk, strategies, ml, intelligence, null, null);
+        this(app, telegram, betfair, exchanges, marketData, storage, paper, risk, strategies, ml, intelligence, null, null, null);
     }
 
     public BetxConfig(
@@ -95,7 +97,25 @@ public record BetxConfig(
         IntelligenceConfig intelligence,
         ResilienceConfig resilience
     ) {
-        this(app, telegram, betfair, exchanges, marketData, storage, paper, risk, strategies, ml, intelligence, resilience, null);
+        this(app, telegram, betfair, exchanges, marketData, storage, paper, risk, strategies, ml, intelligence, resilience, null, null);
+    }
+
+    public BetxConfig(
+        AppConfig app,
+        TelegramConfig telegram,
+        BetfairConfig betfair,
+        List<ExchangeConfig> exchanges,
+        MarketDataConfig marketData,
+        StorageConfig storage,
+        PaperConfig paper,
+        RiskConfig risk,
+        List<StrategyConfig> strategies,
+        MlConfig ml,
+        IntelligenceConfig intelligence,
+        ResilienceConfig resilience,
+        ExecutionConfig execution
+    ) {
+        this(app, telegram, betfair, exchanges, marketData, storage, paper, risk, strategies, ml, intelligence, resilience, execution, null);
     }
 
     public static BetxConfig defaults() {
@@ -112,16 +132,17 @@ public record BetxConfig(
             new MlConfig(false, "./models/value_model.pkl", BigDecimal.valueOf(0.70)),
             new IntelligenceConfig(false, "openrouter", "x-ai/grok-4.3", "OPENROUTER_API_KEY", null, 20, 70, null),
             ResilienceConfig.defaults(),
-            ExecutionConfig.defaults()
+            ExecutionConfig.defaults(),
+            StakingConfig.defaults()
         );
     }
 
     public BetxConfig withExchanges(List<ExchangeConfig> newExchanges) {
-        return new BetxConfig(app, telegram, betfair, newExchanges, marketData, storage, paper, risk, strategies, ml, intelligence, resilience, execution);
+        return new BetxConfig(app, telegram, betfair, newExchanges, marketData, storage, paper, risk, strategies, ml, intelligence, resilience, execution, staking);
     }
 
     public BetxConfig withIntelligence(IntelligenceConfig newIntelligence) {
-        return new BetxConfig(app, telegram, betfair, exchanges, marketData, storage, paper, risk, strategies, ml, newIntelligence, resilience, execution);
+        return new BetxConfig(app, telegram, betfair, exchanges, marketData, storage, paper, risk, strategies, ml, newIntelligence, resilience, execution, staking);
     }
 
     public List<ExchangeConfig> enabledExchanges() {

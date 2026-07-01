@@ -82,6 +82,7 @@ public class TelegramBetConfirmationService {
     private final MarketSnapshotRepository snapshotRepository;
     private final SignalHistoryRepository signalHistoryRepository;
     private final BetRecommendationRepository betRecommendationRepository;
+    private final StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService;
     private final BetExecutionGateway executionGateway;
     private final TelegramBetAlertFormatter telegramBetAlertFormatter;
     private final Clock clock;
@@ -102,6 +103,7 @@ public class TelegramBetConfirmationService {
         SignalHistoryRepository signalHistoryRepository,
         BetRecommendationRepository betRecommendationRepository,
         @Qualifier("betfairBetExecutionGateway") BetExecutionGateway executionGateway,
+        StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService,
         BetxEventLogger eventLogger
     ) {
         this(
@@ -117,7 +119,8 @@ public class TelegramBetConfirmationService {
             betRecommendationRepository,
             executionGateway,
             Clock.systemUTC(),
-            eventLogger
+            eventLogger,
+            stakeSizingShadowEvaluationService
         );
     }
 
@@ -310,6 +313,40 @@ public class TelegramBetConfirmationService {
         Clock clock,
         BetxEventLogger eventLogger
     ) {
+        this(
+            configRepository,
+            telegramConnectionService,
+            telegramGateway,
+            intentRepository,
+            telegramStateRepository,
+            accountGateway,
+            exposureGateway,
+            snapshotRepository,
+            signalHistoryRepository,
+            betRecommendationRepository,
+            executionGateway,
+            clock,
+            eventLogger,
+            null
+        );
+    }
+
+    TelegramBetConfirmationService(
+        BetxConfigRepository configRepository,
+        TelegramConnectionService telegramConnectionService,
+        TelegramBotGateway telegramGateway,
+        BetIntentRepository intentRepository,
+        TelegramStateRepository telegramStateRepository,
+        ExchangeAccountGateway accountGateway,
+        ExchangeExposureGateway exposureGateway,
+        MarketSnapshotRepository snapshotRepository,
+        SignalHistoryRepository signalHistoryRepository,
+        BetRecommendationRepository betRecommendationRepository,
+        BetExecutionGateway executionGateway,
+        Clock clock,
+        BetxEventLogger eventLogger,
+        StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService
+    ) {
         this.configRepository = configRepository;
         this.telegramConnectionService = telegramConnectionService;
         this.telegramGateway = telegramGateway;
@@ -322,6 +359,9 @@ public class TelegramBetConfirmationService {
         this.betRecommendationRepository = betRecommendationRepository == null
             ? new NoopBetRecommendationRepository()
             : betRecommendationRepository;
+        this.stakeSizingShadowEvaluationService = stakeSizingShadowEvaluationService == null
+            ? new StakeSizingShadowEvaluationService(null, new BetxEventLogger(StructuredEventSink.noop(), clock), clock)
+            : stakeSizingShadowEvaluationService;
         this.executionGateway = executionGateway;
         this.telegramBetAlertFormatter = new TelegramBetAlertFormatter();
         this.clock = clock;
@@ -622,7 +662,7 @@ public class TelegramBetConfirmationService {
                 now,
                 now
             ).withEvaluationId(signal.evaluationId());
-            intent = attachRecommendation(config.storage().path(), signal, analysis, now, intent);
+            intent = attachRecommendation(config, signal, analysis, now, intent);
             Optional<BetIntent> duplicate = intentRepository.claimDuplicateProtectionKey(config.storage().path(), intent);
             if (duplicate.isPresent()) {
                 logDuplicateSkipped(signal, duplicate.get());
@@ -851,7 +891,7 @@ public class TelegramBetConfirmationService {
                 now,
                 now
             ).withEvaluationId(signal.evaluationId());
-            intent = attachRecommendation(config.storage().path(), signal, analysis, now, intent);
+            intent = attachRecommendation(config, signal, analysis, now, intent);
             Optional<BetIntent> duplicate = intentRepository.claimDuplicateProtectionKey(config.storage().path(), intent);
             if (duplicate.isPresent()) {
                 orderExecutionCoordinator.complete(reservation, false);
@@ -944,13 +984,13 @@ public class TelegramBetConfirmationService {
     }
 
     private BetIntent attachRecommendation(
-        String databasePath,
+        BetxConfig config,
         BetSignal signal,
         RunnerAnalysis analysis,
         Instant observedAt,
         BetIntent intent
     ) {
-        return resolveRecommendation(databasePath, signal, analysis, observedAt)
+        return resolveRecommendationWithStakeSizingShadow(config, signal, analysis, observedAt)
             .map(recommendation -> intent.withRecommendation(
                 recommendation.id(),
                 recommendation.recommendedAt(),
@@ -960,7 +1000,7 @@ public class TelegramBetConfirmationService {
     }
 
     private Optional<BetRecommendation> resolveRecommendation(
-        String databasePath,
+        BetxConfig config,
         BetSignal signal,
         RunnerAnalysis analysis,
         Instant observedAt
@@ -989,7 +1029,11 @@ public class TelegramBetConfirmationService {
             analysis.reason()
         );
         try {
-            return Optional.of(betRecommendationRepository.upsertActiveRecommendation(databasePath, recommendation).recommendation());
+            BetRecommendation upserted = betRecommendationRepository.upsertActiveRecommendation(
+                config.storage().path(),
+                recommendation
+            ).recommendation();
+            return Optional.of(upserted);
         } catch (RuntimeException exc) {
             eventLogger.warn(BetxEventCategory.ERROR, "bet_recommendation.link_failed")
                 .correlationId(signalCorrelationId(signal))
@@ -1004,6 +1048,38 @@ public class TelegramBetConfirmationService {
                 .field("message", safeMessage(exc))
                 .emit();
             return Optional.empty();
+        }
+    }
+
+    private Optional<BetRecommendation> resolveRecommendationWithStakeSizingShadow(
+        BetxConfig config,
+        BetSignal signal,
+        RunnerAnalysis analysis,
+        Instant observedAt
+    ) {
+        Optional<BetRecommendation> recommendation = resolveRecommendation(config, signal, analysis, observedAt);
+        recommendation.ifPresent(upserted -> safeEvaluateStakeSizingShadow(config, signalCorrelationId(signal), upserted));
+        return recommendation;
+    }
+
+    private void safeEvaluateStakeSizingShadow(BetxConfig config, String cycleId, BetRecommendation recommendation) {
+        try {
+            stakeSizingShadowEvaluationService.evaluate(config, cycleId, recommendation);
+        } catch (RuntimeException exc) {
+            eventLogger.warn(BetxEventCategory.ERROR, "stake_sizing.shadow_failed")
+                .correlationId("recommendation-" + recommendation.id())
+                .cycleId(cycleId)
+                .exchange(recommendation.exchange())
+                .marketId(recommendation.marketId())
+                .selectionId(recommendation.selectionId())
+                .strategy(recommendation.strategyName())
+                .executionMode("telegram")
+                .result("failed")
+                .field("recommendationId", recommendation.id())
+                .field("canonicalKey", recommendation.canonicalKey())
+                .field("errorType", exc.getClass().getSimpleName())
+                .field("message", safeMessage(exc))
+                .emit();
         }
     }
 
@@ -1409,7 +1485,7 @@ public class TelegramBetConfirmationService {
             now,
             now
         ).withEvaluationId(signal.evaluationId());
-        intent = attachRecommendation(config.storage().path(), signal, analysis, now, intent);
+        intent = attachRecommendation(config, signal, analysis, now, intent);
         intentRepository.save(config.storage().path(), intent);
         return intent;
     }
@@ -1449,7 +1525,7 @@ public class TelegramBetConfirmationService {
             now,
             now
         ).withEvaluationId(signal.evaluationId());
-        intent = attachRecommendation(config.storage().path(), signal, analysis, now, intent);
+        intent = attachRecommendation(config, signal, analysis, now, intent);
         intentRepository.save(config.storage().path(), intent);
         return intent;
     }

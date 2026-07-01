@@ -99,6 +99,7 @@ class RunPaperTradingServiceTest {
         PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
         PaperSignalEvaluationRepositoryStub evaluations = new PaperSignalEvaluationRepositoryStub();
         BetRecommendationRepositoryStub recommendations = new BetRecommendationRepositoryStub();
+        RecordingStakeSizingShadowEvaluationService stakeSizing = new RecordingStakeSizingShadowEvaluationService();
         repository.recent.add(new ObservedMarketSnapshot(
             observedAt.minusSeconds(3600),
             snapshot(2L, "Draw", "3.70")
@@ -111,7 +112,9 @@ class RunPaperTradingServiceTest {
             evaluations,
             recommendations,
             List.of(),
-            Clock.fixed(observedAt, ZoneOffset.UTC)
+            Clock.fixed(observedAt, ZoneOffset.UTC),
+            new BetxEventLogger(StructuredEventSink.noop(), Clock.fixed(observedAt, ZoneOffset.UTC)),
+            stakeSizing
         );
 
         PaperTradingResult result = service.run(
@@ -135,6 +138,52 @@ class RunPaperTradingServiceTest {
             .satisfies(trade -> assertThat(trade.recommendationId()).isEqualTo(recommendations.upserted.getFirst().id()));
         assertThat(evaluations.saved).singleElement()
             .satisfies(evaluation -> assertThat(evaluation.recommendationId()).isEqualTo(recommendations.upserted.getFirst().id()));
+        assertThat(stakeSizing.evaluated).containsExactly(recommendations.upserted.getFirst());
+    }
+
+    @Test
+    void stakeSizingShadowFailureDoesNotBreakPaperRecommendationFlow() {
+        Instant observedAt = Instant.parse("2026-06-15T10:00:00Z");
+        MarketSnapshotRepositoryStub repository = new MarketSnapshotRepositoryStub();
+        PaperTradeRepositoryStub paperTrades = new PaperTradeRepositoryStub();
+        PaperSignalEvaluationRepositoryStub evaluations = new PaperSignalEvaluationRepositoryStub();
+        BetRecommendationRepositoryStub recommendations = new BetRecommendationRepositoryStub();
+        ThrowingStakeSizingShadowEvaluationService stakeSizing = new ThrowingStakeSizingShadowEvaluationService();
+        RecordingEventSink sink = new RecordingEventSink();
+        repository.recent.add(new ObservedMarketSnapshot(
+            observedAt.minusSeconds(3600),
+            snapshot(2L, "Draw", "3.70")
+        ));
+        RunPaperTradingService service = new RunPaperTradingService(
+            new StaticConfigRepository(BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)))),
+            List.of(new StaticGateway(List.of(snapshot(2L, "Draw", "3.70")))),
+            repository,
+            paperTrades,
+            evaluations,
+            recommendations,
+            List.of(),
+            Clock.fixed(observedAt, ZoneOffset.UTC),
+            new BetxEventLogger(sink, Clock.fixed(observedAt, ZoneOffset.UTC)),
+            stakeSizing
+        );
+
+        PaperTradingResult result = service.run(
+            new ConfigPath(Path.of("betx.yml")),
+            new BigDecimal("0.02"),
+            BacktestSlippageModel.PROFIT_HAIRCUT
+        );
+
+        assertThat(result.recommendationsGenerated()).isEqualTo(1);
+        assertThat(paperTrades.saved).singleElement().satisfies(trade -> {
+            assertThat(trade.recommendationId()).isEqualTo(recommendations.upserted.getFirst().id());
+            assertThat(trade.stake()).isEqualByComparingTo("5");
+        });
+        assertThat(sink.events)
+            .filteredOn(event -> event.event().equals("paper_trade.recommended"))
+            .hasSize(1);
+        assertThat(sink.events)
+            .filteredOn(event -> event.event().equals("stake_sizing.shadow_failed"))
+            .hasSize(1);
     }
 
     @Test
@@ -1065,6 +1114,26 @@ class RunPaperTradingServiceTest {
         @Override
         public List<CandidateFilterEvaluation> list(String databasePath, Instant from, Instant to) {
             return saved;
+        }
+    }
+
+    private static class RecordingStakeSizingShadowEvaluationService extends StakeSizingShadowEvaluationService {
+        private final List<BetRecommendation> evaluated = new ArrayList<>();
+
+        private RecordingStakeSizingShadowEvaluationService() {
+            super(null, new BetxEventLogger(StructuredEventSink.noop()), Clock.systemUTC());
+        }
+
+        @Override
+        public void evaluate(BetxConfig config, String cycleId, BetRecommendation recommendation) {
+            evaluated.add(recommendation);
+        }
+    }
+
+    private static final class ThrowingStakeSizingShadowEvaluationService extends RecordingStakeSizingShadowEvaluationService {
+        @Override
+        public void evaluate(BetxConfig config, String cycleId, BetRecommendation recommendation) {
+            throw new IllegalStateException("boom");
         }
     }
 

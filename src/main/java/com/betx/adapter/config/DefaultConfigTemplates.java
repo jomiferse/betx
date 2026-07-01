@@ -48,6 +48,32 @@ public final class DefaultConfigTemplates {
                 revalidate_odds_after: 3s
                 min_effective_balance: 0.01
 
+            staking:
+              # Live stake sizing remains disabled. Shadow mode records what policies would have recommended.
+              enabled: false
+              shadow_enabled: true
+              mode: FLAT
+              base_stake: 1.00
+              min_stake: 1.00
+              max_stake: 10.00
+              bankroll: 500.00
+              risk_profile: CONSERVATIVE
+              limits:
+                max_daily_loss: 25.00
+                max_total_exposure: 50.00
+                max_market_exposure: 5.00
+                max_open_positions: 10
+              shadow:
+                enabled: true
+                policies:
+                  - FLAT
+                  - RISK_ADJUSTED
+                  - TIERED_CONFIDENCE
+                  - FRACTIONAL_KELLY_SHADOW
+                risk_profiles:
+                  - CONSERVATIVE
+                  - BALANCED
+
             exchanges:
               - name: betfair
                 enabled: false

@@ -122,6 +122,7 @@ class TelegramBetConfirmationServiceTest {
         RecordingTelegramGateway gateway = new RecordingTelegramGateway();
         RecordingIntentRepository intents = new RecordingIntentRepository();
         RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
+        RecordingStakeSizingShadowEvaluationService stakeSizing = new RecordingStakeSizingShadowEvaluationService();
         recommendations.add(recommendation("rec-confirmation", "eval-original", "1.1", 42L, SelectionSide.UNKNOWN, "N/A"));
         TelegramBetConfirmationService service = service(
             configWithAutoBetting(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3, true, true),
@@ -135,7 +136,8 @@ class TelegramBetConfirmationServiceTest {
             new RecordingExecutionGateway(),
             Clock.systemUTC(),
             new RecordingStructuredEventSink(),
-            recommendations
+            recommendations,
+            stakeSizing
         );
 
         service.sync(CONFIG_PATH, resultOf(
@@ -149,6 +151,52 @@ class TelegramBetConfirmationServiceTest {
                 assertThat(intent.evaluationId()).isEqualTo("eval-confirmation");
                 assertThat(intent.recommendationId()).isEqualTo("rec-confirmation");
             });
+        assertThat(stakeSizing.evaluated).singleElement()
+            .satisfies(recommendation -> assertThat(recommendation.id()).isEqualTo("rec-confirmation"));
+    }
+
+    @Test
+    void stakeSizingShadowFailureDoesNotBreakTelegramConfirmationIntentCreation() {
+        RecordingTelegramConnectionService telegram = new RecordingTelegramConnectionService();
+        RecordingTelegramGateway gateway = new RecordingTelegramGateway();
+        RecordingIntentRepository intents = new RecordingIntentRepository();
+        RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
+        ThrowingStakeSizingShadowEvaluationService stakeSizing = new ThrowingStakeSizingShadowEvaluationService();
+        RecordingStructuredEventSink sink = new RecordingStructuredEventSink();
+        recommendations.add(recommendation("rec-confirmation", "eval-original", "1.1", 42L, SelectionSide.UNKNOWN, "N/A"));
+        RecordingExecutionGateway executionGateway = new RecordingExecutionGateway();
+        TelegramBetConfirmationService service = service(
+            configWithAutoBetting(BigDecimal.valueOf(5), BigDecimal.valueOf(25), 3, true, true),
+            telegram,
+            gateway,
+            intents,
+            new StaticAccountGateway(BigDecimal.valueOf(12.5)),
+            StaticExposureGateway.available(0, BigDecimal.ZERO),
+            new RecordingMarketSnapshotRepository(),
+            new RecordingSignalHistoryRepository(),
+            executionGateway,
+            Clock.systemUTC(),
+            sink,
+            recommendations,
+            stakeSizing
+        );
+
+        service.sync(CONFIG_PATH, resultOf(
+            signalWithEvaluationId("betfair", "1.1", 42L, BigDecimal.valueOf(2.5), BigDecimal.valueOf(5), "eval-confirmation"),
+            analysis("Team A")
+        ));
+
+        assertThat(intents.saved()).singleElement()
+            .satisfies(intent -> {
+                assertThat(intent.stage()).isEqualTo(BetIntentStage.AWAITING_CONFIRMATION);
+                assertThat(intent.recommendationId()).isEqualTo("rec-confirmation");
+                assertThat(intent.maxStake()).isEqualByComparingTo("5");
+                assertThat(intent.requestedStake()).isNull();
+            });
+        assertThat(executionGateway.orders()).isEmpty();
+        assertThat(sink.events())
+            .filteredOn(event -> event.event().equals("stake_sizing.shadow_failed"))
+            .hasSize(1);
     }
 
     @Test
@@ -2207,6 +2255,38 @@ class TelegramBetConfirmationServiceTest {
         StructuredEventSink eventSink,
         BetRecommendationRepository recommendationRepository
     ) {
+        return service(
+            config,
+            telegram,
+            gateway,
+            intents,
+            accountGateway,
+            exposureGateway,
+            snapshotRepository,
+            historyRepository,
+            executionGateway,
+            clock,
+            eventSink,
+            recommendationRepository,
+            null
+        );
+    }
+
+    private TelegramBetConfirmationService service(
+        BetxConfig config,
+        RecordingTelegramConnectionService telegram,
+        RecordingTelegramGateway gateway,
+        RecordingIntentRepository intents,
+        ExchangeAccountGateway accountGateway,
+        ExchangeExposureGateway exposureGateway,
+        MarketSnapshotRepository snapshotRepository,
+        SignalHistoryRepository historyRepository,
+        BetExecutionGateway executionGateway,
+        Clock clock,
+        StructuredEventSink eventSink,
+        BetRecommendationRepository recommendationRepository,
+        StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService
+    ) {
         return new TelegramBetConfirmationService(
             new StaticConfigRepository(config),
             telegram,
@@ -2220,8 +2300,29 @@ class TelegramBetConfirmationServiceTest {
             recommendationRepository,
             executionGateway,
             clock,
-            new BetxEventLogger(eventSink, clock)
+            new BetxEventLogger(eventSink, clock),
+            stakeSizingShadowEvaluationService
         );
+    }
+
+    private static class RecordingStakeSizingShadowEvaluationService extends StakeSizingShadowEvaluationService {
+        private final List<BetRecommendation> evaluated = new ArrayList<>();
+
+        private RecordingStakeSizingShadowEvaluationService() {
+            super(null, new BetxEventLogger(StructuredEventSink.noop()), Clock.systemUTC());
+        }
+
+        @Override
+        public void evaluate(BetxConfig config, String cycleId, BetRecommendation recommendation) {
+            evaluated.add(recommendation);
+        }
+    }
+
+    private static final class ThrowingStakeSizingShadowEvaluationService extends RecordingStakeSizingShadowEvaluationService {
+        @Override
+        public void evaluate(BetxConfig config, String cycleId, BetRecommendation recommendation) {
+            throw new IllegalStateException("boom");
+        }
     }
 
     private static JsonNode readJson(String line) {

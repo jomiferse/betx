@@ -42,6 +42,7 @@ public class BetxConfigValidator {
         validateResilience(config.resilience().telegram(), "resilience.telegram");
         validateResilience(config.resilience().openrouter(), "resilience.openrouter");
         validateExecutionQueue(config.execution().queue());
+        validateStaking(config.staking());
         validateIntelligence(config.intelligence());
         config.exchanges().stream()
             .filter(exchange -> "betfair".equals(exchange.name()))
@@ -144,6 +145,22 @@ public class BetxConfigValidator {
         }
         if (queue.minEffectiveBalance().compareTo(BigDecimal.ZERO) < 0) {
             throw new ConfigException("execution.queue.min_effective_balance must be zero or greater.");
+        }
+    }
+
+    private void validateStaking(StakingConfig staking) {
+        requirePositive(staking.baseStake(), "staking.base_stake");
+        requirePositive(staking.minStake(), "staking.min_stake");
+        requirePositive(staking.maxStake(), "staking.max_stake");
+        requirePositive(staking.bankroll(), "staking.bankroll");
+        if (staking.minStake().compareTo(staking.maxStake()) > 0) {
+            throw new ConfigException("staking.min_stake must not be greater than staking.max_stake.");
+        }
+        requirePositive(staking.limits().maxDailyLoss(), "staking.limits.max_daily_loss");
+        requirePositive(staking.limits().maxTotalExposure(), "staking.limits.max_total_exposure");
+        requirePositive(staking.limits().maxMarketExposure(), "staking.limits.max_market_exposure");
+        if (staking.limits().maxOpenPositions() <= 0) {
+            throw new ConfigException("staking.limits.max_open_positions must be greater than zero.");
         }
     }
 

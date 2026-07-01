@@ -60,6 +60,7 @@ public class RunDryRunSignalsService {
     private final BetRecommendationRepository betRecommendationRepository;
     private final CandidateFilterEvaluationRepository candidateFilterEvaluationRepository;
     private final CandidateFilterEvaluator candidateFilterEvaluator;
+    private final StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService;
     private final BetxEventLogger eventLogger;
     private final Clock clock;
     private final EventMarketAnalyzer analyzer;
@@ -80,6 +81,7 @@ public class RunDryRunSignalsService {
         SignalHistoryRepository signalHistoryRepository,
         BetRecommendationRepository betRecommendationRepository,
         CandidateFilterEvaluationRepository candidateFilterEvaluationRepository,
+        StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService,
         BetxEventLogger eventLogger
     ) {
         this(
@@ -93,6 +95,7 @@ public class RunDryRunSignalsService {
             signalHistoryRepository,
             betRecommendationRepository,
             candidateFilterEvaluationRepository,
+            stakeSizingShadowEvaluationService,
             Clock.systemUTC(),
             eventLogger
         );
@@ -216,6 +219,38 @@ public class RunDryRunSignalsService {
         Clock clock,
         BetxEventLogger eventLogger
     ) {
+        this(
+            configRepository,
+            marketDataGateways,
+            telegramService,
+            executionGateway,
+            snapshotRepository,
+            changeDetector,
+            intelligenceGateway,
+            signalHistoryRepository,
+            betRecommendationRepository,
+            candidateFilterEvaluationRepository,
+            null,
+            clock,
+            eventLogger
+        );
+    }
+
+    RunDryRunSignalsService(
+        BetxConfigRepository configRepository,
+        List<ExchangeMarketDataGateway> marketDataGateways,
+        TelegramConnectionService telegramService,
+        BetExecutionGateway executionGateway,
+        MarketSnapshotRepository snapshotRepository,
+        MarketSnapshotChangeDetector changeDetector,
+        ExternalMatchIntelligenceGateway intelligenceGateway,
+        SignalHistoryRepository signalHistoryRepository,
+        BetRecommendationRepository betRecommendationRepository,
+        CandidateFilterEvaluationRepository candidateFilterEvaluationRepository,
+        StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService,
+        Clock clock,
+        BetxEventLogger eventLogger
+    ) {
         this.configRepository = configRepository;
         this.marketDataGateways = marketDataGateways.stream()
             .collect(Collectors.toMap(ExchangeMarketDataGateway::exchangeName, Function.identity(), (left, right) -> left));
@@ -234,6 +269,9 @@ public class RunDryRunSignalsService {
         this.candidateFilterEvaluator = new CandidateFilterEvaluator();
         this.clock = clock;
         this.eventLogger = eventLogger == null ? new BetxEventLogger(StructuredEventSink.noop(), clock) : eventLogger;
+        this.stakeSizingShadowEvaluationService = stakeSizingShadowEvaluationService == null
+            ? new StakeSizingShadowEvaluationService(null, new BetxEventLogger(StructuredEventSink.noop(), clock), clock)
+            : stakeSizingShadowEvaluationService;
         this.analyzer = new EventMarketAnalyzer();
         this.telegramBetAlertFormatter = new TelegramBetAlertFormatter();
         this.telegramBetAlertPolicy = new TelegramBetAlertPolicy();
@@ -597,6 +635,7 @@ public class RunDryRunSignalsService {
             );
             logRecommendation(cycleId, result);
             shadowEvaluateCandidateFilters(config, cycleId, result.recommendation(), CandidateFilterSource.RECOMMENDATION);
+            stakeSizingShadowEvaluationService.evaluate(config, cycleId, result.recommendation());
         } catch (RuntimeException exc) {
             eventLogger.warn(BetxEventCategory.ERROR, "bet_recommendation.persist_failed")
                 .correlationId(signalCorrelationId(observedAt, analysis.exchange(), analysis.marketId(), analysis.selectionId()))

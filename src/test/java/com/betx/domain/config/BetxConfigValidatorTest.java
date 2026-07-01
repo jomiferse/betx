@@ -80,6 +80,26 @@ class BetxConfigValidatorTest {
     }
 
     @Test
+    void rejectsInvalidStakeSizingLimits() {
+        BetxConfig config = configWithStaking(new StakingConfig(
+            false,
+            true,
+            null,
+            BigDecimal.ONE,
+            BigDecimal.valueOf(10),
+            BigDecimal.ONE,
+            BigDecimal.valueOf(500),
+            null,
+            null,
+            null
+        ));
+
+        assertThatThrownBy(() -> validator.validate(config))
+            .isInstanceOf(ConfigException.class)
+            .hasMessage("staking.min_stake must not be greater than staking.max_stake.");
+    }
+
+    @Test
     void rejectsEnabledBetfairAutoBettingWithNonPositiveStake() {
         BetxConfig config = configWithBetfairAutoBetting(new BetfairAutoBettingConfig(
             true,
@@ -366,6 +386,26 @@ class BetxConfigValidatorTest {
             defaults.risk(),
             defaults.strategies(),
             defaults.ml()
+        );
+    }
+
+    private BetxConfig configWithStaking(StakingConfig staking) {
+        BetxConfig defaults = BetxConfig.defaults();
+        return new BetxConfig(
+            defaults.app(),
+            defaults.telegram(),
+            defaults.betfair(),
+            defaults.exchanges(),
+            defaults.marketData(),
+            defaults.storage(),
+            defaults.paper(),
+            defaults.risk(),
+            defaults.strategies(),
+            defaults.ml(),
+            defaults.intelligence(),
+            defaults.resilience(),
+            defaults.execution(),
+            staking
         );
     }
 }

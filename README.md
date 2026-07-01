@@ -163,7 +163,24 @@ execution:
     stale_balance_ttl: 5s
     revalidate_odds_after: 3s
     min_effective_balance: 0.01
+
+staking:
+  enabled: false
+  shadow_enabled: true
+  base_stake: 1.00
+  min_stake: 1.00
+  max_stake: 10.00
+  bankroll: 500.00
+  shadow:
+    enabled: true
+    policies:
+      - FLAT
+      - RISK_ADJUSTED
+      - TIERED_CONFIDENCE
+      - FRACTIONAL_KELLY_SHADOW
 ```
+
+Stake sizing is shadow-only while `staking.enabled: false`. BetX records what each staking policy would have recommended, but real orders still use the existing exchange auto-betting and Telegram confirmation stake flow.
 
 Telegram credentials can be stored in `betx.yml` or supplied with environment variables:
 

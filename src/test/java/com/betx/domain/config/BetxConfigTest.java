@@ -99,6 +99,25 @@ class BetxConfigTest {
     }
 
     @Test
+    void providesDefaultStakeSizingShadowConfiguration() {
+        BetxConfig config = BetxConfig.defaults();
+
+        assertThat(config.staking().enabled()).isFalse();
+        assertThat(config.staking().shadowEnabled()).isTrue();
+        assertThat(config.staking().baseStake()).isEqualByComparingTo("1.00");
+        assertThat(config.staking().minStake()).isEqualByComparingTo("1.00");
+        assertThat(config.staking().maxStake()).isEqualByComparingTo("10.00");
+        assertThat(config.staking().bankroll()).isEqualByComparingTo("500.00");
+        assertThat(config.staking().shadow().enabled()).isTrue();
+        assertThat(config.staking().shadow().policies()).contains(
+            com.betx.domain.staking.StakeSizingMode.FLAT,
+            com.betx.domain.staking.StakeSizingMode.RISK_ADJUSTED,
+            com.betx.domain.staking.StakeSizingMode.TIERED_CONFIDENCE,
+            com.betx.domain.staking.StakeSizingMode.FRACTIONAL_KELLY_SHADOW
+        );
+    }
+
+    @Test
     void providesDefaultStructuredLoggingConfiguration() {
         BetxConfig config = BetxConfig.defaults();
 
