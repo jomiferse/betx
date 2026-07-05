@@ -277,6 +277,8 @@ public class DiagnosticsFormatter {
         lines.add("");
         addStakeSizingShadowDiagnostics(lines, report.stakeSizingShadowDiagnostics());
         lines.add("");
+        addStakeSizingScenarioSimulation(lines, report.stakeSizingScenarioSimulation());
+        lines.add("");
         lines.add("Paper vs real");
         lines.add(line("Settled matched pairs", report.paperVsRealMetrics().settledMatchedPairs()));
         lines.add(line("Average real vs paper odds difference", number(report.paperVsRealMetrics().averageRealVsPaperOddsDifference())));
@@ -717,6 +719,77 @@ public class DiagnosticsFormatter {
         lines.add("- keep shadow running");
         lines.add("- do not enable live staking");
         lines.add("- collect more settled joined bets");
+    }
+
+    private static void addStakeSizingScenarioSimulation(
+        List<String> lines,
+        DiagnosticsStakeSizingScenarioSimulation simulation
+    ) {
+        lines.add("Stake sizing scenario simulation");
+        lines.add(line("Available", simulation.enabled() ? "yes" : "no"));
+        lines.add(line("Officially applied", simulation.officiallyApplied() ? "yes" : "no"));
+        lines.add(line("should_apply_live", simulation.shouldApplyLive() ? "yes" : "no"));
+        if (simulation.scenarios().isEmpty()) {
+            lines.add(line("Scenarios", 0));
+            return;
+        }
+        simulation.scenarios().forEach(scenario -> {
+            lines.add("- "
+                + scenario.scenarioName()
+                + " | base "
+                + money(scenario.baseStake())
+                + " | min "
+                + money(scenario.minStake())
+                + " | max "
+                + money(scenario.maxStake())
+                + " | max_stake is a cap, not the default stake");
+            scenario.policyResults().forEach(result -> lines.add("  - "
+                + result.scenarioName()
+                + "/"
+                + result.policyName()
+                + "/"
+                + result.riskProfile()
+                + " | evaluated "
+                + result.recommendationsEvaluated()
+                + " | real joined "
+                + result.realJoinedBets()
+                + " | settled "
+                + result.realSettledJoined()
+                + " | open "
+                + result.realOpenJoined()
+                + " | baseline pnl "
+                + money(result.baselineRealPnl())
+                + " | simulated pnl "
+                + money(result.simulatedPnl())
+                + " | simulated roi "
+                + number(result.simulatedRoi())
+                + " | delta pnl "
+                + money(result.deltaPnl())
+                + " | avg calculated "
+                + money(result.avgCalculatedStake())
+                + " | avg final "
+                + money(result.avgFinalStake())
+                + " | floor "
+                + result.minStakeFloorAppliedCount()
+                + " | floor rate "
+                + number(result.minStakeFloorAppliedRate())
+                + " | max drawdown "
+                + money(result.simulatedMaxDrawdown())
+                + " | status "
+                + result.status()
+                + " | should_apply_live "
+                + (result.shouldApplyLive() ? "yes" : "no")
+                + (result.warning() == null || result.warning().isBlank() ? "" : " | warning " + result.warning())));
+        });
+        lines.add("Scenario ranking");
+        lines.add(line("Best simulated ROI", simulation.ranking().bestSimulatedRoi()));
+        lines.add(line("Best simulated PnL", simulation.ranking().bestSimulatedPnl()));
+        lines.add(line("Lowest simulated drawdown", simulation.ranking().lowestSimulatedDrawdown()));
+        lines.add(line("Best risk-adjusted scenario", simulation.ranking().bestRiskAdjustedScenario()));
+        lines.add(line("Highest risk scenario", simulation.ranking().highestRiskScenario()));
+        lines.add(line("Most affected by min_stake floor", simulation.ranking().mostAffectedByMinStakeFloor()));
+        lines.add(line("Ranking warning", simulation.ranking().warning()));
+        lines.add(line("Ranking should_apply_live", simulation.ranking().shouldApplyLive() ? "yes" : "no"));
     }
 
     private static void addPerformanceMap(

@@ -14,6 +14,13 @@ import com.betx.domain.order.BetExecutionStatus;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.BetSettlementResult;
 import com.betx.domain.order.SelectionSide;
+import com.betx.domain.staking.StakeSizingAdjustment;
+import com.betx.domain.staking.StakeSizingContext;
+import com.betx.domain.staking.StakeSizingDecision;
+import com.betx.domain.staking.StakeSizingEngine;
+import com.betx.domain.staking.StakeSizingMode;
+import com.betx.domain.staking.StakeSizingRiskProfile;
+import com.betx.domain.staking.StakeSizingSource;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
@@ -101,6 +108,7 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             logs,
             Instant.now(clock)
         );
+        DiagnosticsStakeSizingScenarioSimulation stakeSizingScenarioSimulation = stakeSizingScenarioSimulation(dataset);
         List<DiagnosticFinding> findings = integrityFindings(dataset, matches);
         List<String> limitations = limitations(logs, persistedExecutionCoverage, logEventCoverage);
         List<String> topFindings = topFindings(
@@ -138,7 +146,8 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             strategyPerformance,
             candidateFilterSimulation,
             candidateFilterShadowValidation,
-            stakeSizingShadowDiagnostics
+            stakeSizingShadowDiagnostics,
+            stakeSizingScenarioSimulation
         );
     }
 
@@ -1483,6 +1492,329 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         );
     }
 
+    private DiagnosticsStakeSizingScenarioSimulation stakeSizingScenarioSimulation(DiagnosticsDataset dataset) {
+        List<StakeSizingShadowDecision> decisions = dataset.stakeSizingShadowDecisions();
+        if (decisions.isEmpty()) {
+            return DiagnosticsStakeSizingScenarioSimulation.empty();
+        }
+        Map<String, StakeSizingShadowDecision> representatives = decisions.stream()
+            .filter(decision -> !isMissing(decision.recommendationId()))
+            .collect(Collectors.toMap(
+                StakeSizingShadowDecision::recommendationId,
+                Function.identity(),
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+        if (representatives.isEmpty()) {
+            return DiagnosticsStakeSizingScenarioSimulation.empty();
+        }
+        Map<String, List<RealBetDiagnosticRow>> realByRecommendation = dataset.realBets().stream()
+            .filter(row -> !isMissing(row.recommendationId()))
+            .collect(Collectors.groupingBy(RealBetDiagnosticRow::recommendationId));
+        List<StakeSizingRiskProfile> riskProfiles = decisions.stream()
+            .map(StakeSizingShadowDecision::riskProfile)
+            .filter(Objects::nonNull)
+            .distinct()
+            .sorted(Comparator.comparing(StakeSizingRiskProfile::name))
+            .toList();
+        List<StakeSizingRiskProfile> effectiveRiskProfiles = riskProfiles.isEmpty()
+            ? List.of(StakeSizingRiskProfile.CONSERVATIVE, StakeSizingRiskProfile.BALANCED)
+            : riskProfiles;
+        StakeSizingEngine engine = StakeSizingEngine.defaultEngine();
+        List<DiagnosticsStakeSizingScenario> scenarios = stakeSizingScenarios().stream()
+            .map(scenario -> stakeSizingScenario(scenario, representatives.values().stream().toList(), effectiveRiskProfiles, realByRecommendation, engine))
+            .toList();
+        return new DiagnosticsStakeSizingScenarioSimulation(
+            true,
+            false,
+            false,
+            scenarios,
+            stakeSizingScenarioRanking(scenarios)
+        );
+    }
+
+    private DiagnosticsStakeSizingScenario stakeSizingScenario(
+        StakeSizingScenarioConfig scenario,
+        List<StakeSizingShadowDecision> recommendations,
+        List<StakeSizingRiskProfile> riskProfiles,
+        Map<String, List<RealBetDiagnosticRow>> realByRecommendation,
+        StakeSizingEngine engine
+    ) {
+        List<DiagnosticsStakeSizingScenarioPolicyResult> results = scenarioPolicies().stream()
+            .flatMap(policy -> riskProfiles.stream()
+                .map(riskProfile -> stakeSizingScenarioPolicyResult(scenario, policy, riskProfile, recommendations, realByRecommendation, engine)))
+            .sorted(Comparator.comparing(DiagnosticsStakeSizingScenarioPolicyResult::policyName)
+                .thenComparing(DiagnosticsStakeSizingScenarioPolicyResult::riskProfile))
+            .toList();
+        return new DiagnosticsStakeSizingScenario(scenario.name(), scenario.baseStake(), scenario.minStake(), scenario.maxStake(), results);
+    }
+
+    private DiagnosticsStakeSizingScenarioPolicyResult stakeSizingScenarioPolicyResult(
+        StakeSizingScenarioConfig scenario,
+        StakeSizingMode policy,
+        StakeSizingRiskProfile riskProfile,
+        List<StakeSizingShadowDecision> recommendations,
+        Map<String, List<RealBetDiagnosticRow>> realByRecommendation,
+        StakeSizingEngine engine
+    ) {
+        List<StakeSizingShadowDecision> simulated = recommendations.stream()
+            .map(recommendation -> virtualScenarioDecision(scenario, policy, riskProfile, recommendation, engine))
+            .toList();
+        List<StakeSizingRealSimulationRow> joined = simulated.stream()
+            .flatMap(decision -> realByRecommendation.getOrDefault(decision.recommendationId(), List.of())
+                .stream()
+                .map(real -> new StakeSizingRealSimulationRow(decision, real)))
+            .toList();
+        List<StakeSizingRealSimulationRow> settled = joined.stream()
+            .filter(row -> row.real().settledWithPnl())
+            .toList();
+        List<StakeSizingRealSimulationRow> validSettled = settled.stream()
+            .filter(row -> validStake(stakeForSimulation(row.real())) != null)
+            .toList();
+        long invalidStake = settled.size() - validSettled.size();
+        BigDecimal baselineTurnover = validSettled.stream()
+            .map(row -> stakeForSimulation(row.real()))
+            .filter(Objects::nonNull)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal baselinePnl = validSettled.stream()
+            .map(row -> valueOrZero(row.real().realizedProfitLoss()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal simulatedTurnover = validSettled.stream()
+            .map(row -> row.decision().wouldBlock() ? BigDecimal.ZERO : valueOrZero(row.decision().finalStake()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal simulatedPnl = validSettled.stream()
+            .map(row -> scenarioSimulatedPnl(row))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        List<BigDecimal> baselinePnlCurve = validSettled.stream()
+            .sorted(Comparator.comparing(row -> row.real().settledAt(), Comparator.nullsLast(Comparator.naturalOrder())))
+            .map(row -> valueOrZero(row.real().realizedProfitLoss()))
+            .toList();
+        List<BigDecimal> simulatedPnlCurve = validSettled.stream()
+            .sorted(Comparator.comparing(row -> row.real().settledAt(), Comparator.nullsLast(Comparator.naturalOrder())))
+            .map(this::scenarioSimulatedPnl)
+            .toList();
+        long floorApplied = simulated.stream()
+            .filter(decision -> decision.calculatedStake() != null && decision.finalStake() != null)
+            .filter(decision -> decision.calculatedStake().compareTo(decision.minStake()) < 0)
+            .filter(decision -> decision.finalStake().compareTo(decision.minStake()) == 0)
+            .count();
+        BigDecimal totalFloorUplift = simulated.stream()
+            .filter(decision -> decision.calculatedStake() != null && decision.finalStake() != null)
+            .filter(decision -> decision.calculatedStake().compareTo(decision.minStake()) < 0)
+            .filter(decision -> decision.finalStake().compareTo(decision.minStake()) == 0)
+            .map(decision -> decision.finalStake().subtract(decision.calculatedStake()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal baselineRoi = rate(baselinePnl, baselineTurnover);
+        BigDecimal simulatedRoi = rate(simulatedPnl, simulatedTurnover);
+        BigDecimal baselineDrawdown = drawdownFromPnl(baselinePnlCurve, false);
+        BigDecimal simulatedDrawdown = drawdownFromPnl(simulatedPnlCurve, false);
+        long fallbackRequestedStake = validSettled.stream()
+            .filter(row -> validStake(row.real().matchedStake()) == null && validStake(row.real().requestedStake()) != null)
+            .count();
+        DiagnosticsStakeSizingPolicyStatus status = policy == StakeSizingMode.FRACTIONAL_KELLY_SHADOW
+            ? DiagnosticsStakeSizingPolicyStatus.SHADOW_ONLY
+            : validSettled.size() < 50 ? DiagnosticsStakeSizingPolicyStatus.INSUFFICIENT_SAMPLE : DiagnosticsStakeSizingPolicyStatus.CANDIDATE;
+        return new DiagnosticsStakeSizingScenarioPolicyResult(
+            scenario.name(),
+            policy.name(),
+            riskProfile.name(),
+            scenario.baseStake(),
+            scenario.minStake(),
+            scenario.maxStake(),
+            simulated.size(),
+            joined.size(),
+            validSettled.size(),
+            joined.stream().filter(row -> !row.real().settledWithPnl()).count(),
+            validSettled.stream().filter(row -> row.real().settlementResult() == BetSettlementResult.WIN).count(),
+            validSettled.stream().filter(row -> row.real().settlementResult() == BetSettlementResult.LOSE).count(),
+            money(baselineTurnover),
+            money(baselinePnl),
+            baselineRoi,
+            money(simulatedTurnover),
+            money(simulatedPnl),
+            simulatedRoi,
+            money(simulatedPnl.subtract(baselinePnl)),
+            subtract(simulatedRoi, baselineRoi),
+            average(simulated.stream().map(StakeSizingShadowDecision::calculatedStake).filter(Objects::nonNull).toList()),
+            average(simulated.stream().map(StakeSizingShadowDecision::finalStake).filter(Objects::nonNull).toList()),
+            min(simulated.stream().map(StakeSizingShadowDecision::finalStake).filter(Objects::nonNull).toList()),
+            max(simulated.stream().map(StakeSizingShadowDecision::finalStake).filter(Objects::nonNull).toList()),
+            average(validSettled.stream().map(row -> rate(row.decision().finalStake(), stakeForSimulation(row.real()))).filter(Objects::nonNull).toList()),
+            max(joined.stream().map(row -> row.decision().finalStake()).filter(Objects::nonNull).toList()),
+            simulatedDrawdown,
+            drawdownFromPnl(simulatedPnlCurve, true),
+            baselineDrawdown,
+            subtract(baselineDrawdown, simulatedDrawdown),
+            simulated.stream().filter(StakeSizingShadowDecision::wouldBlock).count(),
+            rate(BigDecimal.valueOf(simulated.stream().filter(StakeSizingShadowDecision::wouldBlock).count()), BigDecimal.valueOf(Math.max(1, simulated.size()))),
+            floorApplied,
+            rate(BigDecimal.valueOf(floorApplied), BigDecimal.valueOf(Math.max(1, simulated.size()))),
+            floorApplied == 0 ? BigDecimal.ZERO : decimal(totalFloorUplift.divide(BigDecimal.valueOf(floorApplied), SCALE + 2, RoundingMode.HALF_UP)),
+            decimal(totalFloorUplift),
+            fallbackRequestedStake,
+            invalidStake,
+            status,
+            stakeSizingScenarioWarning(policy, status, fallbackRequestedStake, invalidStake),
+            false
+        );
+    }
+
+    private StakeSizingShadowDecision virtualScenarioDecision(
+        StakeSizingScenarioConfig scenario,
+        StakeSizingMode policy,
+        StakeSizingRiskProfile riskProfile,
+        StakeSizingShadowDecision seed,
+        StakeSizingEngine engine
+    ) {
+        StakeSizingDecision decision = engine.evaluate(policy, new StakeSizingContext(
+            seed.recommendationId(),
+            seed.canonicalKey(),
+            seed.strategyName(),
+            seed.selectionSide(),
+            seed.odds() == null ? BigDecimal.valueOf(2) : seed.odds(),
+            scenario.baseStake(),
+            scenario.minStake(),
+            scenario.maxStake(),
+            seed.bankroll() == null ? BigDecimal.valueOf(500) : seed.bankroll(),
+            riskProfile,
+            StakeSizingSource.SHADOW,
+            null,
+            null,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            scenario.maxStake().multiply(BigDecimal.valueOf(100)),
+            scenario.maxStake().multiply(BigDecimal.valueOf(100)),
+            scenario.maxStake().multiply(BigDecimal.valueOf(100)),
+            seed.createdAt()
+        ));
+        return new StakeSizingShadowDecision(
+            seed.recommendationId() + "-" + scenario.name() + "-" + policy.name() + "-" + riskProfile.name(),
+            seed.recommendationId(),
+            seed.canonicalKey(),
+            policy,
+            riskProfile,
+            StakeSizingSource.SHADOW,
+            decision.selectionSide(),
+            decision.odds(),
+            seed.strategyName(),
+            decision.baseStake(),
+            decision.minStake(),
+            decision.maxStake(),
+            seed.bankroll(),
+            decision.calculatedStake(),
+            decision.finalStake(),
+            decision.wouldBlock(),
+            decision.blockReason(),
+            decision.decisionReason(),
+            adjustmentSummary(decision.adjustments()),
+            seed.evaluatedAt(),
+            seed.createdAt(),
+            seed.lastEvaluatedAt(),
+            seed.observedCount()
+        );
+    }
+
+    private BigDecimal scenarioSimulatedPnl(StakeSizingRealSimulationRow row) {
+        BigDecimal profitMultiplier = rate(row.real().realizedProfitLoss(), stakeForSimulation(row.real()));
+        if (profitMultiplier == null || row.decision().wouldBlock()) {
+            return BigDecimal.ZERO;
+        }
+        return profitMultiplier.multiply(valueOrZero(row.decision().finalStake()));
+    }
+
+    private String stakeSizingScenarioWarning(
+        StakeSizingMode policy,
+        DiagnosticsStakeSizingPolicyStatus status,
+        long fallbackRequestedStake,
+        long invalidStake
+    ) {
+        if (policy == StakeSizingMode.FRACTIONAL_KELLY_SHADOW) {
+            return "SHADOW_ONLY: PROBABILITY_NOT_AVAILABLE; should_apply_live=false.";
+        }
+        if (invalidStake > 0) {
+            return "Some settled bets were excluded because no valid matched/requested stake was available.";
+        }
+        if (fallbackRequestedStake > 0) {
+            return "Used requested_stake fallback when matched_stake was unavailable.";
+        }
+        if (status == DiagnosticsStakeSizingPolicyStatus.INSUFFICIENT_SAMPLE) {
+            return "not enough sample for live staking decision";
+        }
+        return null;
+    }
+
+    private DiagnosticsStakeSizingScenarioRanking stakeSizingScenarioRanking(List<DiagnosticsStakeSizingScenario> scenarios) {
+        List<DiagnosticsStakeSizingScenarioPolicyResult> results = scenarios.stream()
+            .flatMap(scenario -> scenario.policyResults().stream())
+            .toList();
+        long maxSettled = results.stream().mapToLong(DiagnosticsStakeSizingScenarioPolicyResult::realSettledJoined).max().orElse(0);
+        return new DiagnosticsStakeSizingScenarioRanking(
+            scenarioLabel(maxBy(results, DiagnosticsStakeSizingScenarioPolicyResult::simulatedRoi)),
+            scenarioLabel(maxBy(results, DiagnosticsStakeSizingScenarioPolicyResult::simulatedPnl)),
+            scenarioLabel(minBy(results, DiagnosticsStakeSizingScenarioPolicyResult::simulatedMaxDrawdown)),
+            scenarioLabel(maxBy(results.stream().filter(result -> result.policyName().equals("RISK_ADJUSTED")).toList(), DiagnosticsStakeSizingScenarioPolicyResult::simulatedPnl)),
+            scenarioLabel(maxBy(results, DiagnosticsStakeSizingScenarioPolicyResult::maxSimulatedExposure)),
+            scenarioLabel(maxBy(results, result -> BigDecimal.valueOf(result.minStakeFloorAppliedCount()))),
+            maxSettled < 50 ? "not enough sample for live staking decision" : null,
+            false
+        );
+    }
+
+    private DiagnosticsStakeSizingScenarioPolicyResult maxBy(
+        List<DiagnosticsStakeSizingScenarioPolicyResult> results,
+        Function<DiagnosticsStakeSizingScenarioPolicyResult, BigDecimal> value
+    ) {
+        return results.stream()
+            .filter(result -> value.apply(result) != null)
+            .max(Comparator.comparing(value))
+            .orElse(null);
+    }
+
+    private DiagnosticsStakeSizingScenarioPolicyResult minBy(
+        List<DiagnosticsStakeSizingScenarioPolicyResult> results,
+        Function<DiagnosticsStakeSizingScenarioPolicyResult, BigDecimal> value
+    ) {
+        return results.stream()
+            .filter(result -> value.apply(result) != null)
+            .min(Comparator.comparing(value))
+            .orElse(null);
+    }
+
+    private String scenarioLabel(DiagnosticsStakeSizingScenarioPolicyResult result) {
+        return result == null ? null : result.scenarioName() + "/" + result.policyName() + "/" + result.riskProfile();
+    }
+
+    private List<StakeSizingMode> scenarioPolicies() {
+        return List.of(
+            StakeSizingMode.FLAT,
+            StakeSizingMode.RISK_ADJUSTED,
+            StakeSizingMode.TIERED_CONFIDENCE,
+            StakeSizingMode.FRACTIONAL_KELLY_SHADOW
+        );
+    }
+
+    private List<StakeSizingScenarioConfig> stakeSizingScenarios() {
+        return List.of(
+            new StakeSizingScenarioConfig("SCENARIO_CURRENT_1_MIN_1", new BigDecimal("1.00"), new BigDecimal("1.00"), new BigDecimal("10.00")),
+            new StakeSizingScenarioConfig("SCENARIO_BASE_5_MIN_1", new BigDecimal("5.00"), new BigDecimal("1.00"), new BigDecimal("50.00")),
+            new StakeSizingScenarioConfig("SCENARIO_BASE_10_MIN_1", new BigDecimal("10.00"), new BigDecimal("1.00"), new BigDecimal("100.00")),
+            new StakeSizingScenarioConfig("SCENARIO_BASE_10_MIN_0_10", new BigDecimal("10.00"), new BigDecimal("0.10"), new BigDecimal("100.00")),
+            new StakeSizingScenarioConfig("SCENARIO_BASE_50_MIN_1", new BigDecimal("50.00"), new BigDecimal("1.00"), new BigDecimal("500.00")),
+            new StakeSizingScenarioConfig("SCENARIO_BASE_100_MIN_1", new BigDecimal("100.00"), new BigDecimal("1.00"), new BigDecimal("1000.00"))
+        );
+    }
+
+    private String adjustmentSummary(List<StakeSizingAdjustment> adjustments) {
+        if (adjustments == null || adjustments.isEmpty()) {
+            return "[]";
+        }
+        return adjustments.stream()
+            .map(StakeSizingAdjustment::name)
+            .collect(Collectors.joining("\",\"", "[\"", "\"]"));
+    }
+
     private DiagnosticsStakeSizingSummary stakeSizingSummary(
         List<StakeSizingShadowDecision> decisions,
         DiagnosticsLogSummary logs,
@@ -1911,6 +2243,9 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
     }
 
     private record StakeSizingPaperSimulationRow(StakeSizingShadowDecision decision, PaperTrade paper) {
+    }
+
+    private record StakeSizingScenarioConfig(String name, BigDecimal baseStake, BigDecimal minStake, BigDecimal maxStake) {
     }
 
     private static BigDecimal maxDrawdown(List<RealBetDiagnosticRow> settled) {

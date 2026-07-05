@@ -119,6 +119,70 @@ class DiagnosticsExporterTest {
                 ),
                 List.of(),
                 null
+            ),
+            new DiagnosticsStakeSizingScenarioSimulation(
+                true,
+                false,
+                false,
+                List.of(new DiagnosticsStakeSizingScenario(
+                    "SCENARIO_BASE_10_MIN_0_10",
+                    new BigDecimal("10.00"),
+                    new BigDecimal("0.10"),
+                    new BigDecimal("100.00"),
+                    List.of(new DiagnosticsStakeSizingScenarioPolicyResult(
+                        "SCENARIO_BASE_10_MIN_0_10",
+                        "RISK_ADJUSTED",
+                        "CONSERVATIVE",
+                        new BigDecimal("10.00"),
+                        new BigDecimal("0.10"),
+                        new BigDecimal("100.00"),
+                        1,
+                        1,
+                        1,
+                        0,
+                        1,
+                        0,
+                        new BigDecimal("1.00"),
+                        new BigDecimal("2.00"),
+                        new BigDecimal("2.00000000"),
+                        new BigDecimal("0.94"),
+                        new BigDecimal("1.88"),
+                        new BigDecimal("2.00000000"),
+                        new BigDecimal("-0.12"),
+                        BigDecimal.ZERO,
+                        new BigDecimal("0.94000000"),
+                        new BigDecimal("0.94000000"),
+                        new BigDecimal("0.94"),
+                        new BigDecimal("0.94"),
+                        new BigDecimal("0.94000000"),
+                        new BigDecimal("0.94"),
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        0,
+                        BigDecimal.ZERO,
+                        0,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        0,
+                        0,
+                        DiagnosticsStakeSizingPolicyStatus.INSUFFICIENT_SAMPLE,
+                        "not enough sample for live staking decision",
+                        false
+                    ))
+                )),
+                new DiagnosticsStakeSizingScenarioRanking(
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    null,
+                    "not enough sample for live staking decision",
+                    false
+                )
             )
         );
         Path json = tempDir.resolve("diagnostics.json");
@@ -131,7 +195,11 @@ class DiagnosticsExporterTest {
             .contains("\"officiallyApplied\" : false")
             .contains("\"shouldApplyLive\" : false")
             .contains("\"decisions\" : 1")
-            .contains("\"policyResults\"");
+            .contains("\"policyResults\"")
+            .contains("\"stakeSizingScenarioSimulation\"")
+            .contains("\"scenarioName\" : \"SCENARIO_BASE_10_MIN_0_10\"")
+            .contains("\"policyName\" : \"RISK_ADJUSTED\"")
+            .contains("\"shouldApplyLive\" : false");
     }
 
     private static DiagnosticsReport report() {

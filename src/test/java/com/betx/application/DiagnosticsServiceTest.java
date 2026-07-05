@@ -408,6 +408,108 @@ class DiagnosticsServiceTest {
     }
 
     @Test
+    void reportsStakeSizingScenarioSimulationWithoutApplyingLiveStaking() {
+        DiagnosticsDataset dataset = new DiagnosticsDataset(
+            List.of(
+                realWithRecommendation("real-win", "m1", 10, T0.plusSeconds(60), "5.50", "1.00", BetSettlementResult.WIN, "4.50", "rec-1", null, "1.00"),
+                realWithRecommendation("real-loss", "m2", 11, T0.plusSeconds(120), "5.50", "1.00", BetSettlementResult.LOSE, "-1.00", "rec-2", "1.00", null),
+                realWithRecommendation("real-open", "m3", 12, T0.plusSeconds(180), "5.50", "1.00", null, null, "rec-3", "1.00", "1.00"),
+                realWithRecommendation("real-no-stake", "m4", 13, T0.plusSeconds(240), "5.50", "0.00", BetSettlementResult.WIN, "1.00", "rec-4", "0.00", "0.00")
+            ),
+            List.of(),
+            20,
+            40,
+            Map.of(),
+            Map.of(),
+            DiagnosticsBetRecommendationsSummary.empty(),
+            DiagnosticsPaperRecommendationCoverage.empty(),
+            DiagnosticsRecommendationReadiness.empty(),
+            List.of(),
+            List.of(
+                shadowDecision("rec-1", StakeSizingMode.RISK_ADJUSTED, StakeSizingRiskProfile.CONSERVATIVE, SelectionSide.DRAW, "5.50", "0.09", "1.00", false, null, StakeSizingDecisionReason.RISK_ADJUSTED, "[]"),
+                shadowDecision("rec-2", StakeSizingMode.RISK_ADJUSTED, StakeSizingRiskProfile.CONSERVATIVE, SelectionSide.DRAW, "5.50", "0.09", "1.00", false, null, StakeSizingDecisionReason.RISK_ADJUSTED, "[]"),
+                shadowDecision("rec-3", StakeSizingMode.RISK_ADJUSTED, StakeSizingRiskProfile.CONSERVATIVE, SelectionSide.DRAW, "5.50", "0.09", "1.00", false, null, StakeSizingDecisionReason.RISK_ADJUSTED, "[]"),
+                shadowDecision("rec-4", StakeSizingMode.RISK_ADJUSTED, StakeSizingRiskProfile.CONSERVATIVE, SelectionSide.DRAW, "5.50", "0.09", "1.00", false, null, StakeSizingDecisionReason.RISK_ADJUSTED, "[]"),
+                shadowDecision("rec-1", StakeSizingMode.FRACTIONAL_KELLY_SHADOW, StakeSizingRiskProfile.CONSERVATIVE, SelectionSide.DRAW, "5.50", "0.00", "0.00", true, StakeSizingBlockReason.NOT_AVAILABLE, StakeSizingDecisionReason.PROBABILITY_NOT_AVAILABLE, "[]")
+            )
+        );
+
+        DiagnosticsReport report = service(dataset, DiagnosticsLogSummary.empty()).generate(request());
+
+        DiagnosticsStakeSizingScenarioSimulation simulation = report.stakeSizingScenarioSimulation();
+        assertThat(simulation.enabled()).isTrue();
+        assertThat(simulation.officiallyApplied()).isFalse();
+        assertThat(simulation.shouldApplyLive()).isFalse();
+        assertThat(simulation.scenarios()).extracting(DiagnosticsStakeSizingScenario::scenarioName)
+            .contains("SCENARIO_CURRENT_1_MIN_1", "SCENARIO_BASE_10_MIN_0_10");
+
+        DiagnosticsStakeSizingScenarioPolicyResult currentRisk = scenarioPolicy(
+            simulation,
+            "SCENARIO_CURRENT_1_MIN_1",
+            "RISK_ADJUSTED",
+            "CONSERVATIVE"
+        );
+        assertThat(currentRisk.baseStake()).isEqualByComparingTo("1.00");
+        assertThat(currentRisk.minStake()).isEqualByComparingTo("1.00");
+        assertThat(currentRisk.maxStake()).isEqualByComparingTo("10.00");
+        assertThat(currentRisk.realJoinedBets()).isEqualTo(4);
+        assertThat(currentRisk.realSettledJoined()).isEqualTo(2);
+        assertThat(currentRisk.realOpenJoined()).isEqualTo(1);
+        assertThat(currentRisk.baselineRealTurnover()).isEqualByComparingTo("2.00");
+        assertThat(currentRisk.baselineRealPnl()).isEqualByComparingTo("3.50");
+        assertThat(currentRisk.simulatedTurnover()).isEqualByComparingTo("2.00");
+        assertThat(currentRisk.simulatedPnl()).isEqualByComparingTo("3.50");
+        assertThat(currentRisk.avgCalculatedStake()).isEqualByComparingTo("0.09000000");
+        assertThat(currentRisk.avgFinalStake()).isEqualByComparingTo("1.00000000");
+        assertThat(currentRisk.minStakeFloorAppliedCount()).isEqualTo(4);
+        assertThat(currentRisk.avgFloorUplift()).isEqualByComparingTo("0.91000000");
+        assertThat(currentRisk.fallbackRequestedStakeCount()).isEqualTo(1);
+        assertThat(currentRisk.invalidStakeExcludedCount()).isEqualTo(1);
+        assertThat(currentRisk.shouldApplyLive()).isFalse();
+
+        DiagnosticsStakeSizingScenarioPolicyResult flexibleRisk = scenarioPolicy(
+            simulation,
+            "SCENARIO_BASE_10_MIN_0_10",
+            "RISK_ADJUSTED",
+            "CONSERVATIVE"
+        );
+        assertThat(flexibleRisk.baseStake()).isEqualByComparingTo("10.00");
+        assertThat(flexibleRisk.minStake()).isEqualByComparingTo("0.10");
+        assertThat(flexibleRisk.maxStake()).isEqualByComparingTo("100.00");
+        assertThat(flexibleRisk.avgCalculatedStake()).isEqualByComparingTo("0.94000000");
+        assertThat(flexibleRisk.avgFinalStake()).isEqualByComparingTo("0.94000000");
+        assertThat(flexibleRisk.minStakeFloorAppliedCount()).isZero();
+        assertThat(flexibleRisk.simulatedTurnover()).isEqualByComparingTo("1.88");
+        assertThat(flexibleRisk.simulatedPnl()).isEqualByComparingTo("3.29000000");
+        assertThat(flexibleRisk.maxFinalStake()).isLessThan(BigDecimal.ONE);
+
+        DiagnosticsStakeSizingScenarioPolicyResult flat = scenarioPolicy(
+            simulation,
+            "SCENARIO_BASE_100_MIN_1",
+            "FLAT",
+            "CONSERVATIVE"
+        );
+        assertThat(flat.avgCalculatedStake()).isEqualByComparingTo("75.00000000");
+        assertThat(flat.avgFinalStake()).isEqualByComparingTo("75.00000000");
+        assertThat(flat.maxFinalStake()).isLessThanOrEqualTo(flat.maxStake());
+
+        DiagnosticsStakeSizingScenarioPolicyResult kelly = scenarioPolicy(
+            simulation,
+            "SCENARIO_BASE_10_MIN_0_10",
+            "FRACTIONAL_KELLY_SHADOW",
+            "CONSERVATIVE"
+        );
+        assertThat(kelly.status()).isEqualTo(DiagnosticsStakeSizingPolicyStatus.SHADOW_ONLY);
+        assertThat(kelly.warning()).contains("PROBABILITY_NOT_AVAILABLE");
+        assertThat(kelly.shouldApplyLive()).isFalse();
+
+        assertThat(simulation.ranking().warning()).contains("not enough sample for live staking decision");
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Stake sizing scenario simulation")
+            .anySatisfy(line -> assertThat(line).contains("SCENARIO_BASE_10_MIN_0_10").contains("RISK_ADJUSTED"));
+    }
+
+    @Test
     void reportsRecommendationReadinessWithoutEnablingRecommendationIdMatching() {
         DiagnosticsDataset dataset = new DiagnosticsDataset(
             List.of(real("real-1", "m1", 10, T0.plusSeconds(60), "3.00", "10.00", BetSettlementResult.WIN, "20.00")),
@@ -1221,6 +1323,65 @@ class DiagnosticsServiceTest {
             T0.plusSeconds(60),
             1
         );
+    }
+
+    private static StakeSizingShadowDecision shadowDecision(
+        String recommendationId,
+        StakeSizingMode policyName,
+        StakeSizingRiskProfile riskProfile,
+        SelectionSide selectionSide,
+        String odds,
+        String calculatedStake,
+        String finalStake,
+        boolean wouldBlock,
+        StakeSizingBlockReason blockReason,
+        StakeSizingDecisionReason decisionReason,
+        String adjustmentSummary
+    ) {
+        return new StakeSizingShadowDecision(
+            recommendationId + "-" + policyName.name() + "-" + riskProfile.name() + "-" + odds,
+            recommendationId,
+            BetRecommendation.canonicalKey("betfair", "m-" + recommendationId.substring(4), 1L, selectionSide, "value-football"),
+            policyName,
+            riskProfile,
+            StakeSizingSource.SHADOW,
+            selectionSide,
+            new BigDecimal(odds),
+            "value-football",
+            BigDecimal.ONE,
+            BigDecimal.ONE,
+            BigDecimal.TEN,
+            new BigDecimal("500.00"),
+            decimal(calculatedStake),
+            decimal(finalStake),
+            wouldBlock,
+            blockReason,
+            decisionReason,
+            adjustmentSummary,
+            T0,
+            T0,
+            T0.plusSeconds(60),
+            1
+        );
+    }
+
+    private static DiagnosticsStakeSizingScenarioPolicyResult scenarioPolicy(
+        DiagnosticsStakeSizingScenarioSimulation simulation,
+        String scenarioName,
+        String policyName,
+        String riskProfile
+    ) {
+        return simulation.scenarios()
+            .stream()
+            .filter(scenario -> scenario.scenarioName().equals(scenarioName))
+            .findFirst()
+            .orElseThrow()
+            .policyResults()
+            .stream()
+            .filter(result -> result.policyName().equals(policyName))
+            .filter(result -> result.riskProfile().equals(riskProfile))
+            .findFirst()
+            .orElseThrow();
     }
 
     private static RealBetDiagnosticRow historicalUnknown(String id) {

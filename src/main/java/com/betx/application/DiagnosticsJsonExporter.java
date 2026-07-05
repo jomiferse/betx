@@ -42,6 +42,7 @@ public class DiagnosticsJsonExporter {
         payload.put("candidateFilterSimulation", report.candidateFilterSimulation());
         payload.put("candidateFilterShadowValidation", candidateFilterShadowValidation(report.candidateFilterShadowValidation()));
         payload.put("stakeSizingShadowDiagnostics", stakeSizingShadowDiagnostics(report.stakeSizingShadowDiagnostics()));
+        payload.put("stakeSizingScenarioSimulation", stakeSizingScenarioSimulation(report.stakeSizingScenarioSimulation()));
         payload.put("paperRecommendationCoverage", report.paperRecommendationCoverage());
         payload.put("decisionFunnel", report.decisionFunnel());
         payload.put("executionMetrics", execution(report.executionMetrics()));
@@ -277,6 +278,26 @@ public class DiagnosticsJsonExporter {
         value.put("status", result.status());
         value.put("warning", result.warning());
         value.put("shouldApplyLive", result.shouldApplyLive());
+        return value;
+    }
+
+    private Map<String, Object> stakeSizingScenarioSimulation(DiagnosticsStakeSizingScenarioSimulation simulation) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("enabled", simulation.enabled());
+        value.put("officiallyApplied", simulation.officiallyApplied());
+        value.put("shouldApplyLive", simulation.shouldApplyLive());
+        value.put("scenarios", simulation.scenarios().stream().map(this::stakeSizingScenario).toList());
+        value.put("ranking", simulation.ranking());
+        return value;
+    }
+
+    private Map<String, Object> stakeSizingScenario(DiagnosticsStakeSizingScenario scenario) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("scenarioName", scenario.scenarioName());
+        value.put("baseStake", scenario.baseStake());
+        value.put("minStake", scenario.minStake());
+        value.put("maxStake", scenario.maxStake());
+        value.put("policyResults", scenario.policyResults());
         return value;
     }
 
