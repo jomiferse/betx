@@ -43,9 +43,42 @@ public record DiagnosticsStakeSizingScenarioPolicyResult(
     long invalidStakeExcludedCount,
     DiagnosticsStakeSizingPolicyStatus status,
     String warning,
+    DiagnosticsStakeSizingRankingEligibility rankingEligibility,
+    boolean hasExposure,
+    boolean allBlocked,
+    boolean shadowOnly,
+    boolean validData,
+    boolean sufficientSample,
+    boolean highRisk,
+    boolean eligibleForUsefulRanking,
+    boolean watchCandidate,
+    boolean eligibleForLive,
     boolean shouldApplyLive
 ) {
     public DiagnosticsStakeSizingScenarioPolicyResult {
         status = status == null ? DiagnosticsStakeSizingPolicyStatus.INSUFFICIENT_SAMPLE : status;
+        rankingEligibility = rankingEligibility == null
+            ? DiagnosticsStakeSizingRankingEligibility.INVALID_DATA
+            : rankingEligibility;
+    }
+
+    public boolean isAllBlocked() {
+        return allBlocked;
+    }
+
+    public boolean isShadowOnly() {
+        return shadowOnly;
+    }
+
+    public boolean hasValidData() {
+        return validData;
+    }
+
+    public boolean hasSufficientSample() {
+        return sufficientSample;
+    }
+
+    public boolean isHighRisk() {
+        return highRisk;
     }
 }

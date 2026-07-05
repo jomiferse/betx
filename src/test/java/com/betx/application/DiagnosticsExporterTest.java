@@ -170,6 +170,16 @@ class DiagnosticsExporterTest {
                         0,
                         DiagnosticsStakeSizingPolicyStatus.INSUFFICIENT_SAMPLE,
                         "not enough sample for live staking decision",
+                        DiagnosticsStakeSizingRankingEligibility.INSUFFICIENT_SAMPLE,
+                        true,
+                        false,
+                        false,
+                        true,
+                        false,
+                        false,
+                        true,
+                        true,
+                        false,
                         false
                     ))
                 )),
@@ -182,7 +192,33 @@ class DiagnosticsExporterTest {
                     null,
                     "not enough sample for live staking decision",
                     false
-                )
+                ),
+                new DiagnosticsStakeSizingRankingEligibilitySummary(0, 1, 0, 0, 0, 0, 0),
+                new DiagnosticsStakeSizingScenarioRanking(
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    null,
+                    "not enough sample for live staking decision",
+                    false
+                ),
+                List.of(),
+                new DiagnosticsStakeSizingRankingSummary(1, 1, 0, 0, 0, 0, 0, 0, 0, 1),
+                new DiagnosticsStakeSizingScenarioRanking(
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    "SCENARIO_BASE_10_MIN_0_10/RISK_ADJUSTED/CONSERVATIVE",
+                    null,
+                    "not enough sample for live staking decision",
+                    false
+                ),
+                new DiagnosticsStakeSizingLiveEligibleRankings(false, "NO_LIVE_ELIGIBLE_RESULTS_INSUFFICIENT_SAMPLE", DiagnosticsStakeSizingScenarioRanking.empty()),
+                List.of(),
+                List.of()
             )
         );
         Path json = tempDir.resolve("diagnostics.json");
@@ -197,8 +233,17 @@ class DiagnosticsExporterTest {
             .contains("\"decisions\" : 1")
             .contains("\"policyResults\"")
             .contains("\"stakeSizingScenarioSimulation\"")
+            .contains("\"rankingSummary\"")
+            .contains("\"watchRankings\"")
+            .contains("\"liveEligibleRankings\"")
+            .contains("\"excludedFromUsefulRankings\"")
+            .contains("\"watchCandidates\"")
             .contains("\"scenarioName\" : \"SCENARIO_BASE_10_MIN_0_10\"")
             .contains("\"policyName\" : \"RISK_ADJUSTED\"")
+            .contains("\"rankingEligibility\" : \"INSUFFICIENT_SAMPLE\"")
+            .contains("\"eligibleForUsefulRanking\" : true")
+            .contains("\"watchCandidate\" : true")
+            .contains("\"eligibleForLive\" : false")
             .contains("\"shouldApplyLive\" : false");
     }
 

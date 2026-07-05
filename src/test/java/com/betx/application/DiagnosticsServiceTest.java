@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class DiagnosticsServiceTest {
@@ -465,6 +466,11 @@ class DiagnosticsServiceTest {
         assertThat(currentRisk.avgFloorUplift()).isEqualByComparingTo("0.91000000");
         assertThat(currentRisk.fallbackRequestedStakeCount()).isEqualTo(1);
         assertThat(currentRisk.invalidStakeExcludedCount()).isEqualTo(1);
+        assertThat(currentRisk.rankingEligibility()).isEqualTo(DiagnosticsStakeSizingRankingEligibility.INSUFFICIENT_SAMPLE);
+        assertThat(currentRisk.hasExposure()).isTrue();
+        assertThat(currentRisk.eligibleForUsefulRanking()).isTrue();
+        assertThat(currentRisk.watchCandidate()).isTrue();
+        assertThat(currentRisk.eligibleForLive()).isFalse();
         assertThat(currentRisk.shouldApplyLive()).isFalse();
 
         DiagnosticsStakeSizingScenarioPolicyResult flexibleRisk = scenarioPolicy(
@@ -482,6 +488,17 @@ class DiagnosticsServiceTest {
         assertThat(flexibleRisk.simulatedTurnover()).isEqualByComparingTo("1.88");
         assertThat(flexibleRisk.simulatedPnl()).isEqualByComparingTo("3.29000000");
         assertThat(flexibleRisk.maxFinalStake()).isLessThan(BigDecimal.ONE);
+        assertThat(simulation.watchRankings().bestSimulatedRoi()).doesNotContain("FRACTIONAL_KELLY_SHADOW");
+        assertThat(simulation.watchRankings().lowestSimulatedDrawdown()).doesNotContain("FRACTIONAL_KELLY_SHADOW");
+        assertThat(simulation.liveEligibleRankings().available()).isFalse();
+        assertThat(simulation.liveEligibleRankings().reason()).isEqualTo("NO_LIVE_ELIGIBLE_RESULTS_INSUFFICIENT_SAMPLE");
+        assertThat(simulation.rankingSummary().usefulRankingCandidates()).isGreaterThan(0);
+        assertThat(simulation.rankingSummary().watchCandidates()).isGreaterThan(0);
+        assertThat(simulation.rankingSummary().liveEligible()).isZero();
+        assertThat(simulation.watchCandidates())
+            .extracting(DiagnosticsStakeSizingScenarioPolicyResult::scenarioName)
+            .contains("SCENARIO_BASE_10_MIN_0_10");
+        assertThat(simulation.watchCandidates()).allSatisfy(candidate -> assertThat(candidate.shouldApplyLive()).isFalse());
 
         DiagnosticsStakeSizingScenarioPolicyResult flat = scenarioPolicy(
             simulation,
@@ -501,12 +518,96 @@ class DiagnosticsServiceTest {
         );
         assertThat(kelly.status()).isEqualTo(DiagnosticsStakeSizingPolicyStatus.SHADOW_ONLY);
         assertThat(kelly.warning()).contains("PROBABILITY_NOT_AVAILABLE");
+        assertThat(kelly.rankingEligibility()).isEqualTo(DiagnosticsStakeSizingRankingEligibility.NO_EXPOSURE);
+        assertThat(kelly.isShadowOnly()).isTrue();
+        assertThat(kelly.hasExposure()).isFalse();
+        assertThat(kelly.eligibleForUsefulRanking()).isFalse();
+        assertThat(kelly.watchCandidate()).isFalse();
+        assertThat(kelly.eligibleForLive()).isFalse();
         assertThat(kelly.shouldApplyLive()).isFalse();
+        assertThat(simulation.rankingSummary().noExposure()).isGreaterThan(0);
+        assertThat(simulation.rankingSummary().shadowOnly()).isGreaterThan(0);
+        assertThat(simulation.rankingSummary().insufficientSample()).isGreaterThan(0);
+        assertThat(simulation.excludedFromUsefulRankings())
+            .anySatisfy(excluded -> {
+                assertThat(excluded.policyName()).isEqualTo("FRACTIONAL_KELLY_SHADOW");
+                assertThat(excluded.reason()).contains("SHADOW_ONLY").contains("PROBABILITY_NOT_AVAILABLE").contains("NO_EXPOSURE");
+            });
 
         assertThat(simulation.ranking().warning()).contains("not enough sample for live staking decision");
         assertThat(new DiagnosticsFormatter().format(report))
             .contains("Stake sizing scenario simulation")
+            .contains("Ranking eligibility")
+            .contains("Watch rankings, not live-ready")
+            .contains("Live eligible rankings")
+            .contains("Excluded from useful rankings")
+            .contains("Watch candidates, not live-ready")
+            .anySatisfy(line -> assertThat(line).contains("Live eligible results").contains("0"))
+            .anySatisfy(line -> assertThat(line).contains("Watch candidate").contains("live candidate"))
+            .noneSatisfy(line -> assertThat(line).contains("Best eligible ROI"))
+            .anySatisfy(line -> assertThat(line).contains("Kelly is excluded from useful rankings"))
             .anySatisfy(line -> assertThat(line).contains("SCENARIO_BASE_10_MIN_0_10").contains("RISK_ADJUSTED"));
+    }
+
+    @Test
+    void marksScenarioResultLiveEligibleConceptuallyWithoutApplyingLiveStaking() {
+        List<RealBetDiagnosticRow> realBets = IntStream.range(0, 50)
+            .mapToObj(index -> realWithRecommendation(
+                "real-live-eligible-" + index,
+                "m-live",
+                10,
+                T0.plusSeconds(index + 1),
+                "2.00",
+                "1.00",
+                index % 2 == 0 ? BetSettlementResult.WIN : BetSettlementResult.LOSE,
+                index % 2 == 0 ? "1.00" : "-1.00",
+                "rec-live-eligible",
+                "1.00",
+                "1.00"
+            ))
+            .toList();
+        DiagnosticsDataset dataset = new DiagnosticsDataset(
+            realBets,
+            List.of(),
+            20,
+            40,
+            Map.of(),
+            Map.of(),
+            DiagnosticsBetRecommendationsSummary.empty(),
+            DiagnosticsPaperRecommendationCoverage.empty(),
+            DiagnosticsRecommendationReadiness.empty(),
+            List.of(),
+            List.of(shadowDecision(
+                "rec-live-eligible",
+                StakeSizingMode.RISK_ADJUSTED,
+                StakeSizingRiskProfile.CONSERVATIVE,
+                SelectionSide.HOME,
+                "2.00",
+                "1.00",
+                "1.00",
+                false,
+                null,
+                StakeSizingDecisionReason.RISK_ADJUSTED,
+                "[]"
+            ))
+        );
+
+        DiagnosticsReport report = service(dataset, DiagnosticsLogSummary.empty()).generate(request());
+
+        DiagnosticsStakeSizingScenarioPolicyResult result = scenarioPolicy(
+            report.stakeSizingScenarioSimulation(),
+            "SCENARIO_CURRENT_1_MIN_1",
+            "RISK_ADJUSTED",
+            "CONSERVATIVE"
+        );
+        assertThat(result.hasExposure()).isTrue();
+        assertThat(result.hasSufficientSample()).isTrue();
+        assertThat(result.eligibleForUsefulRanking()).isTrue();
+        assertThat(result.watchCandidate()).isFalse();
+        assertThat(result.eligibleForLive()).isTrue();
+        assertThat(result.shouldApplyLive()).isFalse();
+        assertThat(report.stakeSizingScenarioSimulation().liveEligibleRankings().available()).isTrue();
+        assertThat(report.stakeSizingScenarioSimulation().liveEligibleRankings().rankings().shouldApplyLive()).isFalse();
     }
 
     @Test

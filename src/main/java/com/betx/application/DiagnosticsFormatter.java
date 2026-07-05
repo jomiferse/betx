@@ -775,13 +775,26 @@ public class DiagnosticsFormatter {
                 + number(result.minStakeFloorAppliedRate())
                 + " | max drawdown "
                 + money(result.simulatedMaxDrawdown())
+                + " | ranking eligibility "
+                + result.rankingEligibility()
                 + " | status "
                 + result.status()
                 + " | should_apply_live "
                 + (result.shouldApplyLive() ? "yes" : "no")
                 + (result.warning() == null || result.warning().isBlank() ? "" : " | warning " + result.warning())));
         });
+        lines.add("Ranking eligibility");
+        lines.add(line("Useful ranking candidates", simulation.rankingSummary().usefulRankingCandidates()));
+        lines.add(line("Watch candidates", simulation.rankingSummary().watchCandidates()));
+        lines.add(line("Live eligible results", simulation.rankingSummary().liveEligible()));
+        lines.add(line("Excluded from useful rankings", simulation.rankingSummary().excludedFromUsefulRankings()));
+        lines.add(line("No exposure", simulation.rankingSummary().noExposure()));
+        lines.add(line("All blocked", simulation.rankingSummary().allBlocked()));
+        lines.add(line("Shadow only", simulation.rankingSummary().shadowOnly()));
+        lines.add(line("Insufficient sample", simulation.rankingSummary().insufficientSample()));
+        lines.add("Watch candidate != live candidate; should_apply_live remains no.");
         lines.add("Scenario ranking");
+        lines.add("Includes shadow-only/no-exposure policies. Not suitable for live candidate selection.");
         lines.add(line("Best simulated ROI", simulation.ranking().bestSimulatedRoi()));
         lines.add(line("Best simulated PnL", simulation.ranking().bestSimulatedPnl()));
         lines.add(line("Lowest simulated drawdown", simulation.ranking().lowestSimulatedDrawdown()));
@@ -790,6 +803,62 @@ public class DiagnosticsFormatter {
         lines.add(line("Most affected by min_stake floor", simulation.ranking().mostAffectedByMinStakeFloor()));
         lines.add(line("Ranking warning", simulation.ranking().warning()));
         lines.add(line("Ranking should_apply_live", simulation.ranking().shouldApplyLive() ? "yes" : "no"));
+        lines.add("Watch rankings, not live-ready");
+        lines.add(line("Best watch ROI", simulation.watchRankings().bestSimulatedRoi()));
+        lines.add(line("Best watch PnL", simulation.watchRankings().bestSimulatedPnl()));
+        lines.add(line("Lowest watch drawdown", simulation.watchRankings().lowestSimulatedDrawdown()));
+        lines.add(line("Best risk-adjusted watch scenario", simulation.watchRankings().bestRiskAdjustedScenario()));
+        lines.add(line("Highest risk watch scenario", simulation.watchRankings().highestRiskScenario()));
+        lines.add(line("Most affected by min_stake floor", simulation.watchRankings().mostAffectedByMinStakeFloor()));
+        lines.add(line("Watch ranking warning", simulation.watchRankings().warning()));
+        lines.add(line("Watch ranking should_apply_live", simulation.watchRankings().shouldApplyLive() ? "yes" : "no"));
+        lines.add("Live eligible rankings");
+        if (!simulation.liveEligibleRankings().available()) {
+            lines.add("- none");
+            lines.add(line("reason", simulation.liveEligibleRankings().reason()));
+        } else {
+            lines.add(line("Best live-eligible ROI", simulation.liveEligibleRankings().rankings().bestSimulatedRoi()));
+            lines.add(line("Best live-eligible PnL", simulation.liveEligibleRankings().rankings().bestSimulatedPnl()));
+            lines.add(line("Lowest live-eligible drawdown", simulation.liveEligibleRankings().rankings().lowestSimulatedDrawdown()));
+            lines.add(line("Live-eligible should_apply_live", simulation.liveEligibleRankings().rankings().shouldApplyLive() ? "yes" : "no"));
+        }
+        lines.add("Excluded from useful rankings");
+        if (simulation.excludedFromUsefulRankings().isEmpty()) {
+            lines.add("- none");
+        } else {
+            simulation.excludedFromUsefulRankings().forEach(excluded -> lines.add("- "
+                + excluded.scenarioName()
+                + "/"
+                + excluded.policyName()
+                + "/"
+                + excluded.riskProfile()
+                + " | eligibility "
+                + excluded.rankingEligibility()
+                + " | reason "
+                + excluded.reason()));
+        }
+        if (simulation.excludedFromUsefulRankings().stream().anyMatch(excluded -> excluded.policyName().equals("FRACTIONAL_KELLY_SHADOW"))) {
+            lines.add("Kelly is excluded from useful rankings because it has no calibrated probability, blocks all recommendations, and produces zero exposure.");
+        }
+        lines.add("Watch candidates, not live-ready");
+        if (simulation.watchCandidates().isEmpty()) {
+            lines.add("- none");
+        } else {
+            simulation.watchCandidates().forEach(candidate -> lines.add("- "
+                + candidate.scenarioName()
+                + "/"
+                + candidate.policyName()
+                + "/"
+                + candidate.riskProfile()
+                + " | simulated pnl "
+                + money(candidate.simulatedPnl())
+                + " | simulated roi "
+                + number(candidate.simulatedRoi())
+                + " | max drawdown "
+                + money(candidate.simulatedMaxDrawdown())
+                + " | should_apply_live "
+                + (candidate.shouldApplyLive() ? "yes" : "no")));
+        }
     }
 
     private static void addPerformanceMap(

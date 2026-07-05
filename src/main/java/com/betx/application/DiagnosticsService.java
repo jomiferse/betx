@@ -1529,7 +1529,15 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             false,
             false,
             scenarios,
-            stakeSizingScenarioRanking(scenarios)
+            stakeSizingScenarioRanking(scenarios),
+            stakeSizingRankingEligibilitySummary(scenarios),
+            stakeSizingEligibleScenarioRanking(scenarios),
+            stakeSizingScenarioExclusions(scenarios),
+            stakeSizingRankingSummary(scenarios),
+            stakeSizingWatchScenarioRanking(scenarios),
+            stakeSizingLiveEligibleRankings(scenarios),
+            stakeSizingScenarioExclusions(scenarios),
+            stakeSizingScenarioWatchCandidates(scenarios)
         );
     }
 
@@ -1614,6 +1622,29 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         DiagnosticsStakeSizingPolicyStatus status = policy == StakeSizingMode.FRACTIONAL_KELLY_SHADOW
             ? DiagnosticsStakeSizingPolicyStatus.SHADOW_ONLY
             : validSettled.size() < 50 ? DiagnosticsStakeSizingPolicyStatus.INSUFFICIENT_SAMPLE : DiagnosticsStakeSizingPolicyStatus.CANDIDATE;
+        long wouldBlockCount = simulated.stream().filter(StakeSizingShadowDecision::wouldBlock).count();
+        BigDecimal wouldBlockRate = rate(BigDecimal.valueOf(wouldBlockCount), BigDecimal.valueOf(Math.max(1, simulated.size())));
+        DiagnosticsStakeSizingRankingEligibility rankingEligibility = stakeSizingRankingEligibility(
+            policy,
+            status,
+            simulated.size(),
+            validSettled.size(),
+            simulatedTurnover,
+            wouldBlockCount,
+            wouldBlockRate,
+            invalidStake
+        );
+        boolean hasExposure = simulatedTurnover.compareTo(BigDecimal.ZERO) > 0 && !validSettled.isEmpty();
+        boolean allBlocked = simulated.size() > 0 && wouldBlockCount >= simulated.size()
+            || BigDecimal.ONE.compareTo(valueOrZero(wouldBlockRate)) <= 0;
+        boolean shadowOnly = policy == StakeSizingMode.FRACTIONAL_KELLY_SHADOW
+            || status == DiagnosticsStakeSizingPolicyStatus.SHADOW_ONLY;
+        boolean validData = invalidStake == 0 || !validSettled.isEmpty();
+        boolean sufficientSample = validSettled.size() >= 50;
+        boolean highRisk = false;
+        boolean usefulRanking = hasExposure && validData && !allBlocked && !shadowOnly;
+        boolean watchCandidate = usefulRanking && !sufficientSample;
+        boolean liveEligible = usefulRanking && sufficientSample && !highRisk;
         return new DiagnosticsStakeSizingScenarioPolicyResult(
             scenario.name(),
             policy.name(),
@@ -1645,8 +1676,8 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             drawdownFromPnl(simulatedPnlCurve, true),
             baselineDrawdown,
             subtract(baselineDrawdown, simulatedDrawdown),
-            simulated.stream().filter(StakeSizingShadowDecision::wouldBlock).count(),
-            rate(BigDecimal.valueOf(simulated.stream().filter(StakeSizingShadowDecision::wouldBlock).count()), BigDecimal.valueOf(Math.max(1, simulated.size()))),
+            wouldBlockCount,
+            wouldBlockRate,
             floorApplied,
             rate(BigDecimal.valueOf(floorApplied), BigDecimal.valueOf(Math.max(1, simulated.size()))),
             floorApplied == 0 ? BigDecimal.ZERO : decimal(totalFloorUplift.divide(BigDecimal.valueOf(floorApplied), SCALE + 2, RoundingMode.HALF_UP)),
@@ -1655,6 +1686,16 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             invalidStake,
             status,
             stakeSizingScenarioWarning(policy, status, fallbackRequestedStake, invalidStake),
+            rankingEligibility,
+            hasExposure,
+            allBlocked,
+            shadowOnly,
+            validData,
+            sufficientSample,
+            highRisk,
+            usefulRanking,
+            watchCandidate,
+            liveEligible,
             false
         );
     }
@@ -1760,6 +1801,187 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             maxSettled < 50 ? "not enough sample for live staking decision" : null,
             false
         );
+    }
+
+    private DiagnosticsStakeSizingScenarioRanking stakeSizingEligibleScenarioRanking(List<DiagnosticsStakeSizingScenario> scenarios) {
+        return stakeSizingWatchScenarioRanking(scenarios);
+    }
+
+    private DiagnosticsStakeSizingScenarioRanking stakeSizingWatchScenarioRanking(List<DiagnosticsStakeSizingScenario> scenarios) {
+        List<DiagnosticsStakeSizingScenarioPolicyResult> results = scenarios.stream()
+            .flatMap(scenario -> scenario.policyResults().stream())
+            .filter(this::eligibleForScenarioRanking)
+            .toList();
+        long maxSettled = results.stream().mapToLong(DiagnosticsStakeSizingScenarioPolicyResult::realSettledJoined).max().orElse(0);
+        return new DiagnosticsStakeSizingScenarioRanking(
+            scenarioLabel(maxBy(results, DiagnosticsStakeSizingScenarioPolicyResult::simulatedRoi)),
+            scenarioLabel(maxBy(results, DiagnosticsStakeSizingScenarioPolicyResult::simulatedPnl)),
+            scenarioLabel(minBy(results, DiagnosticsStakeSizingScenarioPolicyResult::simulatedMaxDrawdown)),
+            scenarioLabel(maxBy(results.stream().filter(result -> result.policyName().equals("RISK_ADJUSTED")).toList(), DiagnosticsStakeSizingScenarioPolicyResult::simulatedPnl)),
+            scenarioLabel(maxBy(results, DiagnosticsStakeSizingScenarioPolicyResult::maxSimulatedExposure)),
+            scenarioLabel(maxBy(results, result -> BigDecimal.valueOf(result.minStakeFloorAppliedCount()))),
+            maxSettled < 50 ? "not enough sample for live staking decision" : null,
+            false
+        );
+    }
+
+    private DiagnosticsStakeSizingLiveEligibleRankings stakeSizingLiveEligibleRankings(List<DiagnosticsStakeSizingScenario> scenarios) {
+        List<DiagnosticsStakeSizingScenarioPolicyResult> results = scenarios.stream()
+            .flatMap(scenario -> scenario.policyResults().stream())
+            .filter(DiagnosticsStakeSizingScenarioPolicyResult::eligibleForLive)
+            .toList();
+        if (results.isEmpty()) {
+            String reason = scenarios.stream()
+                .flatMap(scenario -> scenario.policyResults().stream())
+                .anyMatch(DiagnosticsStakeSizingScenarioPolicyResult::watchCandidate)
+                    ? "NO_LIVE_ELIGIBLE_RESULTS_INSUFFICIENT_SAMPLE"
+                    : "NO_LIVE_ELIGIBLE_RESULTS";
+            return new DiagnosticsStakeSizingLiveEligibleRankings(false, reason, DiagnosticsStakeSizingScenarioRanking.empty());
+        }
+        long maxSettled = results.stream().mapToLong(DiagnosticsStakeSizingScenarioPolicyResult::realSettledJoined).max().orElse(0);
+        return new DiagnosticsStakeSizingLiveEligibleRankings(true, null, new DiagnosticsStakeSizingScenarioRanking(
+            scenarioLabel(maxBy(results, DiagnosticsStakeSizingScenarioPolicyResult::simulatedRoi)),
+            scenarioLabel(maxBy(results, DiagnosticsStakeSizingScenarioPolicyResult::simulatedPnl)),
+            scenarioLabel(minBy(results, DiagnosticsStakeSizingScenarioPolicyResult::simulatedMaxDrawdown)),
+            scenarioLabel(maxBy(results.stream().filter(result -> result.policyName().equals("RISK_ADJUSTED")).toList(), DiagnosticsStakeSizingScenarioPolicyResult::simulatedPnl)),
+            scenarioLabel(maxBy(results, DiagnosticsStakeSizingScenarioPolicyResult::maxSimulatedExposure)),
+            scenarioLabel(maxBy(results, result -> BigDecimal.valueOf(result.minStakeFloorAppliedCount()))),
+            maxSettled < 50 ? "not enough sample for live staking decision" : null,
+            false
+        ));
+    }
+
+    private DiagnosticsStakeSizingRankingEligibilitySummary stakeSizingRankingEligibilitySummary(List<DiagnosticsStakeSizingScenario> scenarios) {
+        List<DiagnosticsStakeSizingScenarioPolicyResult> results = scenarios.stream()
+            .flatMap(scenario -> scenario.policyResults().stream())
+            .toList();
+        return new DiagnosticsStakeSizingRankingEligibilitySummary(
+            results.stream().filter(result -> result.rankingEligibility() == DiagnosticsStakeSizingRankingEligibility.ELIGIBLE).count(),
+            results.stream().filter(result -> result.rankingEligibility() == DiagnosticsStakeSizingRankingEligibility.INSUFFICIENT_SAMPLE).count(),
+            results.stream().filter(this::hasNoExposure).count(),
+            results.stream().filter(this::isAllBlocked).count(),
+            results.stream().filter(this::isShadowOnlyRankingResult).count(),
+            results.stream().filter(result -> result.rankingEligibility() == DiagnosticsStakeSizingRankingEligibility.INVALID_DATA).count(),
+            results.stream().filter(result -> result.rankingEligibility() == DiagnosticsStakeSizingRankingEligibility.HIGH_RISK).count()
+        );
+    }
+
+    private DiagnosticsStakeSizingRankingSummary stakeSizingRankingSummary(List<DiagnosticsStakeSizingScenario> scenarios) {
+        List<DiagnosticsStakeSizingScenarioPolicyResult> results = scenarios.stream()
+            .flatMap(scenario -> scenario.policyResults().stream())
+            .toList();
+        long excluded = results.stream().filter(result -> !result.eligibleForUsefulRanking()).count();
+        return new DiagnosticsStakeSizingRankingSummary(
+            results.stream().filter(DiagnosticsStakeSizingScenarioPolicyResult::eligibleForUsefulRanking).count(),
+            results.stream().filter(DiagnosticsStakeSizingScenarioPolicyResult::watchCandidate).count(),
+            results.stream().filter(DiagnosticsStakeSizingScenarioPolicyResult::eligibleForLive).count(),
+            excluded,
+            results.stream().filter(result -> !result.hasExposure()).count(),
+            results.stream().filter(DiagnosticsStakeSizingScenarioPolicyResult::isAllBlocked).count(),
+            results.stream().filter(DiagnosticsStakeSizingScenarioPolicyResult::isShadowOnly).count(),
+            results.stream().filter(result -> !result.hasValidData()).count(),
+            results.stream().filter(DiagnosticsStakeSizingScenarioPolicyResult::isHighRisk).count(),
+            results.stream().filter(result -> !result.hasSufficientSample()).count()
+        );
+    }
+
+    private List<DiagnosticsStakeSizingScenarioExclusion> stakeSizingScenarioExclusions(List<DiagnosticsStakeSizingScenario> scenarios) {
+        return scenarios.stream()
+            .flatMap(scenario -> scenario.policyResults().stream())
+            .filter(result -> !eligibleForScenarioRanking(result))
+            .map(result -> new DiagnosticsStakeSizingScenarioExclusion(
+                result.scenarioName(),
+                result.policyName(),
+                result.riskProfile(),
+                result.rankingEligibility(),
+                stakeSizingScenarioExclusionReason(result)
+            ))
+            .sorted(Comparator.comparing(DiagnosticsStakeSizingScenarioExclusion::policyName)
+                .thenComparing(DiagnosticsStakeSizingScenarioExclusion::scenarioName)
+                .thenComparing(DiagnosticsStakeSizingScenarioExclusion::riskProfile))
+            .toList();
+    }
+
+    private List<DiagnosticsStakeSizingScenarioPolicyResult> stakeSizingScenarioWatchCandidates(List<DiagnosticsStakeSizingScenario> scenarios) {
+        return scenarios.stream()
+            .flatMap(scenario -> scenario.policyResults().stream())
+            .filter(DiagnosticsStakeSizingScenarioPolicyResult::watchCandidate)
+            .sorted(Comparator.comparing((DiagnosticsStakeSizingScenarioPolicyResult result) -> result.policyName().equals("RISK_ADJUSTED") ? 0 : 1)
+                .thenComparing(result -> result.riskProfile().equals("CONSERVATIVE") ? 0 : 1)
+                .thenComparing(DiagnosticsStakeSizingScenarioPolicyResult::simulatedMaxDrawdown)
+                .thenComparing(Comparator.comparing(DiagnosticsStakeSizingScenarioPolicyResult::simulatedRoi, Comparator.nullsLast(Comparator.naturalOrder())).reversed()))
+            .toList();
+    }
+
+    private DiagnosticsStakeSizingRankingEligibility stakeSizingRankingEligibility(
+        StakeSizingMode policy,
+        DiagnosticsStakeSizingPolicyStatus status,
+        long recommendationsEvaluated,
+        long realSettledJoined,
+        BigDecimal simulatedTurnover,
+        long wouldBlockCount,
+        BigDecimal wouldBlockRate,
+        long invalidStake
+    ) {
+        if (invalidStake > 0 && realSettledJoined == 0) {
+            return DiagnosticsStakeSizingRankingEligibility.INVALID_DATA;
+        }
+        if (valueOrZero(simulatedTurnover).compareTo(BigDecimal.ZERO) == 0 || realSettledJoined == 0) {
+            return DiagnosticsStakeSizingRankingEligibility.NO_EXPOSURE;
+        }
+        if (wouldBlockCount >= recommendationsEvaluated || BigDecimal.ONE.compareTo(valueOrZero(wouldBlockRate)) <= 0) {
+            return DiagnosticsStakeSizingRankingEligibility.ALL_BLOCKED;
+        }
+        if (policy == StakeSizingMode.FRACTIONAL_KELLY_SHADOW || status == DiagnosticsStakeSizingPolicyStatus.SHADOW_ONLY) {
+            return DiagnosticsStakeSizingRankingEligibility.SHADOW_ONLY;
+        }
+        if (realSettledJoined < 50) {
+            return DiagnosticsStakeSizingRankingEligibility.INSUFFICIENT_SAMPLE;
+        }
+        return DiagnosticsStakeSizingRankingEligibility.ELIGIBLE;
+    }
+
+    private boolean eligibleForScenarioRanking(DiagnosticsStakeSizingScenarioPolicyResult result) {
+        return result.eligibleForUsefulRanking();
+    }
+
+    private boolean hasNoExposure(DiagnosticsStakeSizingScenarioPolicyResult result) {
+        return valueOrZero(result.simulatedTurnover()).compareTo(BigDecimal.ZERO) == 0 || result.realSettledJoined() == 0;
+    }
+
+    private boolean isAllBlocked(DiagnosticsStakeSizingScenarioPolicyResult result) {
+        return result.recommendationsEvaluated() > 0 && result.wouldBlockCount() >= result.recommendationsEvaluated()
+            || BigDecimal.ONE.compareTo(valueOrZero(result.wouldBlockRate())) <= 0;
+    }
+
+    private boolean isShadowOnlyRankingResult(DiagnosticsStakeSizingScenarioPolicyResult result) {
+        return result.policyName().equals(StakeSizingMode.FRACTIONAL_KELLY_SHADOW.name())
+            || result.status() == DiagnosticsStakeSizingPolicyStatus.SHADOW_ONLY
+            || containsIgnoreCase(result.warning(), "PROBABILITY_NOT_AVAILABLE");
+    }
+
+    private String stakeSizingScenarioExclusionReason(DiagnosticsStakeSizingScenarioPolicyResult result) {
+        List<String> reasons = new ArrayList<>();
+        if (isShadowOnlyRankingResult(result)) {
+            reasons.add("SHADOW_ONLY");
+        }
+        if (containsIgnoreCase(result.warning(), "PROBABILITY_NOT_AVAILABLE")) {
+            reasons.add("PROBABILITY_NOT_AVAILABLE");
+        }
+        if (hasNoExposure(result)) {
+            reasons.add("NO_EXPOSURE");
+        }
+        if (isAllBlocked(result)) {
+            reasons.add("ALL_BLOCKED");
+        }
+        if (result.rankingEligibility() == DiagnosticsStakeSizingRankingEligibility.INVALID_DATA) {
+            reasons.add("INVALID_DATA");
+        }
+        return reasons.isEmpty() ? result.rankingEligibility().name() : String.join("_", reasons);
+    }
+
+    private boolean containsIgnoreCase(String value, String needle) {
+        return value != null && needle != null && value.toLowerCase().contains(needle.toLowerCase());
     }
 
     private DiagnosticsStakeSizingScenarioPolicyResult maxBy(

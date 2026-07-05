@@ -288,6 +288,14 @@ public class DiagnosticsJsonExporter {
         value.put("shouldApplyLive", simulation.shouldApplyLive());
         value.put("scenarios", simulation.scenarios().stream().map(this::stakeSizingScenario).toList());
         value.put("ranking", simulation.ranking());
+        value.put("rankingEligibilitySummary", simulation.rankingEligibilitySummary());
+        value.put("eligibleRankings", simulation.eligibleRankings());
+        value.put("excludedFromEligibleRankings", simulation.excludedFromEligibleRankings());
+        value.put("rankingSummary", simulation.rankingSummary());
+        value.put("watchRankings", simulation.watchRankings());
+        value.put("liveEligibleRankings", simulation.liveEligibleRankings());
+        value.put("excludedFromUsefulRankings", simulation.excludedFromUsefulRankings());
+        value.put("watchCandidates", simulation.watchCandidates());
         return value;
     }
 
