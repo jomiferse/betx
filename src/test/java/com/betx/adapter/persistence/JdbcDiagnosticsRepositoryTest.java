@@ -7,11 +7,16 @@ import com.betx.application.BetRecommendationSource;
 import com.betx.application.BetRecommendationStatus;
 import com.betx.application.PaperTrade;
 import com.betx.application.PaperTradeStatus;
+import com.betx.application.StakeSizingShadowDecision;
 import com.betx.domain.order.BetIntent;
 import com.betx.domain.order.BetIntentSource;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.SelectionSide;
 import com.betx.domain.signal.BetSide;
+import com.betx.domain.staking.StakeSizingDecisionReason;
+import com.betx.domain.staking.StakeSizingMode;
+import com.betx.domain.staking.StakeSizingRiskProfile;
+import com.betx.domain.staking.StakeSizingSource;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -166,6 +171,21 @@ class JdbcDiagnosticsRepositoryTest {
         assertThat(readiness.realBetsLinkedToExpiredRecommendations()).isEqualTo(1);
     }
 
+    @Test
+    void loadsStakeSizingShadowDecisionsForDiagnostics() {
+        String databasePath = tempDir.resolve("stake-sizing-diagnostics.db").toString();
+        JdbcStakeSizingShadowDecisionRepository stakeSizingRepository = new JdbcStakeSizingShadowDecisionRepository(databasePath);
+        stakeSizingRepository.upsert(databasePath, stakeSizingDecision("rec-1", StakeSizingMode.RISK_ADJUSTED));
+        stakeSizingRepository.upsert(databasePath, stakeSizingDecision("rec-2", StakeSizingMode.FLAT));
+
+        var dataset = new JdbcDiagnosticsRepository().load(databasePath, CUTOFF, TO);
+
+        assertThat(dataset.stakeSizingShadowDecisions()).hasSize(2);
+        assertThat(dataset.stakeSizingShadowDecisions())
+            .extracting(decision -> decision.policyName().name())
+            .containsExactly("RISK_ADJUSTED", "FLAT");
+    }
+
     private static BetRecommendation recommendation(
         String id,
         String evaluationId,
@@ -280,6 +300,36 @@ class JdbcDiagnosticsRepositoryTest {
             null,
             null,
             null
+        );
+    }
+
+    private static StakeSizingShadowDecision stakeSizingDecision(String recommendationId, StakeSizingMode mode) {
+        return new StakeSizingShadowDecision(
+            recommendationId + "-" + mode.name(),
+            recommendationId,
+            "betfair|1.234|58805|DRAW|value-football",
+            mode,
+            StakeSizingRiskProfile.CONSERVATIVE,
+            StakeSizingSource.SHADOW,
+            SelectionSide.DRAW,
+            new BigDecimal("3.50"),
+            "value-football",
+            BigDecimal.ONE,
+            BigDecimal.ONE,
+            BigDecimal.TEN,
+            new BigDecimal("500.00"),
+            mode == StakeSizingMode.RISK_ADJUSTED ? new BigDecimal("0.40") : BigDecimal.ONE,
+            BigDecimal.ONE,
+            false,
+            null,
+            mode == StakeSizingMode.RISK_ADJUSTED
+                ? StakeSizingDecisionReason.RISK_ADJUSTED
+                : StakeSizingDecisionReason.BASE_STAKE,
+            mode == StakeSizingMode.RISK_ADJUSTED ? "[\"DRAW_REDUCTION\",\"MIN_STAKE_FLOOR\"]" : "[]",
+            CUTOFF.plusSeconds(1),
+            CUTOFF.plusSeconds(1),
+            CUTOFF.plusSeconds(2),
+            1
         );
     }
 }

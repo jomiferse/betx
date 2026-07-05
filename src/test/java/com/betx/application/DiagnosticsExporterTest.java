@@ -70,6 +70,70 @@ class DiagnosticsExporterTest {
             .contains("average_executed_odds");
     }
 
+    @Test
+    void writesStakeSizingShadowDiagnosticsToJson() throws Exception {
+        DiagnosticsReport base = report();
+        DiagnosticsReport report = new DiagnosticsReport(
+            base.generatedAt(),
+            base.period(),
+            base.coverage(),
+            base.decisionFunnel(),
+            base.executionMetrics(),
+            base.paperVsRealMetrics(),
+            base.integrityFindings(),
+            base.limitations(),
+            base.topFindings(),
+            base.matchedPairs(),
+            base.matchingGaps(),
+            base.executionDataCoverage(),
+            base.logEventCoverage(),
+            base.persistedExecutionCoverage(),
+            base.placeOrdersResponseDuration(),
+            base.prospectiveRealBettingCohort(),
+            base.topSkippedMarkets(),
+            base.betRecommendations(),
+            base.paperRecommendationCoverage(),
+            base.recommendationReadiness(),
+            base.recommendationIdMatchingPreview(),
+            base.recommendationDivergenceAnalysis(),
+            base.strategyPerformance(),
+            base.candidateFilterSimulation(),
+            base.candidateFilterShadowValidation(),
+            new DiagnosticsStakeSizingShadowDiagnostics(
+                true,
+                false,
+                false,
+                new DiagnosticsStakeSizingSummary(
+                    1,
+                    1,
+                    java.util.Set.of("RISK_ADJUSTED"),
+                    java.util.Set.of("CONSERVATIVE"),
+                    java.util.Set.of("SHADOW"),
+                    3,
+                    Instant.parse("2026-06-01T10:00:00Z"),
+                    Instant.parse("2026-06-01T10:05:00Z"),
+                    java.time.Duration.ofMinutes(5),
+                    0,
+                    0,
+                    0
+                ),
+                List.of(),
+                null
+            )
+        );
+        Path json = tempDir.resolve("diagnostics.json");
+
+        new DiagnosticsJsonExporter().export(report, json);
+
+        assertThat(Files.readString(json))
+            .contains("\"stakeSizingShadowDiagnostics\"")
+            .contains("\"enabled\" : true")
+            .contains("\"officiallyApplied\" : false")
+            .contains("\"shouldApplyLive\" : false")
+            .contains("\"decisions\" : 1")
+            .contains("\"policyResults\"");
+    }
+
     private static DiagnosticsReport report() {
         DiagnosticsMatch match = new DiagnosticsMatch(
             MatchStatus.MATCHED,

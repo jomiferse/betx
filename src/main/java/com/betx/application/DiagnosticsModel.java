@@ -90,7 +90,8 @@ public final class DiagnosticsModel {
         DiagnosticsBetRecommendationsSummary betRecommendations,
         DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage,
         DiagnosticsRecommendationReadiness recommendationReadiness,
-        List<CandidateFilterEvaluation> candidateFilterEvaluations
+        List<CandidateFilterEvaluation> candidateFilterEvaluations,
+        List<StakeSizingShadowDecision> stakeSizingShadowDecisions
     ) {
         public DiagnosticsDataset(
             List<RealBetDiagnosticRow> realBets,
@@ -110,6 +111,7 @@ public final class DiagnosticsModel {
                 DiagnosticsBetRecommendationsSummary.empty(),
                 DiagnosticsPaperRecommendationCoverage.empty(),
                 DiagnosticsRecommendationReadiness.empty(),
+                List.of(),
                 List.of()
             );
         }
@@ -133,6 +135,7 @@ public final class DiagnosticsModel {
                 betRecommendations,
                 DiagnosticsPaperRecommendationCoverage.empty(),
                 DiagnosticsRecommendationReadiness.empty(),
+                List.of(),
                 List.of()
             );
         }
@@ -157,6 +160,7 @@ public final class DiagnosticsModel {
                 betRecommendations,
                 paperRecommendationCoverage,
                 DiagnosticsRecommendationReadiness.empty(),
+                List.of(),
                 List.of()
             );
         }
@@ -182,6 +186,34 @@ public final class DiagnosticsModel {
                 betRecommendations,
                 paperRecommendationCoverage,
                 recommendationReadiness,
+                List.of(),
+                List.of()
+            );
+        }
+
+        public DiagnosticsDataset(
+            List<RealBetDiagnosticRow> realBets,
+            List<PaperTrade> paperTrades,
+            long marketsScanned,
+            long runnersAnalyzed,
+            Map<String, Long> signalRecommendations,
+            Map<String, Long> rejectionReasons,
+            DiagnosticsBetRecommendationsSummary betRecommendations,
+            DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage,
+            DiagnosticsRecommendationReadiness recommendationReadiness,
+            List<CandidateFilterEvaluation> candidateFilterEvaluations
+        ) {
+            this(
+                realBets,
+                paperTrades,
+                marketsScanned,
+                runnersAnalyzed,
+                signalRecommendations,
+                rejectionReasons,
+                betRecommendations,
+                paperRecommendationCoverage,
+                recommendationReadiness,
+                candidateFilterEvaluations,
                 List.of()
             );
         }
@@ -199,6 +231,7 @@ public final class DiagnosticsModel {
                 ? DiagnosticsRecommendationReadiness.empty()
                 : recommendationReadiness;
             candidateFilterEvaluations = candidateFilterEvaluations == null ? List.of() : List.copyOf(candidateFilterEvaluations);
+            stakeSizingShadowDecisions = stakeSizingShadowDecisions == null ? List.of() : List.copyOf(stakeSizingShadowDecisions);
         }
     }
 

@@ -275,6 +275,8 @@ public class DiagnosticsFormatter {
         lines.add("");
         addCandidateFilterShadowValidation(lines, report.candidateFilterShadowValidation());
         lines.add("");
+        addStakeSizingShadowDiagnostics(lines, report.stakeSizingShadowDiagnostics());
+        lines.add("");
         lines.add("Paper vs real");
         lines.add(line("Settled matched pairs", report.paperVsRealMetrics().settledMatchedPairs()));
         lines.add(line("Average real vs paper odds difference", number(report.paperVsRealMetrics().averageRealVsPaperOddsDifference())));
@@ -544,6 +546,177 @@ public class DiagnosticsFormatter {
             + " | should_apply_live "
             + (result.shouldApplyLive() ? "yes" : "no")
             + (result.warning() == null || result.warning().isBlank() ? "" : " | warning " + result.warning())));
+    }
+
+    private static void addStakeSizingShadowDiagnostics(
+        List<String> lines,
+        DiagnosticsStakeSizingShadowDiagnostics diagnostics
+    ) {
+        lines.add("Stake sizing shadow diagnostics");
+        lines.add(line("Available", diagnostics.enabled() ? "yes" : "no"));
+        lines.add(line("Officially applied", diagnostics.officiallyApplied() ? "yes" : "no"));
+        lines.add(line("should_apply_live", diagnostics.shouldApplyLive() ? "yes" : "no"));
+        DiagnosticsStakeSizingSummary summary = diagnostics.summary();
+        lines.add(line("Total decisions", summary.decisions()));
+        lines.add(line("Distinct recommendations", summary.distinctRecommendations()));
+        lines.add(line("Policies", summary.policies()));
+        lines.add(line("Risk profiles", summary.riskProfiles()));
+        lines.add(line("Sources", summary.sources()));
+        lines.add(line("Total observed_count", summary.totalObservedCount()));
+        lines.add(line("First created_at", summary.firstCreatedAt()));
+        lines.add(line("Last evaluated_at", summary.lastEvaluatedAt()));
+        lines.add(line("Freshness", duration(summary.freshness())));
+        lines.add(line("Duplicate logical keys", summary.duplicateLogicalKeys()));
+        lines.add(line("Shadow failures", summary.shadowFailures()));
+        lines.add(line("Forbidden live stake events", summary.forbiddenLiveStakeEvents()));
+        lines.add("Policy/risk/source coverage:");
+        if (diagnostics.policyResults().isEmpty()) {
+            lines.add(line("None", 0));
+        } else {
+            diagnostics.policyResults().forEach(result -> lines.add("- "
+                + result.policyName()
+                + "/"
+                + result.riskProfile()
+                + "/"
+                + result.source()
+                + " | decisions "
+                + result.decisions()
+                + " | recommendations "
+                + result.distinctRecommendations()
+                + " | observations "
+                + result.observations()
+                + " | avg base "
+                + money(result.avgBaseStake())
+                + " | avg calculated "
+                + money(result.avgCalculatedStake())
+                + " | avg final "
+                + money(result.avgFinalStake())
+                + " | would_block "
+                + result.wouldBlockCount()
+                + " | status "
+                + result.status()
+                + " | should_apply_live "
+                + (result.shouldApplyLive() ? "yes" : "no")
+                + (result.warning() == null || result.warning().isBlank() ? "" : " | warning " + result.warning())));
+        }
+        lines.add("Min stake floor effect");
+        diagnostics.policyResults().forEach(result -> lines.add("- "
+            + result.policyName()
+            + "/"
+            + result.riskProfile()
+            + " | floor_applied "
+            + result.minStakeFloor().floorAppliedCount()
+            + " | rate "
+            + number(result.minStakeFloor().floorAppliedRate())
+            + " | avg calculated before floor "
+            + money(result.minStakeFloor().avgCalculatedStakeBeforeFloor())
+            + " | avg final after floor "
+            + money(result.minStakeFloor().avgFinalStakeAfterFloor())
+            + " | avg uplift "
+            + money(result.minStakeFloor().avgUplift())
+            + " | total uplift "
+            + money(result.minStakeFloor().totalUplift())
+            + (result.minStakeFloor().floorAppliedCount() > 0
+                ? " | warning Calculated stake differs from final stake due to min_stake floor; simulated PnL uses final_stake."
+                : "")));
+        lines.add("Real joined simulation");
+        diagnostics.policyResults().forEach(result -> lines.add("- "
+            + result.policyName()
+            + "/"
+            + result.riskProfile()
+            + " | joined "
+            + result.realJoined().realJoinedBets()
+            + " | settled "
+            + result.realJoined().realSettledJoined()
+            + " | open "
+            + result.realJoined().realOpenJoined()
+            + " | baseline pnl "
+            + money(result.realJoined().baselineRealPnl())
+            + " | simulated pnl "
+            + money(result.realJoined().simulatedPnl())
+            + " | delta pnl "
+            + money(result.realJoined().deltaPnl())
+            + " | simulated roi "
+            + number(result.realJoined().simulatedRoi())
+            + " | max drawdown "
+            + money(result.realJoined().maxSimulatedDrawdown())
+            + " | status "
+            + result.realJoined().status()));
+        lines.add("Paper joined simulation");
+        diagnostics.policyResults().forEach(result -> lines.add("- "
+            + result.policyName()
+            + "/"
+            + result.riskProfile()
+            + " | joined "
+            + result.paperJoined().paperJoinedTrades()
+            + " | settled "
+            + result.paperJoined().paperSettledJoined()
+            + " | open/executed "
+            + result.paperJoined().paperOpenExecuted()
+            + " | execution_failed "
+            + result.paperJoined().paperExecutionFailed()
+            + " | baseline pnl "
+            + money(result.paperJoined().baselinePnl())
+            + " | simulated pnl "
+            + money(result.paperJoined().simulatedPnl())
+            + " | simulated roi "
+            + number(result.paperJoined().simulatedRoi())));
+        lines.add("Kelly diagnostics");
+        diagnostics.policyResults().stream()
+            .filter(result -> result.policyName().contains("KELLY"))
+            .forEach(result -> lines.add("- "
+                + result.policyName()
+                + "/"
+                + result.riskProfile()
+                + " | shadow_only yes"
+                + " | probability_available "
+                + result.probabilityAvailableCount()
+                + " | probability_missing "
+                + result.probabilityMissingCount()
+                + " | would_block "
+                + result.wouldBlockCount()
+                + " | block reasons "
+                + result.blockReasonBreakdown()
+                + " | status "
+                + result.status()
+                + " | should_apply_live "
+                + (result.shouldApplyLive() ? "yes" : "no")));
+        lines.add("Risk adjusted adjustments");
+        diagnostics.policyResults().stream()
+            .filter(result -> result.policyName().equals("RISK_ADJUSTED"))
+            .forEach(result -> {
+                lines.add("- "
+                    + result.policyName()
+                    + "/"
+                    + result.riskProfile()
+                    + " | adjustments "
+                    + result.adjustmentBreakdown());
+                if (!result.strongestReductions().isEmpty()) {
+                    lines.add("Top strongest reductions:");
+                    result.strongestReductions().forEach(example -> lines.add("- "
+                        + text(example.recommendationId())
+                        + " | "
+                        + text(example.eventName())
+                        + " / "
+                        + text(example.runnerName())
+                        + " | "
+                        + text(example.selectionSide())
+                        + " | odds "
+                        + number(example.odds())
+                        + " | base "
+                        + money(example.baseStake())
+                        + " | calculated "
+                        + money(example.calculatedStake())
+                        + " | final "
+                        + money(example.finalStake())
+                        + " | adjustments "
+                        + text(example.adjustments())));
+                }
+            });
+        lines.add("Recommended next action:");
+        lines.add("- keep shadow running");
+        lines.add("- do not enable live staking");
+        lines.add("- collect more settled joined bets");
     }
 
     private static void addPerformanceMap(

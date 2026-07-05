@@ -16,11 +16,17 @@ import com.betx.application.DiagnosticsRecommendationReadiness;
 import com.betx.application.DiagnosticsRepository;
 import com.betx.application.PaperTrade;
 import com.betx.application.PaperTradeStatus;
+import com.betx.application.StakeSizingShadowDecision;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.BetSettlementResult;
 import com.betx.domain.order.BetExecutionStatus;
 import com.betx.domain.order.SelectionSide;
 import com.betx.domain.signal.BetSide;
+import com.betx.domain.staking.StakeSizingBlockReason;
+import com.betx.domain.staking.StakeSizingDecisionReason;
+import com.betx.domain.staking.StakeSizingMode;
+import com.betx.domain.staking.StakeSizingRiskProfile;
+import com.betx.domain.staking.StakeSizingSource;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -78,6 +84,9 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             List<CandidateFilterEvaluation> candidateFilterEvaluations = tableExists(connection, "candidate_filter_evaluations")
                 ? candidateFilterEvaluations(connection, from, to)
                 : List.of();
+            List<StakeSizingShadowDecision> stakeSizingShadowDecisions = tableExists(connection, "stake_sizing_shadow_decisions")
+                ? stakeSizingShadowDecisions(connection, from, to)
+                : List.of();
             return new DiagnosticsDataset(
                 realBets,
                 paperTrades,
@@ -88,7 +97,8 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
                 betRecommendations,
                 paperRecommendationCoverage,
                 recommendationReadiness,
-                candidateFilterEvaluations
+                candidateFilterEvaluations,
+                stakeSizingShadowDecisions
             );
         } catch (SQLException exc) {
             throw new IllegalStateException("Could not read diagnostics data.", exc);
@@ -115,6 +125,9 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
             }
             if (tableExists(connection, "candidate_filter_evaluations")) {
                 addBounds(connection, instants, "candidate_filter_evaluations", List.of("last_evaluated_at"));
+            }
+            if (tableExists(connection, "stake_sizing_shadow_decisions")) {
+                addBounds(connection, instants, "stake_sizing_shadow_decisions", List.of("created_at", "last_evaluated_at"));
             }
             if (instants.isEmpty()) {
                 return new DiagnosticsPeriod(null, null);
@@ -282,6 +295,59 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
                         decimal(resultSet, "odds"),
                         resultSet.getString("strategy_name"),
                         CandidateFilterSource.valueOf(resultSet.getString("source")),
+                        instant(resultSet, "evaluated_at"),
+                        instant(resultSet, "created_at"),
+                        instant(resultSet, "last_evaluated_at"),
+                        resultSet.getLong("observed_count")
+                    ));
+                }
+                return rows;
+            }
+        }
+    }
+
+    private static List<StakeSizingShadowDecision> stakeSizingShadowDecisions(
+        Connection connection,
+        Instant from,
+        Instant to
+    ) throws SQLException {
+        String sql = """
+            SELECT *
+            FROM stake_sizing_shadow_decisions
+            WHERE (? IS NULL OR last_evaluated_at >= ?)
+              AND (? IS NULL OR last_evaluated_at <= ?)
+            ORDER BY last_evaluated_at ASC, id ASC
+            """;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            String fromText = instant(from);
+            String toText = instant(to);
+            statement.setString(1, fromText);
+            statement.setString(2, fromText);
+            statement.setString(3, toText);
+            statement.setString(4, toText);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<StakeSizingShadowDecision> rows = new ArrayList<>();
+                while (resultSet.next()) {
+                    rows.add(new StakeSizingShadowDecision(
+                        resultSet.getString("id"),
+                        resultSet.getString("recommendation_id"),
+                        resultSet.getString("canonical_key"),
+                        StakeSizingMode.valueOf(resultSet.getString("policy_name")),
+                        StakeSizingRiskProfile.valueOf(resultSet.getString("risk_profile")),
+                        StakeSizingSource.valueOf(resultSet.getString("source")),
+                        selectionSide(resultSet.getString("selection_side")),
+                        decimal(resultSet, "odds"),
+                        resultSet.getString("strategy_name"),
+                        decimal(resultSet, "base_stake"),
+                        decimal(resultSet, "min_stake"),
+                        decimal(resultSet, "max_stake"),
+                        decimal(resultSet, "bankroll"),
+                        decimal(resultSet, "calculated_stake"),
+                        decimal(resultSet, "final_stake"),
+                        resultSet.getInt("would_block") == 1,
+                        stakeSizingBlockReason(resultSet.getString("block_reason")),
+                        StakeSizingDecisionReason.valueOf(resultSet.getString("decision_reason")),
+                        resultSet.getString("adjustment_summary"),
                         instant(resultSet, "evaluated_at"),
                         instant(resultSet, "created_at"),
                         instant(resultSet, "last_evaluated_at"),
@@ -1015,6 +1081,10 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
         return value == null || value.isBlank() ? null : Instant.parse(value);
     }
 
+    private static String instant(Instant value) {
+        return value == null ? null : value.toString();
+    }
+
     private static BigDecimal decimal(ResultSet resultSet, String field) throws SQLException {
         String value = resultSet.getString(field);
         return value == null || value.isBlank() ? null : new BigDecimal(value);
@@ -1030,6 +1100,10 @@ public class JdbcDiagnosticsRepository implements DiagnosticsRepository {
 
     private static BetExecutionStatus executionStatus(String value) {
         return value == null || value.isBlank() ? null : BetExecutionStatus.valueOf(value);
+    }
+
+    private static StakeSizingBlockReason stakeSizingBlockReason(String value) {
+        return value == null || value.isBlank() ? null : StakeSizingBlockReason.valueOf(value);
     }
 
     private static SelectionSide selectionSide(String value) {

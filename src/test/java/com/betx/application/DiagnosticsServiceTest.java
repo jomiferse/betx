@@ -16,6 +16,11 @@ import com.betx.domain.order.BetExecutionStatus;
 import com.betx.domain.order.BetIntentStage;
 import com.betx.domain.order.BetSettlementResult;
 import com.betx.domain.order.SelectionSide;
+import com.betx.domain.staking.StakeSizingBlockReason;
+import com.betx.domain.staking.StakeSizingDecisionReason;
+import com.betx.domain.staking.StakeSizingMode;
+import com.betx.domain.staking.StakeSizingRiskProfile;
+import com.betx.domain.staking.StakeSizingSource;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -279,6 +284,127 @@ class DiagnosticsServiceTest {
             .anySatisfy(line -> assertThat(line).contains("BetRecommendation consumed by paper").contains("yes"))
             .anySatisfy(line -> assertThat(line).contains("BetRecommendation consumed by real").contains("no"))
             .anySatisfy(line -> assertThat(line).contains("Matching by recommendation_id").contains("no"));
+    }
+
+    @Test
+    void reportsStakeSizingShadowDiagnosticsWithoutApplyingLiveStaking() {
+        DiagnosticsDataset dataset = new DiagnosticsDataset(
+            List.of(
+                realWithRecommendation(
+                    "real-win",
+                    "m1",
+                    10,
+                    T0.plusSeconds(60),
+                    "3.00",
+                    "1.00",
+                    BetSettlementResult.WIN,
+                    "2.00",
+                    "rec-1",
+                    "1.00",
+                    "1.00"
+                ),
+                realWithRecommendation(
+                    "real-open",
+                    "m2",
+                    11,
+                    T0.plusSeconds(120),
+                    "4.00",
+                    "1.00",
+                    null,
+                    null,
+                    "rec-2",
+                    "1.00",
+                    "1.00"
+                )
+            ),
+            List.of(
+                paper("paper-1", "m1", 10, T0, "3.00", "3.00", "5.00", BacktestOutcome.WIN, "10.00", "rec-1"),
+                paper("paper-2", "m2", 11, T0, "4.00", "4.00", "5.00", null, null, "rec-2")
+            ),
+            20,
+            40,
+            Map.of("APPROVE", 2L),
+            Map.of(),
+            DiagnosticsBetRecommendationsSummary.empty(),
+            DiagnosticsPaperRecommendationCoverage.empty(),
+            DiagnosticsRecommendationReadiness.empty(),
+            List.of(),
+            List.of(
+                shadowDecision(
+                    "rec-1",
+                    StakeSizingMode.RISK_ADJUSTED,
+                    StakeSizingRiskProfile.CONSERVATIVE,
+                    "0.40",
+                    "1.00",
+                    false,
+                    null,
+                    StakeSizingDecisionReason.RISK_ADJUSTED,
+                    "[\"DRAW_REDUCTION\",\"ODDS_4_PLUS\",\"MIN_STAKE_FLOOR\"]"
+                ),
+                shadowDecision(
+                    "rec-2",
+                    StakeSizingMode.FRACTIONAL_KELLY_SHADOW,
+                    StakeSizingRiskProfile.CONSERVATIVE,
+                    "0.00",
+                    "0.00",
+                    true,
+                    StakeSizingBlockReason.NOT_AVAILABLE,
+                    StakeSizingDecisionReason.PROBABILITY_NOT_AVAILABLE,
+                    "[]"
+                )
+            )
+        );
+        DiagnosticsLogSummary logs = new DiagnosticsLogSummary(
+            Map.of("stake_sizing.shadow_failed", 1L, "stake_sizing.live_applied", 0L),
+            Map.of(),
+            0,
+            0,
+            List.of()
+        );
+
+        DiagnosticsReport report = service(dataset, logs).generate(request());
+
+        DiagnosticsStakeSizingShadowDiagnostics diagnostics = report.stakeSizingShadowDiagnostics();
+        assertThat(diagnostics.enabled()).isTrue();
+        assertThat(diagnostics.officiallyApplied()).isFalse();
+        assertThat(diagnostics.shouldApplyLive()).isFalse();
+        assertThat(diagnostics.summary().decisions()).isEqualTo(2);
+        assertThat(diagnostics.summary().distinctRecommendations()).isEqualTo(2);
+        assertThat(diagnostics.summary().totalObservedCount()).isEqualTo(2);
+        assertThat(diagnostics.summary().shadowFailures()).isEqualTo(1);
+        assertThat(diagnostics.policyResults()).hasSize(2);
+
+        DiagnosticsStakeSizingPolicyResult riskAdjusted = diagnostics.policyResults().stream()
+            .filter(result -> result.policyName().equals("RISK_ADJUSTED"))
+            .findFirst()
+            .orElseThrow();
+        assertThat(riskAdjusted.avgCalculatedStake()).isEqualByComparingTo("0.40000000");
+        assertThat(riskAdjusted.avgFinalStake()).isEqualByComparingTo("1.00000000");
+        assertThat(riskAdjusted.minStakeFloor().floorAppliedCount()).isEqualTo(1);
+        assertThat(riskAdjusted.minStakeFloor().totalUplift()).isEqualByComparingTo("0.60000000");
+        assertThat(riskAdjusted.realJoined().realJoinedBets()).isEqualTo(1);
+        assertThat(riskAdjusted.realJoined().realSettledJoined()).isEqualTo(1);
+        assertThat(riskAdjusted.realJoined().baselineRealPnl()).isEqualByComparingTo("2.00");
+        assertThat(riskAdjusted.realJoined().simulatedPnl()).isEqualByComparingTo("2.00");
+        assertThat(riskAdjusted.realJoined().status()).isEqualTo(DiagnosticsStakeSizingPolicyStatus.INSUFFICIENT_SAMPLE);
+        assertThat(riskAdjusted.paperJoined().paperJoinedTrades()).isEqualTo(1);
+        assertThat(riskAdjusted.adjustmentBreakdown()).containsEntry("DRAW_REDUCTION", 1L);
+
+        DiagnosticsStakeSizingPolicyResult kelly = diagnostics.policyResults().stream()
+            .filter(result -> result.policyName().equals("FRACTIONAL_KELLY_SHADOW"))
+            .findFirst()
+            .orElseThrow();
+        assertThat(kelly.status()).isEqualTo(DiagnosticsStakeSizingPolicyStatus.SHADOW_ONLY);
+        assertThat(kelly.wouldBlockCount()).isEqualTo(1);
+        assertThat(kelly.blockReasonBreakdown()).containsEntry("NOT_AVAILABLE", 1L);
+
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Stake sizing shadow diagnostics")
+            .contains("Min stake floor effect")
+            .contains("Kelly diagnostics")
+            .contains("Risk adjusted adjustments")
+            .anySatisfy(line -> assertThat(line).contains("Officially applied").contains("no"))
+            .anySatisfy(line -> assertThat(line).contains("should_apply_live").contains("no"));
     }
 
     @Test
@@ -1002,6 +1128,98 @@ class DiagnosticsServiceTest {
             null,
             null,
             BetExecutionStatus.UNMATCHED
+        );
+    }
+
+    private static RealBetDiagnosticRow realWithRecommendation(
+        String id,
+        String marketId,
+        long selectionId,
+        Instant createdAt,
+        String odds,
+        String stake,
+        BetSettlementResult result,
+        String pnl,
+        String recommendationId,
+        String requestedStake,
+        String matchedStake
+    ) {
+        return new RealBetDiagnosticRow(
+            id,
+            "betfair",
+            marketId,
+            selectionId,
+            "Event " + marketId,
+            "Match Odds",
+            "Runner " + selectionId,
+            SelectionSide.DRAW,
+            "League",
+            "value-football",
+            decimal(odds),
+            decimal(stake),
+            result == null ? BetIntentStage.EXECUTED : BetIntentStage.SETTLED,
+            result,
+            decimal(pnl),
+            "external-" + id,
+            createdAt,
+            result == null ? null : createdAt.plusSeconds(3600),
+            createdAt.plusSeconds(120),
+            BigDecimal.valueOf(100),
+            BigDecimal.valueOf(99),
+            decimal(stake),
+            createdAt,
+            "eval-" + id,
+            recommendationId,
+            createdAt,
+            decimal(odds),
+            createdAt,
+            createdAt.plusMillis(100),
+            null,
+            null,
+            decimal(odds),
+            null,
+            decimal(requestedStake),
+            decimal(matchedStake),
+            BigDecimal.ZERO,
+            result == null ? BetExecutionStatus.FULLY_MATCHED : BetExecutionStatus.FULLY_MATCHED
+        );
+    }
+
+    private static StakeSizingShadowDecision shadowDecision(
+        String recommendationId,
+        StakeSizingMode policyName,
+        StakeSizingRiskProfile riskProfile,
+        String calculatedStake,
+        String finalStake,
+        boolean wouldBlock,
+        StakeSizingBlockReason blockReason,
+        StakeSizingDecisionReason decisionReason,
+        String adjustmentSummary
+    ) {
+        return new StakeSizingShadowDecision(
+            recommendationId + "-" + policyName.name() + "-" + riskProfile.name(),
+            recommendationId,
+            BetRecommendation.canonicalKey("betfair", "m-" + recommendationId.substring(4), 1L, SelectionSide.DRAW, "value-football"),
+            policyName,
+            riskProfile,
+            StakeSizingSource.SHADOW,
+            SelectionSide.DRAW,
+            new BigDecimal("4.20"),
+            "value-football",
+            BigDecimal.ONE,
+            BigDecimal.ONE,
+            BigDecimal.TEN,
+            new BigDecimal("500.00"),
+            decimal(calculatedStake),
+            decimal(finalStake),
+            wouldBlock,
+            blockReason,
+            decisionReason,
+            adjustmentSummary,
+            T0,
+            T0,
+            T0.plusSeconds(60),
+            1
         );
     }
 

@@ -30,7 +30,8 @@ public record DiagnosticsReport(
     DiagnosticsRecommendationDivergenceAnalysis recommendationDivergenceAnalysis,
     DiagnosticsStrategyPerformance strategyPerformance,
     DiagnosticsCandidateFilterSimulation candidateFilterSimulation,
-    DiagnosticsCandidateFilterShadowValidation candidateFilterShadowValidation
+    DiagnosticsCandidateFilterShadowValidation candidateFilterShadowValidation,
+    DiagnosticsStakeSizingShadowDiagnostics stakeSizingShadowDiagnostics
 ) {
     public DiagnosticsReport(
         Instant generatedAt,
@@ -96,7 +97,8 @@ public record DiagnosticsReport(
             DiagnosticsRecommendationDivergenceAnalysis.empty(),
             DiagnosticsStrategyPerformance.empty(),
             DiagnosticsCandidateFilterSimulation.empty(),
-            DiagnosticsCandidateFilterShadowValidation.empty()
+            DiagnosticsCandidateFilterShadowValidation.empty(),
+            DiagnosticsStakeSizingShadowDiagnostics.empty()
         );
     }
 
@@ -198,7 +200,8 @@ public record DiagnosticsReport(
             DiagnosticsRecommendationDivergenceAnalysis.empty(),
             DiagnosticsStrategyPerformance.empty(),
             DiagnosticsCandidateFilterSimulation.empty(),
-            DiagnosticsCandidateFilterShadowValidation.empty()
+            DiagnosticsCandidateFilterShadowValidation.empty(),
+            DiagnosticsStakeSizingShadowDiagnostics.empty()
         );
     }
 
@@ -251,7 +254,8 @@ public record DiagnosticsReport(
             recommendationDivergenceAnalysis,
             DiagnosticsStrategyPerformance.empty(),
             DiagnosticsCandidateFilterSimulation.empty(),
-            DiagnosticsCandidateFilterShadowValidation.empty()
+            DiagnosticsCandidateFilterShadowValidation.empty(),
+            DiagnosticsStakeSizingShadowDiagnostics.empty()
         );
     }
 
@@ -306,7 +310,65 @@ public record DiagnosticsReport(
             recommendationDivergenceAnalysis,
             strategyPerformance,
             candidateFilterSimulation,
-            DiagnosticsCandidateFilterShadowValidation.empty()
+            DiagnosticsCandidateFilterShadowValidation.empty(),
+            DiagnosticsStakeSizingShadowDiagnostics.empty()
+        );
+    }
+
+    public DiagnosticsReport(
+        Instant generatedAt,
+        DiagnosticsPeriod period,
+        DiagnosticsCoverage coverage,
+        DiagnosticsDecisionFunnel decisionFunnel,
+        DiagnosticsExecutionMetrics executionMetrics,
+        DiagnosticsPaperVsRealMetrics paperVsRealMetrics,
+        List<DiagnosticFinding> integrityFindings,
+        List<String> limitations,
+        List<String> topFindings,
+        List<DiagnosticsMatch> matchedPairs,
+        Map<MatchGapReason, Long> matchingGaps,
+        DiagnosticsExecutionDataCoverage executionDataCoverage,
+        DiagnosticsLogEventCoverage logEventCoverage,
+        DiagnosticsPersistedExecutionCoverage persistedExecutionCoverage,
+        DiagnosticsPlaceOrdersResponseDuration placeOrdersResponseDuration,
+        DiagnosticsProspectiveRealBettingCohort prospectiveRealBettingCohort,
+        List<DiagnosticsSkippedMarket> topSkippedMarkets,
+        DiagnosticsBetRecommendationsSummary betRecommendations,
+        DiagnosticsPaperRecommendationCoverage paperRecommendationCoverage,
+        DiagnosticsRecommendationReadiness recommendationReadiness,
+        DiagnosticsRecommendationIdMatchingPreview recommendationIdMatchingPreview,
+        DiagnosticsRecommendationDivergenceAnalysis recommendationDivergenceAnalysis,
+        DiagnosticsStrategyPerformance strategyPerformance,
+        DiagnosticsCandidateFilterSimulation candidateFilterSimulation,
+        DiagnosticsCandidateFilterShadowValidation candidateFilterShadowValidation
+    ) {
+        this(
+            generatedAt,
+            period,
+            coverage,
+            decisionFunnel,
+            executionMetrics,
+            paperVsRealMetrics,
+            integrityFindings,
+            limitations,
+            topFindings,
+            matchedPairs,
+            matchingGaps,
+            executionDataCoverage,
+            logEventCoverage,
+            persistedExecutionCoverage,
+            placeOrdersResponseDuration,
+            prospectiveRealBettingCohort,
+            topSkippedMarkets,
+            betRecommendations,
+            paperRecommendationCoverage,
+            recommendationReadiness,
+            recommendationIdMatchingPreview,
+            recommendationDivergenceAnalysis,
+            strategyPerformance,
+            candidateFilterSimulation,
+            candidateFilterShadowValidation,
+            DiagnosticsStakeSizingShadowDiagnostics.empty()
         );
     }
 
@@ -330,5 +392,8 @@ public record DiagnosticsReport(
         candidateFilterShadowValidation = candidateFilterShadowValidation == null
             ? DiagnosticsCandidateFilterShadowValidation.empty()
             : candidateFilterShadowValidation;
+        stakeSizingShadowDiagnostics = stakeSizingShadowDiagnostics == null
+            ? DiagnosticsStakeSizingShadowDiagnostics.empty()
+            : stakeSizingShadowDiagnostics;
     }
 }

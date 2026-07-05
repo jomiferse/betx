@@ -96,6 +96,11 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         DiagnosticsStrategyPerformance strategyPerformance = strategyPerformance(dataset.realBets(), matches);
         DiagnosticsCandidateFilterSimulation candidateFilterSimulation = candidateFilterSimulation(dataset.realBets(), strategyPerformance.allTime());
         DiagnosticsCandidateFilterShadowValidation candidateFilterShadowValidation = candidateFilterShadowValidation(dataset);
+        DiagnosticsStakeSizingShadowDiagnostics stakeSizingShadowDiagnostics = stakeSizingShadowDiagnostics(
+            dataset,
+            logs,
+            Instant.now(clock)
+        );
         List<DiagnosticFinding> findings = integrityFindings(dataset, matches);
         List<String> limitations = limitations(logs, persistedExecutionCoverage, logEventCoverage);
         List<String> topFindings = topFindings(
@@ -104,6 +109,7 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             execution,
             strategyPerformance,
             candidateFilterSimulation,
+            stakeSizingShadowDiagnostics,
             findings
         );
         return new DiagnosticsReport(
@@ -131,7 +137,8 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             recommendationDivergenceAnalysis,
             strategyPerformance,
             candidateFilterSimulation,
-            candidateFilterShadowValidation
+            candidateFilterShadowValidation,
+            stakeSizingShadowDiagnostics
         );
     }
 
@@ -1443,6 +1450,469 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         return "5.00+";
     }
 
+    private DiagnosticsStakeSizingShadowDiagnostics stakeSizingShadowDiagnostics(
+        DiagnosticsDataset dataset,
+        DiagnosticsLogSummary logs,
+        Instant generatedAt
+    ) {
+        List<StakeSizingShadowDecision> decisions = dataset.stakeSizingShadowDecisions();
+        boolean enabled = !decisions.isEmpty();
+        DiagnosticsStakeSizingSummary summary = stakeSizingSummary(decisions, logs, generatedAt);
+        Map<String, List<RealBetDiagnosticRow>> realByRecommendation = dataset.realBets().stream()
+            .filter(row -> !isMissing(row.recommendationId()))
+            .collect(Collectors.groupingBy(RealBetDiagnosticRow::recommendationId));
+        Map<String, List<PaperTrade>> paperByRecommendation = dataset.paperTrades().stream()
+            .filter(row -> !isMissing(row.recommendationId()))
+            .collect(Collectors.groupingBy(PaperTrade::recommendationId));
+        List<DiagnosticsStakeSizingPolicyResult> results = decisions.stream()
+            .collect(Collectors.groupingBy(this::stakeSizingPolicyGroupKey, LinkedHashMap::new, Collectors.toList()))
+            .entrySet()
+            .stream()
+            .map(entry -> stakeSizingPolicyResult(entry.getValue(), realByRecommendation, paperByRecommendation))
+            .sorted(Comparator.comparing(DiagnosticsStakeSizingPolicyResult::policyName)
+                .thenComparing(DiagnosticsStakeSizingPolicyResult::riskProfile)
+                .thenComparing(DiagnosticsStakeSizingPolicyResult::source))
+            .toList();
+        return new DiagnosticsStakeSizingShadowDiagnostics(
+            enabled,
+            false,
+            false,
+            summary,
+            results,
+            "keep shadow running; do not enable live staking; collect more settled joined bets"
+        );
+    }
+
+    private DiagnosticsStakeSizingSummary stakeSizingSummary(
+        List<StakeSizingShadowDecision> decisions,
+        DiagnosticsLogSummary logs,
+        Instant generatedAt
+    ) {
+        Instant firstCreated = decisions.stream()
+            .map(StakeSizingShadowDecision::createdAt)
+            .filter(Objects::nonNull)
+            .min(Instant::compareTo)
+            .orElse(null);
+        Instant lastEvaluated = decisions.stream()
+            .map(StakeSizingShadowDecision::lastEvaluatedAt)
+            .filter(Objects::nonNull)
+            .max(Instant::compareTo)
+            .orElse(null);
+        Duration freshness = lastEvaluated == null || generatedAt == null ? null : Duration.between(lastEvaluated, generatedAt);
+        long duplicateKeys = decisions.stream()
+            .collect(Collectors.groupingBy(this::stakeSizingPolicyKey, Collectors.counting()))
+            .values()
+            .stream()
+            .filter(count -> count > 1)
+            .mapToLong(count -> count - 1)
+            .sum();
+        long forbidden = logCount(logs, "stake_sizing.live_applied")
+            + logCount(logs, "stake_sizing.changed_real_stake")
+            + logCount(logs, "stake_sizing.order_stake_changed");
+        return new DiagnosticsStakeSizingSummary(
+            decisions.size(),
+            decisions.stream().map(StakeSizingShadowDecision::recommendationId).filter(Objects::nonNull).distinct().count(),
+            decisions.stream().map(decision -> decision.policyName().name()).collect(Collectors.toCollection(java.util.TreeSet::new)),
+            decisions.stream().map(decision -> decision.riskProfile().name()).collect(Collectors.toCollection(java.util.TreeSet::new)),
+            decisions.stream().map(decision -> decision.source().name()).collect(Collectors.toCollection(java.util.TreeSet::new)),
+            decisions.stream().mapToLong(StakeSizingShadowDecision::observedCount).sum(),
+            firstCreated,
+            lastEvaluated,
+            freshness,
+            duplicateKeys,
+            logCount(logs, "stake_sizing.shadow_failed"),
+            forbidden
+        );
+    }
+
+    private DiagnosticsStakeSizingPolicyResult stakeSizingPolicyResult(
+        List<StakeSizingShadowDecision> decisions,
+        Map<String, List<RealBetDiagnosticRow>> realByRecommendation,
+        Map<String, List<PaperTrade>> paperByRecommendation
+    ) {
+        StakeSizingShadowDecision first = decisions.getFirst();
+        DiagnosticsStakeSizingRealJoined real = stakeSizingRealJoined(decisions, realByRecommendation);
+        DiagnosticsStakeSizingPaperJoined paper = stakeSizingPaperJoined(decisions, paperByRecommendation);
+        DiagnosticsStakeSizingPolicyStatus status = stakeSizingStatus(first, real);
+        String warning = stakeSizingWarning(first, status, real, paper);
+        return new DiagnosticsStakeSizingPolicyResult(
+            first.policyName().name(),
+            first.riskProfile().name(),
+            first.source().name(),
+            decisions.size(),
+            decisions.stream().map(StakeSizingShadowDecision::recommendationId).distinct().count(),
+            decisions.stream().mapToLong(StakeSizingShadowDecision::observedCount).sum(),
+            average(decisions.stream().map(StakeSizingShadowDecision::baseStake).filter(Objects::nonNull).toList()),
+            average(decisions.stream().map(StakeSizingShadowDecision::calculatedStake).filter(Objects::nonNull).toList()),
+            average(decisions.stream().map(StakeSizingShadowDecision::finalStake).filter(Objects::nonNull).toList()),
+            min(decisions.stream().map(StakeSizingShadowDecision::calculatedStake).filter(Objects::nonNull).toList()),
+            max(decisions.stream().map(StakeSizingShadowDecision::calculatedStake).filter(Objects::nonNull).toList()),
+            min(decisions.stream().map(StakeSizingShadowDecision::finalStake).filter(Objects::nonNull).toList()),
+            max(decisions.stream().map(StakeSizingShadowDecision::finalStake).filter(Objects::nonNull).toList()),
+            decisions.stream().filter(StakeSizingShadowDecision::wouldBlock).count(),
+            rate(BigDecimal.valueOf(decisions.stream().filter(StakeSizingShadowDecision::wouldBlock).count()), BigDecimal.valueOf(decisions.size())),
+            breakdown(decisions, decision -> decision.decisionReason().name()),
+            breakdown(decisions.stream().filter(decision -> decision.blockReason() != null).toList(), decision -> decision.blockReason().name()),
+            adjustmentBreakdown(decisions),
+            minStakeFloor(decisions),
+            real,
+            paper,
+            probabilityAvailableCount(decisions),
+            probabilityMissingCount(decisions),
+            confidenceAvailableCount(decisions),
+            confidenceMissingCount(decisions),
+            strongestReductions(decisions, realByRecommendation),
+            status,
+            warning,
+            false
+        );
+    }
+
+    private DiagnosticsStakeSizingMinStakeFloor minStakeFloor(List<StakeSizingShadowDecision> decisions) {
+        List<StakeSizingShadowDecision> floored = decisions.stream()
+            .filter(decision -> decision.calculatedStake() != null && decision.finalStake() != null && decision.minStake() != null)
+            .filter(decision -> decision.calculatedStake().compareTo(decision.minStake()) < 0)
+            .filter(decision -> decision.finalStake().compareTo(decision.minStake()) == 0)
+            .toList();
+        BigDecimal totalUplift = floored.stream()
+            .map(decision -> decision.finalStake().subtract(decision.calculatedStake()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return new DiagnosticsStakeSizingMinStakeFloor(
+            floored.size(),
+            rate(BigDecimal.valueOf(floored.size()), BigDecimal.valueOf(Math.max(1, decisions.size()))),
+            average(floored.stream().map(StakeSizingShadowDecision::calculatedStake).toList()),
+            average(floored.stream().map(StakeSizingShadowDecision::finalStake).toList()),
+            floored.isEmpty() ? null : decimal(totalUplift.divide(BigDecimal.valueOf(floored.size()), SCALE + 2, RoundingMode.HALF_UP)),
+            decimal(totalUplift)
+        );
+    }
+
+    private DiagnosticsStakeSizingRealJoined stakeSizingRealJoined(
+        List<StakeSizingShadowDecision> decisions,
+        Map<String, List<RealBetDiagnosticRow>> realByRecommendation
+    ) {
+        List<StakeSizingRealSimulationRow> joined = decisions.stream()
+            .flatMap(decision -> realByRecommendation.getOrDefault(decision.recommendationId(), List.of())
+                .stream()
+                .map(real -> new StakeSizingRealSimulationRow(decision, real)))
+            .toList();
+        List<StakeSizingRealSimulationRow> settled = joined.stream()
+            .filter(row -> row.real().settledWithPnl())
+            .filter(row -> validStake(stakeForSimulation(row.real())) != null)
+            .toList();
+        BigDecimal baselineTurnover = settled.stream()
+            .map(row -> stakeForSimulation(row.real()))
+            .filter(Objects::nonNull)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal baselinePnl = settled.stream()
+            .map(row -> row.real().realizedProfitLoss())
+            .filter(Objects::nonNull)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        List<BigDecimal> multipliers = settled.stream()
+            .map(row -> rate(row.decision().finalStake(), stakeForSimulation(row.real())))
+            .filter(Objects::nonNull)
+            .toList();
+        BigDecimal simulatedTurnover = settled.stream()
+            .map(row -> row.decision().wouldBlock() ? BigDecimal.ZERO : valueOrZero(row.decision().finalStake()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal simulatedPnl = settled.stream()
+            .map(row -> {
+                BigDecimal profitMultiplier = rate(row.real().realizedProfitLoss(), stakeForSimulation(row.real()));
+                if (profitMultiplier == null || row.decision().wouldBlock()) {
+                    return BigDecimal.ZERO;
+                }
+                return profitMultiplier.multiply(valueOrZero(row.decision().finalStake()));
+            })
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        List<BigDecimal> baselinePnlCurve = settled.stream()
+            .sorted(Comparator.comparing(row -> row.real().settledAt(), Comparator.nullsLast(Comparator.naturalOrder())))
+            .map(row -> valueOrZero(row.real().realizedProfitLoss()))
+            .toList();
+        List<BigDecimal> simulatedPnlCurve = settled.stream()
+            .sorted(Comparator.comparing(row -> row.real().settledAt(), Comparator.nullsLast(Comparator.naturalOrder())))
+            .map(row -> {
+                BigDecimal profitMultiplier = rate(row.real().realizedProfitLoss(), stakeForSimulation(row.real()));
+                if (profitMultiplier == null || row.decision().wouldBlock()) {
+                    return BigDecimal.ZERO;
+                }
+                return profitMultiplier.multiply(valueOrZero(row.decision().finalStake()));
+            })
+            .toList();
+        BigDecimal baselineDrawdown = drawdownFromPnl(baselinePnlCurve, false);
+        BigDecimal simulatedMaxDrawdown = drawdownFromPnl(simulatedPnlCurve, false);
+        BigDecimal simulatedCurrentDrawdown = drawdownFromPnl(simulatedPnlCurve, true);
+        long fallbackRequestedStake = settled.stream()
+            .filter(row -> validStake(row.real().matchedStake()) == null && validStake(row.real().requestedStake()) != null)
+            .count();
+        DiagnosticsStakeSizingPolicyStatus status = settled.size() < 25
+            ? DiagnosticsStakeSizingPolicyStatus.INSUFFICIENT_SAMPLE
+            : simulatedPnl.compareTo(baselinePnl) < 0
+                ? DiagnosticsStakeSizingPolicyStatus.REJECTED
+                : DiagnosticsStakeSizingPolicyStatus.CANDIDATE;
+        return new DiagnosticsStakeSizingRealJoined(
+            joined.size(),
+            settled.size(),
+            Math.max(0, joined.size() - settled.size()),
+            settled.stream().filter(row -> row.real().settlementResult() == BetSettlementResult.WIN).count(),
+            settled.stream().filter(row -> row.real().settlementResult() == BetSettlementResult.LOSE).count(),
+            settled.stream().filter(row -> row.real().settlementResult() == BetSettlementResult.VOID
+                || row.real().stage() == BetIntentStage.CANCELLED).count(),
+            money(baselineTurnover),
+            money(baselinePnl),
+            rate(baselinePnl, baselineTurnover),
+            money(simulatedTurnover),
+            money(simulatedPnl),
+            rate(simulatedPnl, simulatedTurnover),
+            money(simulatedPnl.subtract(baselinePnl)),
+            subtract(rate(simulatedPnl, simulatedTurnover), rate(baselinePnl, baselineTurnover)),
+            average(multipliers),
+            max(settled.stream().map(row -> row.decision().finalStake()).filter(Objects::nonNull).toList()),
+            joined.stream().filter(row -> row.decision().wouldBlock()).count(),
+            rate(BigDecimal.valueOf(joined.stream().filter(row -> row.decision().wouldBlock()).count()), BigDecimal.valueOf(Math.max(1, joined.size()))),
+            simulatedCurrentDrawdown,
+            simulatedMaxDrawdown,
+            baselineDrawdown,
+            subtract(baselineDrawdown, simulatedMaxDrawdown),
+            status,
+            settled.size() < 25 ? "INSUFFICIENT_SAMPLE: settled joined bets < 25." : null,
+            fallbackRequestedStake > 0 ? "Used requested_stake fallback when matched_stake was unavailable." : null
+        );
+    }
+
+    private DiagnosticsStakeSizingPaperJoined stakeSizingPaperJoined(
+        List<StakeSizingShadowDecision> decisions,
+        Map<String, List<PaperTrade>> paperByRecommendation
+    ) {
+        List<StakeSizingPaperSimulationRow> joined = decisions.stream()
+            .flatMap(decision -> paperByRecommendation.getOrDefault(decision.recommendationId(), List.of())
+                .stream()
+                .map(paper -> new StakeSizingPaperSimulationRow(decision, paper)))
+            .toList();
+        List<StakeSizingPaperSimulationRow> settled = joined.stream()
+            .filter(row -> row.paper().status() == PaperTradeStatus.SETTLED)
+            .filter(row -> validStake(row.paper().stake()) != null)
+            .toList();
+        BigDecimal baselinePnl = settled.stream()
+            .map(row -> valueOrZero(row.paper().netPnl()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal simulatedPnl = settled.stream()
+            .map(row -> {
+                BigDecimal multiplier = rate(row.paper().netPnl(), row.paper().stake());
+                if (multiplier == null || row.decision().wouldBlock()) {
+                    return BigDecimal.ZERO;
+                }
+                return multiplier.multiply(valueOrZero(row.decision().finalStake()));
+            })
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal simulatedTurnover = settled.stream()
+            .map(row -> row.decision().wouldBlock() ? BigDecimal.ZERO : valueOrZero(row.decision().finalStake()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        long failed = joined.stream().filter(row -> row.paper().status() == PaperTradeStatus.EXECUTION_FAILED).count();
+        String warning = failed > 0
+            ? "Paper execution failures present; paper PnL sample may be incomplete."
+            : settled.size() < 25 ? "INSUFFICIENT_SAMPLE: paper settled joined trades < 25." : null;
+        return new DiagnosticsStakeSizingPaperJoined(
+            joined.size(),
+            settled.size(),
+            joined.stream().filter(row -> row.paper().status() == PaperTradeStatus.EXECUTED
+                || row.paper().status() == PaperTradeStatus.RECOMMENDED).count(),
+            failed,
+            money(baselinePnl),
+            money(simulatedPnl),
+            rate(simulatedPnl, simulatedTurnover),
+            warning
+        );
+    }
+
+    private DiagnosticsStakeSizingPolicyStatus stakeSizingStatus(
+        StakeSizingShadowDecision first,
+        DiagnosticsStakeSizingRealJoined real
+    ) {
+        if (first.policyName().name().contains("KELLY")) {
+            return DiagnosticsStakeSizingPolicyStatus.SHADOW_ONLY;
+        }
+        return real.status();
+    }
+
+    private String stakeSizingWarning(
+        StakeSizingShadowDecision first,
+        DiagnosticsStakeSizingPolicyStatus status,
+        DiagnosticsStakeSizingRealJoined real,
+        DiagnosticsStakeSizingPaperJoined paper
+    ) {
+        if (first.policyName().name().contains("KELLY")) {
+            return "Kelly cannot be evaluated without calibrated estimated_probability.";
+        }
+        if (first.policyName().name().equals("TIERED_CONFIDENCE")) {
+            return "Confidence not available; tiered policy falls back to base stake.";
+        }
+        if (real.sampleWarning() != null) {
+            return real.sampleWarning();
+        }
+        if (paper.sampleWarning() != null) {
+            return paper.sampleWarning();
+        }
+        if (status == DiagnosticsStakeSizingPolicyStatus.REJECTED) {
+            return "Simulated final-stake performance is worse than the current real stake baseline.";
+        }
+        return null;
+    }
+
+    private Map<String, Long> adjustmentBreakdown(List<StakeSizingShadowDecision> decisions) {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        decisions.stream()
+            .flatMap(decision -> adjustmentTokens(decision.adjustmentSummary()).stream())
+            .forEach(token -> counts.merge(token, 1L, Long::sum));
+        long minFloor = minStakeFloor(decisions).floorAppliedCount();
+        if (minFloor > 0) {
+            counts.merge("MIN_STAKE_FLOOR", minFloor, Long::sum);
+        }
+        return counts;
+    }
+
+    private List<String> adjustmentTokens(String summary) {
+        if (summary == null || summary.isBlank() || "[]".equals(summary.strip())) {
+            return List.of();
+        }
+        String cleaned = summary.replace("[", "")
+            .replace("]", "")
+            .replace("\"", "")
+            .strip();
+        if (cleaned.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(cleaned.split(","))
+            .map(String::strip)
+            .filter(token -> !token.isBlank())
+            .toList();
+    }
+
+    private List<DiagnosticsStakeSizingReductionExample> strongestReductions(
+        List<StakeSizingShadowDecision> decisions,
+        Map<String, List<RealBetDiagnosticRow>> realByRecommendation
+    ) {
+        return decisions.stream()
+            .filter(decision -> decision.baseStake() != null && decision.calculatedStake() != null)
+            .filter(decision -> decision.calculatedStake().compareTo(decision.baseStake()) < 0)
+            .sorted(Comparator.comparing(
+                decision -> decision.baseStake().subtract(decision.calculatedStake()),
+                Comparator.reverseOrder()
+            ))
+            .limit(10)
+            .map(decision -> {
+                RealBetDiagnosticRow real = realByRecommendation.getOrDefault(decision.recommendationId(), List.of())
+                    .stream()
+                    .findFirst()
+                    .orElse(null);
+                return new DiagnosticsStakeSizingReductionExample(
+                    decision.recommendationId(),
+                    real == null ? null : real.eventName(),
+                    real == null ? null : real.runnerName(),
+                    decision.selectionSide().name(),
+                    decision.odds(),
+                    decision.baseStake(),
+                    decision.calculatedStake(),
+                    decision.finalStake(),
+                    decision.adjustmentSummary()
+                );
+            })
+            .toList();
+    }
+
+    private long probabilityAvailableCount(List<StakeSizingShadowDecision> decisions) {
+        return decisions.stream()
+            .filter(decision -> decision.decisionReason().name().contains("PROBABILITY"))
+            .filter(decision -> !decision.decisionReason().name().contains("NOT_AVAILABLE"))
+            .count();
+    }
+
+    private long probabilityMissingCount(List<StakeSizingShadowDecision> decisions) {
+        return decisions.stream().filter(decision -> decision.decisionReason().name().contains("PROBABILITY_NOT_AVAILABLE")).count();
+    }
+
+    private long confidenceAvailableCount(List<StakeSizingShadowDecision> decisions) {
+        return decisions.stream()
+            .filter(decision -> decision.decisionReason().name().contains("CONFIDENCE"))
+            .filter(decision -> !decision.decisionReason().name().contains("NOT_AVAILABLE"))
+            .count();
+    }
+
+    private long confidenceMissingCount(List<StakeSizingShadowDecision> decisions) {
+        return decisions.stream().filter(decision -> decision.decisionReason().name().contains("CONFIDENCE_NOT_AVAILABLE")).count();
+    }
+
+    private String stakeSizingPolicyKey(StakeSizingShadowDecision decision) {
+        return decision.recommendationId()
+            + "|"
+            + decision.policyName().name()
+            + "|"
+            + decision.riskProfile().name()
+            + "|"
+            + decision.source().name();
+    }
+
+    private String stakeSizingPolicyGroupKey(StakeSizingShadowDecision decision) {
+        return decision.policyName().name()
+            + "|"
+            + decision.riskProfile().name()
+            + "|"
+            + decision.source().name();
+    }
+
+    private static <T> Map<String, Long> breakdown(List<T> rows, Function<T, String> classifier) {
+        return rows.stream()
+            .map(classifier)
+            .filter(Objects::nonNull)
+            .collect(Collectors.groupingBy(Function.identity(), LinkedHashMap::new, Collectors.counting()));
+    }
+
+    private static BigDecimal stakeForSimulation(RealBetDiagnosticRow row) {
+        BigDecimal matched = validStake(row.matchedStake());
+        if (matched != null) {
+            return matched;
+        }
+        return validStake(row.requestedStake());
+    }
+
+    private static BigDecimal validStake(BigDecimal stake) {
+        return stake == null || stake.compareTo(BigDecimal.ZERO) <= 0 ? null : stake;
+    }
+
+    private static BigDecimal valueOrZero(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private static BigDecimal drawdownFromPnl(List<BigDecimal> pnls, boolean currentOnly) {
+        BigDecimal peak = BigDecimal.ZERO;
+        BigDecimal equity = BigDecimal.ZERO;
+        BigDecimal maxDrawdown = BigDecimal.ZERO;
+        for (BigDecimal pnl : pnls) {
+            equity = equity.add(valueOrZero(pnl));
+            if (equity.compareTo(peak) > 0) {
+                peak = equity;
+            }
+            BigDecimal drawdown = peak.subtract(equity);
+            if (drawdown.compareTo(maxDrawdown) > 0) {
+                maxDrawdown = drawdown;
+            }
+        }
+        return money(currentOnly ? peak.subtract(equity) : maxDrawdown);
+    }
+
+    private static BigDecimal min(List<BigDecimal> values) {
+        return values.stream().min(BigDecimal::compareTo).map(DiagnosticsService::decimal).orElse(null);
+    }
+
+    private static BigDecimal max(List<BigDecimal> values) {
+        return values.stream().max(BigDecimal::compareTo).map(DiagnosticsService::decimal).orElse(null);
+    }
+
+    private record StakeSizingRealSimulationRow(StakeSizingShadowDecision decision, RealBetDiagnosticRow real) {
+    }
+
+    private record StakeSizingPaperSimulationRow(StakeSizingShadowDecision decision, PaperTrade paper) {
+    }
+
     private static BigDecimal maxDrawdown(List<RealBetDiagnosticRow> settled) {
         BigDecimal peak = BigDecimal.ZERO;
         BigDecimal equity = BigDecimal.ZERO;
@@ -1698,6 +2168,7 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
         DiagnosticsExecutionMetrics execution,
         DiagnosticsStrategyPerformance strategyPerformance,
         DiagnosticsCandidateFilterSimulation candidateFilterSimulation,
+        DiagnosticsStakeSizingShadowDiagnostics stakeSizingShadowDiagnostics,
         List<DiagnosticFinding> findings
     ) {
         List<String> values = new ArrayList<>();
@@ -1723,6 +2194,13 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
                 + result.status()
                 + "."
         ));
+        if (stakeSizingShadowDiagnostics.enabled()) {
+            values.add("Stake sizing shadow decisions: "
+                + stakeSizingShadowDiagnostics.summary().decisions()
+                + " rows across "
+                + stakeSizingShadowDiagnostics.summary().distinctRecommendations()
+                + " recommendations; live staking remains disabled.");
+        }
         if (paperVsReal.averageRealVsPaperOddsDifference() != null) {
             values.add("Average real recorded vs paper odds difference is "
                 + paperVsReal.averageRealVsPaperOddsDifference()

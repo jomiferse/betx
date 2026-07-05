@@ -41,6 +41,7 @@ public class DiagnosticsJsonExporter {
         payload.put("strategyPerformance", report.strategyPerformance());
         payload.put("candidateFilterSimulation", report.candidateFilterSimulation());
         payload.put("candidateFilterShadowValidation", candidateFilterShadowValidation(report.candidateFilterShadowValidation()));
+        payload.put("stakeSizingShadowDiagnostics", stakeSizingShadowDiagnostics(report.stakeSizingShadowDiagnostics()));
         payload.put("paperRecommendationCoverage", report.paperRecommendationCoverage());
         payload.put("decisionFunnel", report.decisionFunnel());
         payload.put("executionMetrics", execution(report.executionMetrics()));
@@ -211,6 +212,68 @@ public class DiagnosticsJsonExporter {
         value.put("deltaRoi", result.deltaRoi());
         value.put("maxDrawdownIncluded", result.maxDrawdownIncluded());
         value.put("volumeRetentionPct", result.volumeRetentionPct());
+        value.put("status", result.status());
+        value.put("warning", result.warning());
+        value.put("shouldApplyLive", result.shouldApplyLive());
+        return value;
+    }
+
+    private Map<String, Object> stakeSizingShadowDiagnostics(DiagnosticsStakeSizingShadowDiagnostics diagnostics) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("enabled", diagnostics.enabled());
+        value.put("officiallyApplied", diagnostics.officiallyApplied());
+        value.put("shouldApplyLive", diagnostics.shouldApplyLive());
+        value.put("summary", stakeSizingSummary(diagnostics.summary()));
+        value.put("policyResults", diagnostics.policyResults().stream().map(this::stakeSizingPolicyResult).toList());
+        value.put("recommendedNextAction", diagnostics.recommendedNextAction());
+        return value;
+    }
+
+    private Map<String, Object> stakeSizingSummary(DiagnosticsStakeSizingSummary summary) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("decisions", summary.decisions());
+        value.put("distinctRecommendations", summary.distinctRecommendations());
+        value.put("policies", summary.policies());
+        value.put("riskProfiles", summary.riskProfiles());
+        value.put("sources", summary.sources());
+        value.put("totalObservedCount", summary.totalObservedCount());
+        value.put("firstCreatedAt", instant(summary.firstCreatedAt()));
+        value.put("lastEvaluatedAt", instant(summary.lastEvaluatedAt()));
+        value.put("freshnessMs", millis(summary.freshness()));
+        value.put("duplicateLogicalKeys", summary.duplicateLogicalKeys());
+        value.put("shadowFailures", summary.shadowFailures());
+        value.put("forbiddenLiveStakeEvents", summary.forbiddenLiveStakeEvents());
+        return value;
+    }
+
+    private Map<String, Object> stakeSizingPolicyResult(DiagnosticsStakeSizingPolicyResult result) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("policyName", result.policyName());
+        value.put("riskProfile", result.riskProfile());
+        value.put("source", result.source());
+        value.put("decisions", result.decisions());
+        value.put("distinctRecommendations", result.distinctRecommendations());
+        value.put("observations", result.observations());
+        value.put("avgBaseStake", result.avgBaseStake());
+        value.put("avgCalculatedStake", result.avgCalculatedStake());
+        value.put("avgFinalStake", result.avgFinalStake());
+        value.put("minCalculatedStake", result.minCalculatedStake());
+        value.put("maxCalculatedStake", result.maxCalculatedStake());
+        value.put("minFinalStake", result.minFinalStake());
+        value.put("maxFinalStake", result.maxFinalStake());
+        value.put("wouldBlockCount", result.wouldBlockCount());
+        value.put("wouldBlockRate", result.wouldBlockRate());
+        value.put("decisionReasonBreakdown", result.decisionReasonBreakdown());
+        value.put("blockReasonBreakdown", result.blockReasonBreakdown());
+        value.put("adjustmentSummaryBreakdown", result.adjustmentBreakdown());
+        value.put("minStakeFloor", result.minStakeFloor());
+        value.put("realJoined", result.realJoined());
+        value.put("paperJoined", result.paperJoined());
+        value.put("probabilityAvailableCount", result.probabilityAvailableCount());
+        value.put("probabilityMissingCount", result.probabilityMissingCount());
+        value.put("confidenceAvailableCount", result.confidenceAvailableCount());
+        value.put("confidenceMissingCount", result.confidenceMissingCount());
+        value.put("strongestReductions", result.strongestReductions());
         value.put("status", result.status());
         value.put("warning", result.warning());
         value.put("shouldApplyLive", result.shouldApplyLive());
