@@ -6,22 +6,28 @@ import java.util.Locale;
 
 /** Betfair login jurisdictions supported by the interactive API endpoint. */
 public enum BetfairCountry {
-    GLOBAL("global", "https://identitysso.betfair.com/api/login"),
-    AUSTRALIA_NEW_ZEALAND("australia_new_zealand", "https://identitysso.betfair.com.au/api/login"),
-    ITALY("italy", "https://identitysso.betfair.it/api/login"),
-    SPAIN("spain", "https://identitysso.betfair.es/api/login"),
-    ROMANIA("romania", "https://identitysso.betfair.ro/api/login");
+    GLOBAL("global", "https://identitysso.betfair.com/api/login", "https://identitysso.betfair.com/api/keepAlive"),
+    AUSTRALIA_NEW_ZEALAND("australia_new_zealand", "https://identitysso.betfair.com.au/api/login", "https://identitysso.betfair.com.au/api/keepAlive"),
+    ITALY("italy", "https://identitysso.betfair.it/api/login", "https://identitysso.betfair.it/api/keepAlive"),
+    SPAIN("spain", "https://identitysso.betfair.es/api/login", "https://identitysso.betfair.es/api/keepAlive"),
+    ROMANIA("romania", "https://identitysso.betfair.ro/api/login", "https://identitysso.betfair.ro/api/keepAlive");
 
     private final String configValue;
     private final String loginUrl;
+    private final String keepAliveUrl;
 
-    BetfairCountry(String configValue, String loginUrl) {
+    BetfairCountry(String configValue, String loginUrl, String keepAliveUrl) {
         this.configValue = configValue;
         this.loginUrl = loginUrl;
+        this.keepAliveUrl = keepAliveUrl;
     }
 
     public String loginUrl() {
         return loginUrl;
+    }
+
+    public String keepAliveUrl() {
+        return keepAliveUrl;
     }
 
     @JsonValue

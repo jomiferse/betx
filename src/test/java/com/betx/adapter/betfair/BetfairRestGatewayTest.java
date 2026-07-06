@@ -7,9 +7,13 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+import com.betx.application.observability.BetxEvent;
+import com.betx.application.observability.BetxEventLogger;
+import com.betx.application.port.out.StructuredEventSink;
 import com.betx.domain.betfair.BetfairCountry;
 import com.betx.domain.betfair.BetfairCredentials;
 import com.betx.domain.betfair.BetfairEvent;
+import com.betx.domain.betfair.BetfairMarketBook;
 import com.betx.domain.betfair.BetfairMarketQuery;
 import com.betx.domain.betfair.BetfairSession;
 import com.betx.domain.order.BetExecutionResult;
@@ -17,12 +21,157 @@ import com.betx.domain.order.BetOrder;
 import com.betx.domain.signal.BetSide;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
 class BetfairRestGatewayTest {
+    @Test
+    void logsSessionLifecycleWithoutSecrets() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        MutableClock clock = new MutableClock(Instant.parse("2026-07-07T10:00:00Z"));
+        RecordingEventSink sink = new RecordingEventSink();
+        BetfairRestGateway gateway = new BetfairRestGateway(
+            builder,
+            new ObjectMapper().findAndRegisterModules(),
+            clock,
+            new BetxEventLogger(sink, clock)
+        );
+        BetfairCredentials credentials = new BetfairCredentials("user", "password", "app-key", BetfairCountry.SPAIN);
+        server.expect(requestTo("https://identitysso.betfair.es/api/login"))
+            .andRespond(withSuccess("{\"status\":\"SUCCESS\",\"token\":\"session-token\"}", APPLICATION_JSON));
+        server.expect(requestTo("https://identitysso.betfair.es/api/keepAlive"))
+            .andRespond(withSuccess("{\"status\":\"SUCCESS\",\"token\":\"session-token\",\"product\":\"app-key\"}", APPLICATION_JSON));
+
+        gateway.login(credentials);
+        gateway.login(credentials);
+        clock.advance(Duration.ofMinutes(15));
+        gateway.login(credentials);
+
+        assertThat(sink.events())
+            .extracting(BetxEvent::event)
+            .containsExactly(
+                "betfair.session.login",
+                "betfair.session.cache_hit",
+                "betfair.session.keep_alive"
+            );
+        assertThat(sink.events())
+            .allSatisfy(event -> assertThat(event.fields().toString())
+                .doesNotContain("user")
+                .doesNotContain("password")
+                .doesNotContain("app-key")
+                .doesNotContain("session-token"));
+        server.verify();
+    }
+
+    @Test
+    void logsJsonRpcRequestAndResponseWithoutSessionToken() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        MutableClock clock = new MutableClock(Instant.parse("2026-07-07T10:00:00Z"));
+        RecordingEventSink sink = new RecordingEventSink();
+        BetfairRestGateway gateway = new BetfairRestGateway(
+            builder,
+            new ObjectMapper().findAndRegisterModules(),
+            clock,
+            new BetxEventLogger(sink, clock)
+        );
+        server.expect(requestTo("https://api.betfair.com/exchange/betting/json-rpc/v1"))
+            .andRespond(withSuccess("{\"jsonrpc\":\"2.0\",\"result\":[],\"id\":1}", APPLICATION_JSON));
+
+        gateway.listMarketBook(new BetfairSession("session-token", "app-key"), List.of("1.234"));
+
+        assertThat(sink.events())
+            .extracting(BetxEvent::event)
+            .containsExactly("betfair.api.request", "betfair.api.response");
+        assertThat(sink.events())
+            .allSatisfy(event -> assertThat(event.fields().toString())
+                .contains("SportsAPING/v1.0/listMarketBook")
+                .doesNotContain("session-token")
+                .doesNotContain("app-key"));
+        server.verify();
+    }
+
+    @Test
+    void reusesSuccessfulLoginSessionForSameCredentials() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        BetfairRestGateway gateway = new BetfairRestGateway(builder, new ObjectMapper().findAndRegisterModules());
+        BetfairCredentials credentials = new BetfairCredentials("user", "password", "app-key", BetfairCountry.SPAIN);
+        server.expect(requestTo("https://identitysso.betfair.es/api/login"))
+            .andRespond(withSuccess("{\"status\":\"SUCCESS\",\"token\":\"session-token\"}", APPLICATION_JSON));
+
+        BetfairSession first = gateway.login(credentials);
+        BetfairSession second = gateway.login(credentials);
+
+        assertThat(second).isSameAs(first);
+        server.verify();
+    }
+
+    @Test
+    void keepsCachedSessionAliveBeforeSpanishSessionExpires() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        MutableClock clock = new MutableClock(Instant.parse("2026-07-07T10:00:00Z"));
+        BetfairRestGateway gateway = new BetfairRestGateway(builder, new ObjectMapper().findAndRegisterModules(), clock);
+        BetfairCredentials credentials = new BetfairCredentials("user", "password", "app-key", BetfairCountry.SPAIN);
+        server.expect(requestTo("https://identitysso.betfair.es/api/login"))
+            .andRespond(withSuccess("{\"status\":\"SUCCESS\",\"token\":\"session-token\"}", APPLICATION_JSON));
+        server.expect(requestTo("https://identitysso.betfair.es/api/keepAlive"))
+            .andRespond(withSuccess("{\"status\":\"SUCCESS\",\"token\":\"session-token\",\"product\":\"app-key\"}", APPLICATION_JSON));
+
+        BetfairSession first = gateway.login(credentials);
+        clock.advance(Duration.ofMinutes(15));
+        BetfairSession second = gateway.login(credentials);
+
+        assertThat(second).isEqualTo(first);
+        server.verify();
+    }
+
+    @Test
+    void refreshesSessionAndRetriesOnceWhenJsonRpcReportsInvalidSessionToken() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        BetfairRestGateway gateway = new BetfairRestGateway(builder, new ObjectMapper().findAndRegisterModules());
+        BetfairCredentials credentials = new BetfairCredentials("user", "password", "app-key", BetfairCountry.SPAIN);
+        server.expect(requestTo("https://identitysso.betfair.es/api/login"))
+            .andRespond(withSuccess("{\"status\":\"SUCCESS\",\"token\":\"old-session-token\"}", APPLICATION_JSON));
+        server.expect(requestTo("https://api.betfair.com/exchange/betting/json-rpc/v1"))
+            .andRespond(withSuccess("""
+                {
+                  "jsonrpc": "2.0",
+                  "error": {
+                    "code": -32099,
+                    "message": "DSC-0018",
+                    "data": {
+                      "APINGException": {
+                        "errorCode": "INVALID_SESSION_TOKEN"
+                      }
+                    }
+                  },
+                  "id": 1
+                }
+                """, APPLICATION_JSON));
+        server.expect(requestTo("https://identitysso.betfair.es/api/login"))
+            .andRespond(withSuccess("{\"status\":\"SUCCESS\",\"token\":\"new-session-token\"}", APPLICATION_JSON));
+        server.expect(requestTo("https://api.betfair.com/exchange/betting/json-rpc/v1"))
+            .andRespond(withSuccess("{\"jsonrpc\":\"2.0\",\"result\":[],\"id\":1}", APPLICATION_JSON));
+
+        BetfairSession session = gateway.login(credentials);
+        List<BetfairMarketBook> books = gateway.listMarketBook(session, List.of("1.234"));
+
+        assertThat(books).isEmpty();
+        assertThat(gateway.login(credentials).token()).isEqualTo("new-session-token");
+        server.verify();
+    }
+
     @Test
     void logsInAgainstTheSelectedCountryEndpoint() {
         RestClient.Builder builder = RestClient.builder();
@@ -508,5 +657,45 @@ class BetfairRestGatewayTest {
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("Betfair request failed:");
         server.verify();
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant instant;
+
+        private MutableClock(Instant instant) {
+            this.instant = instant;
+        }
+
+        private void advance(Duration duration) {
+            instant = instant.plus(duration);
+        }
+
+        @Override
+        public ZoneOffset getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(java.time.ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return instant;
+        }
+    }
+
+    private static final class RecordingEventSink implements StructuredEventSink {
+        private final List<BetxEvent> events = new ArrayList<>();
+
+        @Override
+        public void emit(BetxEvent event) {
+            events.add(event);
+        }
+
+        private List<BetxEvent> events() {
+            return events;
+        }
     }
 }

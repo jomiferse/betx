@@ -1,6 +1,9 @@
 package com.betx.adapter.betfair;
 
 import com.betx.application.port.out.BetfairGateway;
+import com.betx.application.observability.BetxEventCategory;
+import com.betx.application.observability.BetxEventLogger;
+import com.betx.application.port.out.StructuredEventSink;
 import com.betx.domain.betfair.BetfairCredentials;
 import com.betx.domain.betfair.BetfairEvent;
 import com.betx.domain.betfair.BetfairMarketBook;
@@ -22,6 +25,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URI;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -38,26 +43,71 @@ import org.springframework.web.client.RestClientException;
 public class BetfairRestGateway implements BetfairGateway {
     private static final String GLOBAL_BETTING_URL = "https://api.betfair.com/exchange/betting/json-rpc/v1";
     private static final String GLOBAL_ACCOUNT_URL = "https://api.betfair.com/exchange/account/json-rpc/v1";
+    private static final Duration KEEP_ALIVE_INTERVAL = Duration.ofMinutes(15);
 
     private final RestClient loginClient;
     private final RestClient bettingClient;
     private final RestClient accountClient;
     private final ObjectMapper mapper;
+    private final Clock clock;
+    private final BetxEventLogger eventLogger;
+    private final Map<SessionCacheKey, CachedSession> sessions = new LinkedHashMap<>();
 
     @Autowired
+    public BetfairRestGateway(RestClient.Builder builder, BetxEventLogger eventLogger) {
+        this(builder, new ObjectMapper().findAndRegisterModules(), Clock.systemUTC(), eventLogger);
+    }
+
     public BetfairRestGateway(RestClient.Builder builder) {
         this(builder, new ObjectMapper().findAndRegisterModules());
     }
 
     BetfairRestGateway(RestClient.Builder builder, ObjectMapper mapper) {
+        this(builder, mapper, Clock.systemUTC());
+    }
+
+    BetfairRestGateway(RestClient.Builder builder, ObjectMapper mapper, Clock clock) {
+        this(builder, mapper, clock, new BetxEventLogger(StructuredEventSink.noop(), clock));
+    }
+
+    BetfairRestGateway(RestClient.Builder builder, ObjectMapper mapper, Clock clock, BetxEventLogger eventLogger) {
         this.loginClient = builder.build();
         this.bettingClient = builder.build();
         this.accountClient = builder.build();
         this.mapper = mapper;
+        this.clock = clock;
+        this.eventLogger = eventLogger == null ? new BetxEventLogger(StructuredEventSink.noop(), clock) : eventLogger;
     }
 
     @Override
-    public BetfairSession login(BetfairCredentials credentials) {
+    public synchronized BetfairSession login(BetfairCredentials credentials) {
+        SessionCacheKey key = SessionCacheKey.from(credentials);
+        CachedSession cached = sessions.get(key);
+        if (cached != null) {
+            if (!cached.keepAliveDue(clock.instant())) {
+                logSession("betfair.session.cache_hit", credentials, "cache_hit", null, 0);
+                return cached.session();
+            }
+            try {
+                Instant startedAt = clock.instant();
+                CachedSession refreshed = cached.withSession(keepAlive(credentials, cached.session()), clock.instant());
+                sessions.put(key, refreshed);
+                logSession("betfair.session.keep_alive", credentials, "success", "keep_alive", durationMs(startedAt));
+                return refreshed.session();
+            } catch (IllegalStateException exc) {
+                sessions.remove(key);
+                logSession("betfair.session.keep_alive", credentials, "failed", "keep_alive", 0);
+            }
+        }
+
+        Instant startedAt = clock.instant();
+        BetfairSession session = requestLogin(credentials);
+        sessions.put(key, new CachedSession(credentials, session, clock.instant()));
+        logSession("betfair.session.login", credentials, "success", "login", durationMs(startedAt));
+        return session;
+    }
+
+    private BetfairSession requestLogin(BetfairCredentials credentials) {
         try {
             String responseBody = loginClient.post()
                 .uri(URI.create(credentials.country().loginUrl()))
@@ -87,6 +137,38 @@ public class BetfairRestGateway implements BetfairGateway {
             throw new IllegalStateException("Betfair login failed: " + (error.isBlank() ? status : error));
         } catch (RestClientException | JsonProcessingException exc) {
             throw new IllegalStateException("Betfair login request failed.", exc);
+        }
+    }
+
+    private BetfairSession keepAlive(BetfairCredentials credentials, BetfairSession session) {
+        try {
+            String responseBody = loginClient.get()
+                .uri(URI.create(credentials.country().keepAliveUrl()))
+                .headers(headers -> {
+                    headers.set("Accept", "application/json");
+                    headers.set("X-Application", session.appKey());
+                    headers.set("X-Authentication", session.token());
+                })
+                .retrieve()
+                .body(String.class);
+
+            JsonNode payload = readJson(responseBody);
+            if (payload == null) {
+                throw new IllegalStateException("Betfair keep-alive returned no response.");
+            }
+
+            String status = text(payload, "status");
+            String token = firstNonBlank(payload, "token", "sessionToken");
+            String product = firstNonBlank(payload, "product", "appKey");
+
+            if ("SUCCESS".equals(status)) {
+                return new BetfairSession(token.isBlank() ? session.token() : token, product.isBlank() ? session.appKey() : product);
+            }
+
+            String error = text(payload, "error");
+            throw new IllegalStateException("Betfair keep-alive failed: " + (error.isBlank() ? status : error));
+        } catch (RestClientException | JsonProcessingException exc) {
+            throw new IllegalStateException("Betfair keep-alive request failed.", exc);
         }
     }
 
@@ -310,6 +392,13 @@ public class BetfairRestGateway implements BetfairGateway {
     }
 
     private JsonNode invokeJsonRpc(RestClient client, String url, BetfairSession session, String method, JsonNode params) {
+        return invokeJsonRpc(client, url, session, method, params, true);
+    }
+
+    private JsonNode invokeJsonRpc(RestClient client, String url, BetfairSession session, String method, JsonNode params, boolean retryOnInvalidSession) {
+        Instant startedAt = clock.instant();
+        String api = apiName(url);
+        logApiRequest(api, method, retryOnInvalidSession);
         try {
             ObjectNode request = mapper.createObjectNode();
             request.put("jsonrpc", "2.0");
@@ -330,15 +419,52 @@ public class BetfairRestGateway implements BetfairGateway {
 
             JsonNode payload = readJson(responseBody);
             if (payload == null) {
+                logApiResponse(api, method, "failed", retryOnInvalidSession, durationMs(startedAt), "empty_response");
                 throw new IllegalStateException("Betfair request returned no response.");
             }
             if (payload.hasNonNull("error")) {
+                if (retryOnInvalidSession && isInvalidSessionToken(payload.path("error"))) {
+                    logApiResponse(api, method, "invalid_session", true, durationMs(startedAt), "INVALID_SESSION_TOKEN");
+                    BetfairSession refreshed = refreshSession(session);
+                    return invokeJsonRpc(client, url, refreshed, method, params, false);
+                }
+                logApiResponse(api, method, "failed", retryOnInvalidSession, durationMs(startedAt), "api_error");
                 throw new IllegalStateException("Betfair request failed: " + payload.path("error").toString());
             }
+            logApiResponse(api, method, "success", retryOnInvalidSession, durationMs(startedAt), null);
             return payload.path("result");
         } catch (RestClientException | JsonProcessingException exc) {
+            logApiResponse(api, method, "failed", retryOnInvalidSession, durationMs(startedAt), exc.getClass().getSimpleName());
             throw new IllegalStateException("Betfair API request failed.", exc);
         }
+    }
+
+    private synchronized BetfairSession refreshSession(BetfairSession session) {
+        SessionCacheKey matchingKey = null;
+        CachedSession matchingSession = null;
+        for (Map.Entry<SessionCacheKey, CachedSession> entry : sessions.entrySet()) {
+            if (entry.getValue().session().token().equals(session.token())) {
+                matchingKey = entry.getKey();
+                matchingSession = entry.getValue();
+                break;
+            }
+        }
+        if (matchingKey == null) {
+            throw new IllegalStateException("Betfair request failed: INVALID_SESSION_TOKEN");
+        }
+
+        BetfairSession refreshed = requestLogin(matchingSession.credentials());
+        sessions.put(matchingKey, new CachedSession(matchingSession.credentials(), refreshed, clock.instant()));
+        logSession("betfair.session.login", matchingSession.credentials(), "success", "invalid_session_retry", 0);
+        return refreshed;
+    }
+
+    private boolean isInvalidSessionToken(JsonNode error) {
+        if (error == null || error.isMissingNode()) {
+            return false;
+        }
+        String raw = error.toString();
+        return raw.contains("INVALID_SESSION_TOKEN") || raw.contains("NO_SESSION");
     }
 
     private String writeJson(JsonNode node) throws JsonProcessingException {
@@ -483,6 +609,77 @@ public class BetfairRestGateway implements BetfairGateway {
             return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Exception exc) {
             throw new IllegalStateException("Could not encode Betfair credentials.", exc);
+        }
+    }
+
+    private void logSession(String event, BetfairCredentials credentials, String result, String endpoint, long durationMs) {
+        BetxEventLogger.EventBuilder builder = eventLogger.info(BetxEventCategory.OPERATIONAL, event)
+            .exchange("betfair")
+            .result(result)
+            .field("country", credentials.country().configValue())
+            .field("durationMs", durationMs);
+        if (endpoint != null) {
+            builder.field("endpoint", endpoint);
+        }
+        builder.emit();
+    }
+
+    private void logApiRequest(String api, String method, boolean firstAttempt) {
+        eventLogger.info(BetxEventCategory.OPERATIONAL, "betfair.api.request")
+            .exchange("betfair")
+            .result("started")
+            .field("api", api)
+            .field("method", method)
+            .field("attempt", firstAttempt ? "initial" : "retry")
+            .emit();
+    }
+
+    private void logApiResponse(String api, String method, String result, boolean firstAttempt, long durationMs, String error) {
+        BetxEventLogger.EventBuilder builder = eventLogger.info(BetxEventCategory.OPERATIONAL, "betfair.api.response")
+            .exchange("betfair")
+            .result(result)
+            .field("api", api)
+            .field("method", method)
+            .field("attempt", firstAttempt ? "initial" : "retry")
+            .field("durationMs", durationMs);
+        if (error != null && !error.isBlank()) {
+            builder.field("error", error);
+        }
+        builder.emit();
+    }
+
+    private String apiName(String url) {
+        if (GLOBAL_ACCOUNT_URL.equals(url)) {
+            return "account";
+        }
+        if (GLOBAL_BETTING_URL.equals(url)) {
+            return "betting";
+        }
+        return "unknown";
+    }
+
+    private long durationMs(Instant startedAt) {
+        return Math.max(0, clock.instant().toEpochMilli() - startedAt.toEpochMilli());
+    }
+
+    private record SessionCacheKey(String username, String password, String appKey, String country) {
+        private static SessionCacheKey from(BetfairCredentials credentials) {
+            return new SessionCacheKey(
+                credentials.username(),
+                credentials.password(),
+                credentials.appKey(),
+                credentials.country().configValue()
+            );
+        }
+    }
+
+    private record CachedSession(BetfairCredentials credentials, BetfairSession session, Instant lastKeepAliveAt) {
+        private boolean keepAliveDue(Instant now) {
+            return !lastKeepAliveAt.plus(KEEP_ALIVE_INTERVAL).isAfter(now);
+        }
+
+        private CachedSession withSession(BetfairSession session, Instant lastKeepAliveAt) {
+            return new CachedSession(credentials, session, lastKeepAliveAt);
         }
     }
 }
