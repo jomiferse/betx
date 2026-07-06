@@ -73,6 +73,18 @@ public final class DefaultConfigTemplates {
                 risk_profiles:
                   - CONSERVATIVE
                   - BALANCED
+              live:
+                enabled: false
+              dry_run_live_gate:
+                enabled: true
+                policy: RISK_ADJUSTED
+                risk_profile: CONSERVATIVE
+                min_settled_joined_required: 100
+                representative_scenario: SCENARIO_BASE_5_MIN_1
+                fallback_stake: 1.00
+                fixed_stake: 1.00
+                emit_logs: true
+                persist_decisions: false
 
             exchanges:
               - name: betfair

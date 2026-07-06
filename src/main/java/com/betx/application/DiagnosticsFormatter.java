@@ -279,6 +279,8 @@ public class DiagnosticsFormatter {
         lines.add("");
         addStakeSizingScenarioSimulation(lines, report.stakeSizingScenarioSimulation());
         lines.add("");
+        addStakeSizingLiveGateDiagnostics(lines, report.stakeSizingLiveGateDiagnostics());
+        lines.add("");
         lines.add("Paper vs real");
         lines.add(line("Settled matched pairs", report.paperVsRealMetrics().settledMatchedPairs()));
         lines.add(line("Average real vs paper odds difference", number(report.paperVsRealMetrics().averageRealVsPaperOddsDifference())));
@@ -859,6 +861,63 @@ public class DiagnosticsFormatter {
                 + " | should_apply_live "
                 + (candidate.shouldApplyLive() ? "yes" : "no")));
         }
+    }
+
+    private static void addStakeSizingLiveGateDiagnostics(
+        List<String> lines,
+        DiagnosticsStakeSizingLiveGateDiagnostics diagnostics
+    ) {
+        lines.add("Stake sizing live gate diagnostics");
+        lines.add(line("Enabled", diagnostics.enabled()));
+        lines.add(line("Status", diagnostics.gateStatus()));
+        lines.add(line("Candidate", diagnostics.candidatePolicy() + " / " + diagnostics.candidateRiskProfile()));
+        lines.add(line("Live enabled", diagnostics.liveEnabled()));
+        lines.add(line("Staking enabled", diagnostics.stakingEnabled()));
+        lines.add(line("Shadow enabled", diagnostics.shadowEnabled()));
+        lines.add(line(
+            "Sample",
+            diagnostics.sample().realSettledJoined() + " / " + diagnostics.sample().minSettledJoinedRequired() + " settled joined"
+        ));
+        lines.add(line("Representative final stake", money(diagnostics.representativeFinalStakeUsed()) + " EUR"));
+        lines.add(line("Representative stake source", diagnostics.representativeStakeSource()));
+        lines.add(line("Fallback stake", money(diagnostics.fallbackStake()) + " EUR"));
+        lines.add(line("Selected stake mode", diagnostics.selectedStakeMode()));
+        lines.add(line("Fallback applied", diagnostics.fallbackApplied()));
+        lines.add(line("Conceptually eligible for live", diagnostics.conceptuallyEligibleForLive()));
+        lines.add(line("Should apply live", diagnostics.shouldApplyLive()));
+        lines.add(line("Officially applied", diagnostics.officiallyApplied()));
+        lines.add(line("Dry-run enabled", diagnostics.dryRun().enabled()));
+        lines.add(line("Dry-run evaluations", diagnostics.dryRun().evaluationsTotal()));
+        lines.add(line("Dry-run failures", diagnostics.dryRun().failedTotal()));
+        lines.add(line("Last dry-run evaluated_at", diagnostics.dryRun().lastEvaluatedAt()));
+        lines.add(line("Last dry-run gate status", diagnostics.dryRun().lastGateStatus()));
+        lines.add(line("Last dry-run representative stake", money(diagnostics.dryRun().lastRepresentativeFinalStake())));
+        lines.add(line("Fixed stake", money(diagnostics.dryRun().fixedStake()) + " EUR"));
+        lines.add(line("Live applied events", diagnostics.dryRun().liveAppliedEvents()));
+        lines.add(line("Order stake changed events", diagnostics.dryRun().orderStakeChangedEvents()));
+        lines.add("");
+        lines.add("Reasons:");
+        if (diagnostics.reasons().isEmpty()) {
+            lines.add("- none");
+        } else {
+            diagnostics.reasons().forEach(reason -> lines.add("- " + reason));
+        }
+        lines.add("");
+        lines.add("Safety:");
+        lines.add(line("shadow failures", diagnostics.health().shadowFailedCount()));
+        lines.add(line("duplicate logical keys", diagnostics.health().duplicateLogicalKeysCount()));
+        lines.add(line("forbidden live events", diagnostics.health().forbiddenLiveEventsCount()));
+        lines.add(line("shadow diagnostics fresh", diagnostics.health().shadowDiagnosticsFresh()));
+        lines.add(line("current drawdown", money(diagnostics.risk().currentDrawdown())));
+        lines.add(line("max allowed drawdown", money(diagnostics.risk().maxAllowedDrawdown())));
+        lines.add(line("budget status", diagnostics.budget().status()));
+        lines.add(line("exposure status", diagnostics.exposure().status()));
+        lines.add(line("kill switch active", diagnostics.killSwitch().active()));
+        lines.add(line("stake mismatch active", diagnostics.stakeMismatchActive()));
+        lines.add("");
+        lines.add("Decision:");
+        lines.add("- Live staking remains disabled.");
+        lines.add("- Fixed stake remains " + money(diagnostics.fallbackStake()) + " EUR.");
     }
 
     private static void addPerformanceMap(

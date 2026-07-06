@@ -247,6 +247,100 @@ class DiagnosticsExporterTest {
             .contains("\"shouldApplyLive\" : false");
     }
 
+    @Test
+    void writesStakeSizingLiveGateDiagnosticsToJson() throws Exception {
+        DiagnosticsReport base = report();
+        DiagnosticsReport report = new DiagnosticsReport(
+            base.generatedAt(),
+            base.period(),
+            base.coverage(),
+            base.decisionFunnel(),
+            base.executionMetrics(),
+            base.paperVsRealMetrics(),
+            base.integrityFindings(),
+            base.limitations(),
+            base.topFindings(),
+            base.matchedPairs(),
+            base.matchingGaps(),
+            base.executionDataCoverage(),
+            base.logEventCoverage(),
+            base.persistedExecutionCoverage(),
+            base.placeOrdersResponseDuration(),
+            base.prospectiveRealBettingCohort(),
+            base.topSkippedMarkets(),
+            base.betRecommendations(),
+            base.paperRecommendationCoverage(),
+            base.recommendationReadiness(),
+            base.recommendationIdMatchingPreview(),
+            base.recommendationDivergenceAnalysis(),
+            base.strategyPerformance(),
+            base.candidateFilterSimulation(),
+            base.candidateFilterShadowValidation(),
+            base.stakeSizingShadowDiagnostics(),
+            base.stakeSizingScenarioSimulation(),
+            new DiagnosticsStakeSizingLiveGateDiagnostics(
+                true,
+                false,
+                false,
+                true,
+                "RISK_ADJUSTED",
+                "CONSERVATIVE",
+                "FAIL",
+                false,
+                false,
+                false,
+                false,
+                "FIXED_FALLBACK",
+                true,
+                new BigDecimal("1.00"),
+                new BigDecimal("3.75"),
+                "SCENARIO_BASE_5_MIN_1/RISK_ADJUSTED/CONSERVATIVE",
+                new DiagnosticsStakeSizingLiveGateSample(51, 100),
+                new DiagnosticsStakeSizingLiveGateHealth(0, 0, 0, true),
+                new DiagnosticsStakeSizingLiveGateRisk(BigDecimal.ZERO, new BigDecimal("25.00")),
+                new DiagnosticsStakeSizingLiveGateBudget(new BigDecimal("25.00"), new BigDecimal("50.00"), new BigDecimal("5.00"), true),
+                new DiagnosticsStakeSizingLiveGateExposure(10, true),
+                new DiagnosticsStakeSizingLiveGateKillSwitch(false, List.of()),
+                false,
+                List.of("LIVE_STAKING_DISABLED", "INSUFFICIENT_SAMPLE_FOR_LIVE_STAKING"),
+                List.of(),
+                new DiagnosticsStakeSizingLiveGateDryRun(
+                    true,
+                    2,
+                    1,
+                    null,
+                    null,
+                    List.of(),
+                    null,
+                    new BigDecimal("1.00"),
+                    new BigDecimal("1.00"),
+                    0,
+                    0
+                )
+            )
+        );
+        Path json = tempDir.resolve("diagnostics.json");
+
+        new DiagnosticsJsonExporter().export(report, json);
+
+        assertThat(Files.readString(json))
+            .contains("\"stakeSizingLiveGateDiagnostics\"")
+            .contains("\"gateStatus\" : \"FAIL\"")
+            .contains("\"candidatePolicy\" : \"RISK_ADJUSTED\"")
+            .contains("\"candidateRiskProfile\" : \"CONSERVATIVE\"")
+            .contains("\"reasons\"")
+            .contains("\"sample\"")
+            .contains("\"realSettledJoined\" : 51")
+            .contains("\"minSettledJoinedRequired\" : 100")
+            .contains("\"shouldApplyLive\" : false")
+            .contains("\"officiallyApplied\" : false")
+            .contains("\"dryRun\"")
+            .contains("\"evaluationsTotal\" : 2")
+            .contains("\"failedTotal\" : 1")
+            .contains("\"liveAppliedEvents\" : 0")
+            .contains("\"orderStakeChangedEvents\" : 0");
+    }
+
     private static DiagnosticsReport report() {
         DiagnosticsMatch match = new DiagnosticsMatch(
             MatchStatus.MATCHED,

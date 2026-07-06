@@ -178,9 +178,21 @@ staking:
       - RISK_ADJUSTED
       - TIERED_CONFIDENCE
       - FRACTIONAL_KELLY_SHADOW
+  live:
+    enabled: false
+  dry_run_live_gate:
+    enabled: true
+    policy: RISK_ADJUSTED
+    risk_profile: CONSERVATIVE
+    min_settled_joined_required: 100
+    representative_scenario: SCENARIO_BASE_5_MIN_1
+    fallback_stake: 1.00
+    fixed_stake: 1.00
+    emit_logs: true
+    persist_decisions: false
 ```
 
-Stake sizing is shadow-only while `staking.enabled: false`. BetX records what each staking policy would have recommended, but real orders still use the existing exchange auto-betting and Telegram confirmation stake flow.
+Stake sizing is shadow-only while `staking.enabled: false` and `staking.live.enabled: false`. BetX records what each staking policy would have recommended and can log dry-run live-gate evaluations, but real orders still use the existing exchange auto-betting and Telegram confirmation stake flow.
 
 Telegram credentials can be stored in `betx.yml` or supplied with environment variables:
 

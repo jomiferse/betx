@@ -162,6 +162,11 @@ public class BetxConfigValidator {
         if (staking.limits().maxOpenPositions() <= 0) {
             throw new ConfigException("staking.limits.max_open_positions must be greater than zero.");
         }
+        requirePositive(staking.dryRunLiveGate().fixedStake(), "staking.dry_run_live_gate.fixed_stake");
+        requirePositive(staking.dryRunLiveGate().fallbackStake(), "staking.dry_run_live_gate.fallback_stake");
+        if (staking.dryRunLiveGate().minSettledJoinedRequired() < 0) {
+            throw new ConfigException("staking.dry_run_live_gate.min_settled_joined_required must be zero or greater.");
+        }
     }
 
     private void requirePositive(BigDecimal value, String field) {

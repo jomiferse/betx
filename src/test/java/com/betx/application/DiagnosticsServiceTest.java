@@ -550,6 +550,92 @@ class DiagnosticsServiceTest {
     }
 
     @Test
+    void reportsStakeSizingLiveGateDiagnosticsWithoutApplyingLiveStaking() {
+        DiagnosticsDataset dataset = new DiagnosticsDataset(
+            List.of(
+                realWithRecommendation("real-win", "m1", 10, T0.plusSeconds(60), "5.50", "1.00", BetSettlementResult.WIN, "4.50", "rec-1", "1.00", "1.00"),
+                realWithRecommendation("real-loss", "m2", 11, T0.plusSeconds(120), "5.50", "1.00", BetSettlementResult.LOSE, "-1.00", "rec-2", "1.00", "1.00"),
+                realWithRecommendation("real-open", "m3", 12, T0.plusSeconds(180), "5.50", "1.00", null, null, "rec-3", "1.00", "1.00")
+            ),
+            List.of(),
+            20,
+            40,
+            Map.of(),
+            Map.of(),
+            DiagnosticsBetRecommendationsSummary.empty(),
+            DiagnosticsPaperRecommendationCoverage.empty(),
+            DiagnosticsRecommendationReadiness.empty(),
+            List.of(),
+            List.of(
+                shadowDecision("rec-1", StakeSizingMode.RISK_ADJUSTED, StakeSizingRiskProfile.CONSERVATIVE, SelectionSide.DRAW, "5.50", "3.75", "3.75", false, null, StakeSizingDecisionReason.RISK_ADJUSTED, "[]"),
+                shadowDecision("rec-2", StakeSizingMode.RISK_ADJUSTED, StakeSizingRiskProfile.CONSERVATIVE, SelectionSide.DRAW, "5.50", "3.75", "3.75", false, null, StakeSizingDecisionReason.RISK_ADJUSTED, "[]"),
+                shadowDecision("rec-3", StakeSizingMode.RISK_ADJUSTED, StakeSizingRiskProfile.CONSERVATIVE, SelectionSide.DRAW, "5.50", "3.75", "3.75", false, null, StakeSizingDecisionReason.RISK_ADJUSTED, "[]")
+            )
+        );
+
+        DiagnosticsLogSummary liveGateLogs = new DiagnosticsLogSummary(
+            Map.of(
+                "stake_sizing.live_gate_dry_run_evaluated", 2L,
+                "stake_sizing.live_gate_dry_run_failed", 1L
+            ),
+            Map.of(),
+            0,
+            0,
+            List.of()
+        );
+
+        DiagnosticsReport report = service(dataset, liveGateLogs).generate(request());
+
+        DiagnosticsStakeSizingLiveGateDiagnostics diagnostics = report.stakeSizingLiveGateDiagnostics();
+        assertThat(diagnostics.enabled()).isTrue();
+        assertThat(diagnostics.liveEnabled()).isFalse();
+        assertThat(diagnostics.stakingEnabled()).isFalse();
+        assertThat(diagnostics.shadowEnabled()).isTrue();
+        assertThat(diagnostics.candidatePolicy()).isEqualTo("RISK_ADJUSTED");
+        assertThat(diagnostics.candidateRiskProfile()).isEqualTo("CONSERVATIVE");
+        assertThat(diagnostics.gateStatus()).isEqualTo("FAIL");
+        assertThat(diagnostics.gatePassed()).isFalse();
+        assertThat(diagnostics.shouldApplyLive()).isFalse();
+        assertThat(diagnostics.officiallyApplied()).isFalse();
+        assertThat(diagnostics.fallbackApplied()).isTrue();
+        assertThat(diagnostics.fallbackStake()).isEqualByComparingTo("1.00");
+        assertThat(diagnostics.sample().realSettledJoined()).isEqualTo(2);
+        assertThat(diagnostics.sample().minSettledJoinedRequired()).isEqualTo(100);
+        assertThat(diagnostics.representativeFinalStakeUsed()).isEqualByComparingTo("1.00");
+        assertThat(diagnostics.representativeStakeSource())
+            .isEqualTo("SCENARIO_BASE_5_MIN_1/RISK_ADJUSTED/CONSERVATIVE");
+        assertThat(diagnostics.reasons())
+            .contains(
+                "STAKING_DISABLED",
+                "LIVE_STAKING_DISABLED",
+                "INSUFFICIENT_SAMPLE_FOR_LIVE_STAKING",
+                "MANUAL_CONFIRMATION_REQUIRED"
+            )
+            .doesNotContain(
+                "KELLY_NOT_ALLOWED_LIVE",
+                "TIERED_CONFIDENCE_NOT_ALLOWED_LIVE",
+                "AGGRESSIVE_PROFILE_NOT_ALLOWED_LIVE"
+            );
+        assertThat(diagnostics.dryRun().enabled()).isTrue();
+        assertThat(diagnostics.dryRun().evaluationsTotal()).isEqualTo(2);
+        assertThat(diagnostics.dryRun().failedTotal()).isEqualTo(1);
+        assertThat(diagnostics.dryRun().liveAppliedEvents()).isZero();
+        assertThat(diagnostics.dryRun().orderStakeChangedEvents()).isZero();
+
+        assertThat(new DiagnosticsFormatter().format(report))
+            .contains("Stake sizing live gate diagnostics")
+            .contains("Decision:")
+            .anySatisfy(line -> assertThat(line).contains("Dry-run enabled").contains("true"))
+            .anySatisfy(line -> assertThat(line).contains("Dry-run evaluations").contains("2"))
+            .anySatisfy(line -> assertThat(line).contains("Dry-run failures").contains("1"))
+            .anySatisfy(line -> assertThat(line).contains("Live enabled").contains("false"))
+            .anySatisfy(line -> assertThat(line).contains("Sample").contains("2 / 100"))
+            .anySatisfy(line -> assertThat(line).contains("Should apply live").contains("false"))
+            .anySatisfy(line -> assertThat(line).contains("Officially applied").contains("false"))
+            .anySatisfy(line -> assertThat(line).contains("Fixed stake remains 1.00"));
+    }
+
+    @Test
     void marksScenarioResultLiveEligibleConceptuallyWithoutApplyingLiveStaking() {
         List<RealBetDiagnosticRow> realBets = IntStream.range(0, 50)
             .mapToObj(index -> realWithRecommendation(

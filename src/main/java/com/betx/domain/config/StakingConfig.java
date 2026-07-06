@@ -16,7 +16,9 @@ public record StakingConfig(
     BigDecimal bankroll,
     @JsonProperty("risk_profile") StakeSizingRiskProfile riskProfile,
     StakingLimitsConfig limits,
-    StakingShadowConfig shadow
+    StakingShadowConfig shadow,
+    StakingLiveConfig live,
+    @JsonProperty("dry_run_live_gate") StakingDryRunLiveGateConfig dryRunLiveGate
 ) {
     public StakingConfig {
         enabled = enabled != null && enabled;
@@ -29,9 +31,26 @@ public record StakingConfig(
         riskProfile = riskProfile == null ? StakeSizingRiskProfile.CONSERVATIVE : riskProfile;
         limits = limits == null ? StakingLimitsConfig.defaults() : limits;
         shadow = shadow == null ? StakingShadowConfig.defaults() : shadow;
+        live = live == null ? StakingLiveConfig.defaults() : live;
+        dryRunLiveGate = dryRunLiveGate == null ? StakingDryRunLiveGateConfig.defaults() : dryRunLiveGate;
+    }
+
+    public StakingConfig(
+        Boolean enabled,
+        Boolean shadowEnabled,
+        StakeSizingMode mode,
+        BigDecimal baseStake,
+        BigDecimal minStake,
+        BigDecimal maxStake,
+        BigDecimal bankroll,
+        StakeSizingRiskProfile riskProfile,
+        StakingLimitsConfig limits,
+        StakingShadowConfig shadow
+    ) {
+        this(enabled, shadowEnabled, mode, baseStake, minStake, maxStake, bankroll, riskProfile, limits, shadow, null, null);
     }
 
     public static StakingConfig defaults() {
-        return new StakingConfig(false, true, null, null, null, null, null, null, null, null);
+        return new StakingConfig(false, true, null, null, null, null, null, null, null, null, null, null);
     }
 }

@@ -21,6 +21,18 @@ import com.betx.domain.staking.StakeSizingEngine;
 import com.betx.domain.staking.StakeSizingMode;
 import com.betx.domain.staking.StakeSizingRiskProfile;
 import com.betx.domain.staking.StakeSizingSource;
+import com.betx.domain.staking.livegate.StakeSizingLiveGateBudget;
+import com.betx.domain.staking.livegate.StakeSizingLiveGateConfig;
+import com.betx.domain.staking.livegate.StakeSizingLiveGateContext;
+import com.betx.domain.staking.livegate.StakeSizingLiveGateDecision;
+import com.betx.domain.staking.livegate.StakeSizingLiveGateEvaluator;
+import com.betx.domain.staking.livegate.StakeSizingLiveGateExposure;
+import com.betx.domain.staking.livegate.StakeSizingLiveGateHealth;
+import com.betx.domain.staking.livegate.StakeSizingLiveGateKillSwitchState;
+import com.betx.domain.staking.livegate.StakeSizingLiveGatePolicy;
+import com.betx.domain.staking.livegate.StakeSizingLiveGateReason;
+import com.betx.domain.staking.livegate.StakeSizingLiveGateSample;
+import com.betx.domain.staking.livegate.StakeSizingLiveGateStake;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
@@ -29,6 +41,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -46,6 +59,20 @@ import org.springframework.stereotype.Service;
 public class DiagnosticsService implements GenerateDiagnosticsUseCase {
     private static final int SCALE = 8;
     private static final Duration DIVERGENCE_LOG_WINDOW = Duration.ofMinutes(2);
+    private static final String LIVE_GATE_CANDIDATE_SCENARIO = "SCENARIO_BASE_5_MIN_1";
+    private static final StakeSizingMode LIVE_GATE_CANDIDATE_POLICY = StakeSizingMode.RISK_ADJUSTED;
+    private static final StakeSizingRiskProfile LIVE_GATE_CANDIDATE_RISK_PROFILE = StakeSizingRiskProfile.CONSERVATIVE;
+    private static final int LIVE_GATE_MIN_SETTLED_JOINED = 100;
+    private static final BigDecimal LIVE_GATE_FALLBACK_STAKE = new BigDecimal("1.00");
+    private static final BigDecimal LIVE_GATE_MIN_STAKE = new BigDecimal("1.00");
+    private static final BigDecimal LIVE_GATE_MAX_STAKE = new BigDecimal("5.00");
+    private static final BigDecimal LIVE_GATE_BANKROLL = new BigDecimal("500.00");
+    private static final BigDecimal LIVE_GATE_MAX_ALLOWED_DRAWDOWN = new BigDecimal("25.00");
+    private static final BigDecimal LIVE_GATE_DAILY_LOSS_BUDGET = new BigDecimal("25.00");
+    private static final BigDecimal LIVE_GATE_TOTAL_EXPOSURE = new BigDecimal("50.00");
+    private static final BigDecimal LIVE_GATE_MARKET_EXPOSURE = new BigDecimal("5.00");
+    private static final BigDecimal LIVE_GATE_MAX_SINGLE_STAKE_PCT_BANKROLL = new BigDecimal("0.01");
+    private static final int LIVE_GATE_OPEN_POSITIONS_REMAINING = 10;
 
     private final BetxConfigRepository configRepository;
     private final DiagnosticsRepository diagnosticsRepository;
@@ -109,6 +136,11 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             Instant.now(clock)
         );
         DiagnosticsStakeSizingScenarioSimulation stakeSizingScenarioSimulation = stakeSizingScenarioSimulation(dataset);
+        DiagnosticsStakeSizingLiveGateDiagnostics stakeSizingLiveGateDiagnostics = stakeSizingLiveGateDiagnostics(
+            stakeSizingShadowDiagnostics,
+            stakeSizingScenarioSimulation,
+            logs
+        );
         List<DiagnosticFinding> findings = integrityFindings(dataset, matches);
         List<String> limitations = limitations(logs, persistedExecutionCoverage, logEventCoverage);
         List<String> topFindings = topFindings(
@@ -147,7 +179,8 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             candidateFilterSimulation,
             candidateFilterShadowValidation,
             stakeSizingShadowDiagnostics,
-            stakeSizingScenarioSimulation
+            stakeSizingScenarioSimulation,
+            stakeSizingLiveGateDiagnostics
         );
     }
 
@@ -1539,6 +1572,146 @@ public class DiagnosticsService implements GenerateDiagnosticsUseCase {
             stakeSizingScenarioExclusions(scenarios),
             stakeSizingScenarioWatchCandidates(scenarios)
         );
+    }
+
+    private DiagnosticsStakeSizingLiveGateDiagnostics stakeSizingLiveGateDiagnostics(
+        DiagnosticsStakeSizingShadowDiagnostics shadowDiagnostics,
+        DiagnosticsStakeSizingScenarioSimulation scenarioSimulation,
+        DiagnosticsLogSummary logs
+    ) {
+        DiagnosticsStakeSizingScenarioPolicyResult candidate = liveGateCandidate(scenarioSimulation);
+        long realSettledJoined = candidate == null ? 0 : candidate.realSettledJoined();
+        BigDecimal representativeFinalStake = representativeFinalStake(candidate);
+        BigDecimal currentDrawdown = candidate == null ? BigDecimal.ZERO : valueOrZero(candidate.simulatedCurrentDrawdown());
+        boolean wouldBlock = candidate != null && candidate.wouldBlockCount() > 0;
+
+        StakeSizingLiveGateConfig config = new StakeSizingLiveGateConfig(
+            false,
+            false,
+            true,
+            EnumSet.of(LIVE_GATE_CANDIDATE_POLICY),
+            EnumSet.of(LIVE_GATE_CANDIDATE_RISK_PROFILE),
+            EnumSet.of(StakeSizingMode.FRACTIONAL_KELLY_SHADOW, StakeSizingMode.TIERED_CONFIDENCE),
+            EnumSet.of(StakeSizingRiskProfile.AGGRESSIVE),
+            LIVE_GATE_MIN_SETTLED_JOINED,
+            LIVE_GATE_MAX_ALLOWED_DRAWDOWN,
+            LIVE_GATE_MAX_SINGLE_STAKE_PCT_BANKROLL,
+            true,
+            false,
+            LIVE_GATE_FALLBACK_STAKE
+        );
+        StakeSizingLiveGateHealth health = new StakeSizingLiveGateHealth(
+            shadowDiagnostics.summary().shadowFailures(),
+            shadowDiagnostics.summary().duplicateLogicalKeys(),
+            shadowDiagnostics.summary().forbiddenLiveStakeEvents(),
+            true
+        );
+        StakeSizingLiveGateBudget budget = new StakeSizingLiveGateBudget(
+            currentDrawdown,
+            LIVE_GATE_DAILY_LOSS_BUDGET,
+            LIVE_GATE_TOTAL_EXPOSURE,
+            LIVE_GATE_MARKET_EXPOSURE,
+            true
+        );
+        StakeSizingLiveGateExposure exposure = new StakeSizingLiveGateExposure(LIVE_GATE_OPEN_POSITIONS_REMAINING, true);
+        StakeSizingLiveGateDecision decision = new StakeSizingLiveGateEvaluator().evaluate(new StakeSizingLiveGateContext(
+            config,
+            new StakeSizingLiveGatePolicy(LIVE_GATE_CANDIDATE_POLICY, LIVE_GATE_CANDIDATE_RISK_PROFILE),
+            new StakeSizingLiveGateSample(Math.toIntExact(Math.min(realSettledJoined, Integer.MAX_VALUE))),
+            health,
+            budget,
+            exposure,
+            new StakeSizingLiveGateKillSwitchState(false, false),
+            new StakeSizingLiveGateStake(
+                representativeFinalStake,
+                LIVE_GATE_MIN_STAKE,
+                LIVE_GATE_MAX_STAKE,
+                LIVE_GATE_BANKROLL,
+                wouldBlock
+            )
+        ));
+        return new DiagnosticsStakeSizingLiveGateDiagnostics(
+            true,
+            config.liveEnabled(),
+            config.stakingEnabled(),
+            config.shadowEnabled(),
+            LIVE_GATE_CANDIDATE_POLICY.name(),
+            LIVE_GATE_CANDIDATE_RISK_PROFILE.name(),
+            decision.status().name(),
+            decision.gatePassed(),
+            decision.conceptuallyEligibleForLive(),
+            decision.shouldApplyLive(),
+            decision.officiallyApplied(),
+            decision.selectedStakeMode().name(),
+            decision.fallbackApplied(),
+            decision.fallbackStake(),
+            representativeFinalStake,
+            liveGateCandidateSource(),
+            new DiagnosticsStakeSizingLiveGateSample(realSettledJoined, config.minSettledJoinedRequired()),
+            new DiagnosticsStakeSizingLiveGateHealth(
+                health.shadowFailedCount(),
+                health.duplicateLogicalKeysCount(),
+                health.forbiddenLiveEventsCount(),
+                health.shadowDiagnosticsFresh()
+            ),
+            new DiagnosticsStakeSizingLiveGateRisk(currentDrawdown, config.maxAllowedDrawdown()),
+            new DiagnosticsStakeSizingLiveGateBudget(
+                budget.dailyLossBudgetRemaining(),
+                budget.totalExposureRemaining(),
+                budget.marketExposureRemaining(),
+                budget.budgetSnapshotAvailable()
+            ),
+            new DiagnosticsStakeSizingLiveGateExposure(
+                exposure.openPositionsRemaining(),
+                exposure.exposureSnapshotAvailable()
+            ),
+            new DiagnosticsStakeSizingLiveGateKillSwitch(false, List.of()),
+            false,
+            decision.reasons().stream().map(StakeSizingLiveGateReason::name).toList(),
+            decision.warnings(),
+            stakeSizingLiveGateDryRun(logs)
+        );
+    }
+
+    private DiagnosticsStakeSizingLiveGateDryRun stakeSizingLiveGateDryRun(DiagnosticsLogSummary logs) {
+        return new DiagnosticsStakeSizingLiveGateDryRun(
+            true,
+            logCount(logs, "stake_sizing.live_gate_dry_run_evaluated"),
+            logCount(logs, "stake_sizing.live_gate_dry_run_failed"),
+            null,
+            null,
+            List.of(),
+            null,
+            LIVE_GATE_FALLBACK_STAKE,
+            LIVE_GATE_FALLBACK_STAKE,
+            logCount(logs, "stake_sizing.live_applied"),
+            logCount(logs, "stake_sizing.order_stake_changed")
+        );
+    }
+
+    private DiagnosticsStakeSizingScenarioPolicyResult liveGateCandidate(DiagnosticsStakeSizingScenarioSimulation simulation) {
+        return simulation.scenarios().stream()
+            .filter(scenario -> scenario.scenarioName().equals(LIVE_GATE_CANDIDATE_SCENARIO))
+            .flatMap(scenario -> scenario.policyResults().stream())
+            .filter(result -> result.policyName().equals(LIVE_GATE_CANDIDATE_POLICY.name()))
+            .filter(result -> result.riskProfile().equals(LIVE_GATE_CANDIDATE_RISK_PROFILE.name()))
+            .findFirst()
+            .orElse(null);
+    }
+
+    private BigDecimal representativeFinalStake(DiagnosticsStakeSizingScenarioPolicyResult candidate) {
+        BigDecimal candidateStake = candidate == null ? LIVE_GATE_FALLBACK_STAKE : valueOrZero(candidate.maxFinalStake());
+        if (candidateStake.compareTo(BigDecimal.ZERO) <= 0) {
+            candidateStake = LIVE_GATE_FALLBACK_STAKE;
+        }
+        if (candidateStake.compareTo(LIVE_GATE_MAX_STAKE) > 0) {
+            return LIVE_GATE_MAX_STAKE;
+        }
+        return candidateStake;
+    }
+
+    private String liveGateCandidateSource() {
+        return LIVE_GATE_CANDIDATE_SCENARIO + "/" + LIVE_GATE_CANDIDATE_POLICY.name() + "/" + LIVE_GATE_CANDIDATE_RISK_PROFILE.name();
     }
 
     private DiagnosticsStakeSizingScenario stakeSizingScenario(

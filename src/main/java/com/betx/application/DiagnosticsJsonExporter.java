@@ -43,6 +43,7 @@ public class DiagnosticsJsonExporter {
         payload.put("candidateFilterShadowValidation", candidateFilterShadowValidation(report.candidateFilterShadowValidation()));
         payload.put("stakeSizingShadowDiagnostics", stakeSizingShadowDiagnostics(report.stakeSizingShadowDiagnostics()));
         payload.put("stakeSizingScenarioSimulation", stakeSizingScenarioSimulation(report.stakeSizingScenarioSimulation()));
+        payload.put("stakeSizingLiveGateDiagnostics", stakeSizingLiveGateDiagnostics(report.stakeSizingLiveGateDiagnostics()));
         payload.put("paperRecommendationCoverage", report.paperRecommendationCoverage());
         payload.put("decisionFunnel", report.decisionFunnel());
         payload.put("executionMetrics", execution(report.executionMetrics()));
@@ -306,6 +307,77 @@ public class DiagnosticsJsonExporter {
         value.put("minStake", scenario.minStake());
         value.put("maxStake", scenario.maxStake());
         value.put("policyResults", scenario.policyResults());
+        return value;
+    }
+
+    private Map<String, Object> stakeSizingLiveGateDiagnostics(DiagnosticsStakeSizingLiveGateDiagnostics diagnostics) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("enabled", diagnostics.enabled());
+        value.put("liveEnabled", diagnostics.liveEnabled());
+        value.put("stakingEnabled", diagnostics.stakingEnabled());
+        value.put("shadowEnabled", diagnostics.shadowEnabled());
+        value.put("candidatePolicy", diagnostics.candidatePolicy());
+        value.put("candidateRiskProfile", diagnostics.candidateRiskProfile());
+        value.put("gateStatus", diagnostics.gateStatus());
+        value.put("gatePassed", diagnostics.gatePassed());
+        value.put("conceptuallyEligibleForLive", diagnostics.conceptuallyEligibleForLive());
+        value.put("shouldApplyLive", diagnostics.shouldApplyLive());
+        value.put("officiallyApplied", diagnostics.officiallyApplied());
+        value.put("selectedStakeMode", diagnostics.selectedStakeMode());
+        value.put("fallbackApplied", diagnostics.fallbackApplied());
+        value.put("fallbackStake", diagnostics.fallbackStake());
+        value.put("representativeFinalStakeUsed", diagnostics.representativeFinalStakeUsed());
+        value.put("representativeStakeSource", diagnostics.representativeStakeSource());
+        Map<String, Object> sample = new LinkedHashMap<>();
+        sample.put("realSettledJoined", diagnostics.sample().realSettledJoined());
+        sample.put("minSettledJoinedRequired", diagnostics.sample().minSettledJoinedRequired());
+        value.put("sample", sample);
+        Map<String, Object> health = new LinkedHashMap<>();
+        health.put("shadowFailedCount", diagnostics.health().shadowFailedCount());
+        health.put("duplicateLogicalKeysCount", diagnostics.health().duplicateLogicalKeysCount());
+        health.put("forbiddenLiveEventsCount", diagnostics.health().forbiddenLiveEventsCount());
+        health.put("shadowDiagnosticsFresh", diagnostics.health().shadowDiagnosticsFresh());
+        value.put("health", health);
+        Map<String, Object> risk = new LinkedHashMap<>();
+        risk.put("currentDrawdown", diagnostics.risk().currentDrawdown());
+        risk.put("maxAllowedDrawdown", diagnostics.risk().maxAllowedDrawdown());
+        value.put("risk", risk);
+        Map<String, Object> budget = new LinkedHashMap<>();
+        budget.put("dailyLossBudgetRemaining", diagnostics.budget().dailyLossBudgetRemaining());
+        budget.put("totalExposureRemaining", diagnostics.budget().totalExposureRemaining());
+        budget.put("marketExposureRemaining", diagnostics.budget().marketExposureRemaining());
+        budget.put("budgetSnapshotAvailable", diagnostics.budget().budgetSnapshotAvailable());
+        budget.put("status", diagnostics.budget().status());
+        value.put("budget", budget);
+        Map<String, Object> exposure = new LinkedHashMap<>();
+        exposure.put("openPositionsRemaining", diagnostics.exposure().openPositionsRemaining());
+        exposure.put("exposureSnapshotAvailable", diagnostics.exposure().exposureSnapshotAvailable());
+        exposure.put("status", diagnostics.exposure().status());
+        value.put("exposure", exposure);
+        Map<String, Object> killSwitch = new LinkedHashMap<>();
+        killSwitch.put("active", diagnostics.killSwitch().active());
+        killSwitch.put("reasons", diagnostics.killSwitch().reasons());
+        value.put("killSwitch", killSwitch);
+        value.put("stakeMismatchActive", diagnostics.stakeMismatchActive());
+        value.put("reasons", diagnostics.reasons());
+        value.put("warnings", diagnostics.warnings());
+        value.put("dryRun", stakeSizingLiveGateDryRun(diagnostics.dryRun()));
+        return value;
+    }
+
+    private Map<String, Object> stakeSizingLiveGateDryRun(DiagnosticsStakeSizingLiveGateDryRun dryRun) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("enabled", dryRun.enabled());
+        value.put("evaluationsTotal", dryRun.evaluationsTotal());
+        value.put("failedTotal", dryRun.failedTotal());
+        value.put("lastEvaluatedAt", instant(dryRun.lastEvaluatedAt()));
+        value.put("lastGateStatus", dryRun.lastGateStatus());
+        value.put("lastReasons", dryRun.lastReasons());
+        value.put("lastRepresentativeFinalStake", dryRun.lastRepresentativeFinalStake());
+        value.put("fixedStake", dryRun.fixedStake());
+        value.put("fallbackStake", dryRun.fallbackStake());
+        value.put("liveAppliedEvents", dryRun.liveAppliedEvents());
+        value.put("orderStakeChangedEvents", dryRun.orderStakeChangedEvents());
         return value;
     }
 

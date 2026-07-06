@@ -61,6 +61,7 @@ public class RunDryRunSignalsService {
     private final CandidateFilterEvaluationRepository candidateFilterEvaluationRepository;
     private final CandidateFilterEvaluator candidateFilterEvaluator;
     private final StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService;
+    private final StakeSizingLiveGateDryRunService stakeSizingLiveGateDryRunService;
     private final BetxEventLogger eventLogger;
     private final Clock clock;
     private final EventMarketAnalyzer analyzer;
@@ -82,6 +83,7 @@ public class RunDryRunSignalsService {
         BetRecommendationRepository betRecommendationRepository,
         CandidateFilterEvaluationRepository candidateFilterEvaluationRepository,
         StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService,
+        StakeSizingLiveGateDryRunService stakeSizingLiveGateDryRunService,
         BetxEventLogger eventLogger
     ) {
         this(
@@ -96,6 +98,7 @@ public class RunDryRunSignalsService {
             betRecommendationRepository,
             candidateFilterEvaluationRepository,
             stakeSizingShadowEvaluationService,
+            stakeSizingLiveGateDryRunService,
             Clock.systemUTC(),
             eventLogger
         );
@@ -251,6 +254,40 @@ public class RunDryRunSignalsService {
         Clock clock,
         BetxEventLogger eventLogger
     ) {
+        this(
+            configRepository,
+            marketDataGateways,
+            telegramService,
+            executionGateway,
+            snapshotRepository,
+            changeDetector,
+            intelligenceGateway,
+            signalHistoryRepository,
+            betRecommendationRepository,
+            candidateFilterEvaluationRepository,
+            stakeSizingShadowEvaluationService,
+            null,
+            clock,
+            eventLogger
+        );
+    }
+
+    RunDryRunSignalsService(
+        BetxConfigRepository configRepository,
+        List<ExchangeMarketDataGateway> marketDataGateways,
+        TelegramConnectionService telegramService,
+        BetExecutionGateway executionGateway,
+        MarketSnapshotRepository snapshotRepository,
+        MarketSnapshotChangeDetector changeDetector,
+        ExternalMatchIntelligenceGateway intelligenceGateway,
+        SignalHistoryRepository signalHistoryRepository,
+        BetRecommendationRepository betRecommendationRepository,
+        CandidateFilterEvaluationRepository candidateFilterEvaluationRepository,
+        StakeSizingShadowEvaluationService stakeSizingShadowEvaluationService,
+        StakeSizingLiveGateDryRunService stakeSizingLiveGateDryRunService,
+        Clock clock,
+        BetxEventLogger eventLogger
+    ) {
         this.configRepository = configRepository;
         this.marketDataGateways = marketDataGateways.stream()
             .collect(Collectors.toMap(ExchangeMarketDataGateway::exchangeName, Function.identity(), (left, right) -> left));
@@ -272,6 +309,9 @@ public class RunDryRunSignalsService {
         this.stakeSizingShadowEvaluationService = stakeSizingShadowEvaluationService == null
             ? new StakeSizingShadowEvaluationService(null, new BetxEventLogger(StructuredEventSink.noop(), clock), clock)
             : stakeSizingShadowEvaluationService;
+        this.stakeSizingLiveGateDryRunService = stakeSizingLiveGateDryRunService == null
+            ? new StakeSizingLiveGateDryRunService(this.eventLogger, this.clock)
+            : stakeSizingLiveGateDryRunService;
         this.analyzer = new EventMarketAnalyzer();
         this.telegramBetAlertFormatter = new TelegramBetAlertFormatter();
         this.telegramBetAlertPolicy = new TelegramBetAlertPolicy();
@@ -635,7 +675,17 @@ public class RunDryRunSignalsService {
             );
             logRecommendation(cycleId, result);
             shadowEvaluateCandidateFilters(config, cycleId, result.recommendation(), CandidateFilterSource.RECOMMENDATION);
-            stakeSizingShadowEvaluationService.evaluate(config, cycleId, result.recommendation());
+            List<StakeSizingShadowDecision> stakeSizingDecisions = stakeSizingShadowEvaluationService.evaluateAndReturnDecisions(
+                config,
+                cycleId,
+                result.recommendation()
+            );
+            stakeSizingLiveGateDryRunService.evaluate(
+                config,
+                cycleId,
+                result.recommendation(),
+                liveGateCandidateDecision(stakeSizingDecisions)
+            );
         } catch (RuntimeException exc) {
             eventLogger.warn(BetxEventCategory.ERROR, "bet_recommendation.persist_failed")
                 .correlationId(signalCorrelationId(observedAt, analysis.exchange(), analysis.marketId(), analysis.selectionId()))
@@ -650,6 +700,14 @@ public class RunDryRunSignalsService {
                 .field("message", safeMessage(exc))
                 .emit();
         }
+    }
+
+    private StakeSizingShadowDecision liveGateCandidateDecision(List<StakeSizingShadowDecision> decisions) {
+        return decisions.stream()
+            .filter(decision -> decision.policyName() == com.betx.domain.staking.StakeSizingMode.RISK_ADJUSTED)
+            .filter(decision -> decision.riskProfile() == com.betx.domain.staking.StakeSizingRiskProfile.CONSERVATIVE)
+            .findFirst()
+            .orElse(null);
     }
 
     private BetRecommendation toShadowRecommendation(Instant observedAt, RunnerAnalysis analysis) {

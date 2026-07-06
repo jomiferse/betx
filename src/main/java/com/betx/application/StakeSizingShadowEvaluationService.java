@@ -49,20 +49,26 @@ public class StakeSizingShadowEvaluationService {
     }
 
     public void evaluate(BetxConfig config, String cycleId, BetRecommendation recommendation) {
+        evaluateAndReturnDecisions(config, cycleId, recommendation);
+    }
+
+    public List<StakeSizingShadowDecision> evaluateAndReturnDecisions(BetxConfig config, String cycleId, BetRecommendation recommendation) {
         if (recommendation == null) {
-            return;
+            return List.of();
         }
         BetxConfig effectiveConfig = config == null ? BetxConfig.defaults() : config;
         StakingConfig staking = effectiveConfig.staking();
         if (!staking.shadowEnabled() || !staking.shadow().enabled()) {
-            return;
+            return List.of();
         }
+        List<StakeSizingShadowDecision> decisions = new java.util.ArrayList<>();
         try {
             for (StakeSizingMode policy : staking.shadow().policies()) {
                 for (StakeSizingRiskProfile riskProfile : staking.shadow().riskProfiles()) {
                     StakeSizingContext context = context(effectiveConfig, recommendation, riskProfile);
                     StakeSizingDecision decision = engine.evaluate(policy, context);
                     StakeSizingShadowDecision shadowDecision = toShadowDecision(decision, recommendation, context);
+                    decisions.add(shadowDecision);
                     StakeSizingShadowDecisionUpsertResult result = repository.upsert(
                         effectiveConfig.storage().path(),
                         shadowDecision
@@ -86,6 +92,7 @@ public class StakeSizingShadowEvaluationService {
                 .field("message", safeMessage(exc))
                 .emit();
         }
+        return decisions;
     }
 
     private StakeSizingContext context(

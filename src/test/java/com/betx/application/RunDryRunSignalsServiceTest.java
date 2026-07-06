@@ -838,12 +838,13 @@ class RunDryRunSignalsServiceTest {
         RecordingSnapshotRepository snapshotRepository = repositoryWithPrevious("betfair", "1.1");
         RecordingBetRecommendationRepository recommendations = new RecordingBetRecommendationRepository();
         RecordingEventSink sink = new RecordingEventSink();
+        RecordingBetExecutionGateway executionGateway = new RecordingBetExecutionGateway();
         BetxConfig config = BetxConfig.defaults().withExchanges(List.of(exchange("betfair", true)));
         RunDryRunSignalsService service = new RunDryRunSignalsService(
             new StaticConfigRepository(config),
             List.of(gateway("betfair", List.of(snapshot("betfair", "1.1")), null)),
             new NoopTelegramConnectionService(),
-            new RecordingBetExecutionGateway(),
+            executionGateway,
             snapshotRepository,
             new MarketSnapshotChangeDetector(),
             new NoopExternalMatchIntelligenceGateway(),
@@ -885,6 +886,22 @@ class RunDryRunSignalsServiceTest {
                 assertThat(event.fields()).containsEntry("status", "ACTIVE");
                 assertThat(event.fields()).containsEntry("observedCount", 1L);
             });
+        assertThat(sink.events())
+            .filteredOn(event -> event.event().equals("stake_sizing.live_gate_dry_run_evaluated"))
+            .singleElement()
+            .satisfies(event -> {
+                assertThat(event.fields()).containsEntry("recommendationId", recommendations.upserted().getFirst().id());
+                assertThat(event.fields()).containsEntry("candidatePolicy", "RISK_ADJUSTED");
+                assertThat(event.fields()).containsEntry("candidateRiskProfile", "CONSERVATIVE");
+                assertThat((BigDecimal) event.fields().get("fixedStake")).isEqualByComparingTo("1.00");
+                assertThat(event.fields()).containsEntry("dryRun", true);
+                assertThat(event.fields()).containsEntry("liveEnabled", false);
+                assertThat(event.fields()).containsEntry("shouldApplyLive", false);
+                assertThat(event.fields()).containsEntry("officiallyApplied", false);
+            });
+        assertThat(executionGateway.orders()).isEmpty();
+        assertThat(sink.events()).noneSatisfy(event -> assertThat(event.event()).contains("live_applied"));
+        assertThat(sink.events()).noneSatisfy(event -> assertThat(event.event()).contains("order_stake_changed"));
     }
 
     @Test
